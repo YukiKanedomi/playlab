@@ -1,7 +1,10 @@
 import { loadGames, gameUrl, type GameEntry } from '../shared/registry'
+import { enterTransition, wireLink } from '../shared/transition'
 
 const shelf = document.getElementById('shelf')!
 const countEl = document.getElementById('count')!
+
+enterTransition()
 
 function card(g: GameEntry): HTMLAnchorElement {
   const a = document.createElement('a')
@@ -29,6 +32,7 @@ function card(g: GameEntry): HTMLAnchorElement {
     s.textContent = t
     tags.appendChild(s)
   }
+  wireLink(a) // クリックでページめくり遷移
   return a
 }
 

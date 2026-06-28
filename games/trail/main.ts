@@ -1,7 +1,10 @@
 // 囲って、咲かす。 — ひと筆で標本を囲うと中身が中心で“咲く”（インクのにじみ）。時間制。
-// 初期デザインは Playlab 共通の「ラボ・スキン」（紙×インク×琥珀）。固まったら独自の絵に卒業可。
+// Playlab 共通キット（theme/juice/shell/transition）を使う第一号。初期デザイン＝ラボ・スキン。
 import { attachPointer, fitCanvas } from '../../shared/input'
 import { LAB, SPECIMEN_COLORS, hexA, drawPaperBackground, drawSpecimen } from '../../shared/theme'
+import { makeShake, Particles, easeOutBack, clamp } from '../../shared/juice'
+import { drawExpLabel, drawPanel } from '../../shared/shell'
+import { enterTransition, wireLink } from '../../shared/transition'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')!
@@ -14,6 +17,9 @@ fitCanvas(canvas, (w, h) => {
   H = h
 })
 const params = new URLSearchParams(location.search)
+
+const EXP = 'EXP-01'
+const TITLE = '囲って、咲かす。'
 
 // ── チューニング ──
 const START_TIME = 12
@@ -36,14 +42,16 @@ let newBest = false
 let timeLeft = START_TIME
 let combo = 0
 let elapsed = 0
-let shake = 0
 let flash = 0
 let cooldown = 0
+let panelT = 0 // タイトル/結果カードの出現イーズ
+
+const shakeFx = makeShake(24)
+const fx = new Particles()
 
 type Orb = { x: number; y: number; vx: number; vy: number; r: number; phase: number; color: string }
 type Hazard = { x: number; y: number; vx: number; vy: number; r: number; spin: number }
 type Flyer = { x: number; y: number; tx: number; ty: number; r: number; life: number; color: string }
-type Particle = { x: number; y: number; vx: number; vy: number; life: number; max: number; r: number; color: string }
 type Bloom = { x: number; y: number; r: number; max: number; life: number; maxLife: number; color: string }
 type Floater = { x: number; y: number; vy: number; life: number; text: string; size: number; color: string }
 type Pt = { x: number; y: number }
@@ -51,7 +59,6 @@ type Pt = { x: number; y: number }
 let orbs: Orb[] = []
 let hazards: Hazard[] = []
 let flyers: Flyer[] = []
-let particles: Particle[] = []
 let blooms: Bloom[] = []
 let floaters: Floater[] = []
 let trail: Pt[] = []
@@ -61,7 +68,6 @@ let strokeBad = false
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a)
 const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)]
-const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
 
 function distToSeg(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
   const dx = bx - ax,
@@ -100,14 +106,14 @@ function reset() {
   timeLeft = START_TIME
   combo = 0
   elapsed = 0
-  shake = flash = cooldown = 0
+  flash = cooldown = 0
   newBest = false
   orbs = []
   hazards = []
   flyers = []
-  particles = []
   blooms = []
   floaters = []
+  fx.list = []
   trail = []
   drawing = false
   for (let i = 0; i < 5; i++) spawnOrb()
@@ -119,18 +125,11 @@ function startGame() {
 function gameOver() {
   mode = 'over'
   elapsed = 0
+  panelT = 0
   if (score > best) {
     best = score
     newBest = true
     localStorage.setItem(BEST_KEY, String(best))
-  }
-}
-
-function burst(x: number, y: number, n: number, color: string, spd: number) {
-  for (let i = 0; i < n; i++) {
-    const a = rand(0, Math.PI * 2)
-    const s = rand(spd * 0.3, spd)
-    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.3, 0.8), max: 0.8, r: rand(1.5, 3.5), color })
   }
 }
 
@@ -139,9 +138,9 @@ function penalty(x: number, y: number) {
   cooldown = 0.6
   combo = 0
   timeLeft = Math.max(0, timeLeft - THORN_PENALTY)
-  shake = 16
+  shakeFx.set(16)
   flash = 1
-  burst(x, y, 18, LAB.ink, 200)
+  fx.burst(x, y, 18, LAB.ink, 200)
   floaters.push({ x, y: y - 18, vy: -45, life: 1.1, text: `-${THORN_PENALTY}s`, size: 20, color: LAB.danger })
   if (timeLeft <= 0) gameOver()
 }
@@ -150,7 +149,7 @@ function closeLasso() {
   if (strokeBad || trail.length < MIN_POINTS || polyArea(trail) < MIN_AREA) {
     if (trail.length > 2 && !strokeBad) {
       const c = trail[Math.floor(trail.length / 2)]
-      burst(c.x, c.y, 5, LAB.muted, 50)
+      fx.burst(c.x, c.y, 5, LAB.muted, 50)
     }
     trail = []
     return
@@ -193,7 +192,7 @@ function closeLasso() {
   blooms.push({ x: cx, y: cy, r: 0, max: 60 + n * 26, life: 0, maxLife: 0.75, color: bloomColor })
   floaters.push({ x: cx, y: cy - 12, vy: -50, life: 1.1, text: `+${gain}${combo > 1 ? `  ${combo}x` : ''}`, size: n >= 3 ? 28 : 18, color: LAB.ink })
   floaters.push({ x: cx, y: cy + 12, vy: -34, life: 1.2, text: `+${tGain.toFixed(1)}s`, size: 15, color: '#2f7d6b' })
-  shake = Math.min(6 + n * 2.5, 22)
+  shakeFx.set(Math.min(6 + n * 2.5, 22))
   flash = Math.min(0.1 + n * 0.04, 0.4)
   trail = []
 }
@@ -236,6 +235,8 @@ function moveDrifters(arr: { x: number; y: number; vx: number; vy: number; r: nu
 
 function update(dt: number) {
   elapsed += dt
+  if (mode === 'title' || mode === 'over') panelT = Math.min(1, panelT + dt * 3)
+
   if (mode === 'play') {
     timeLeft -= dt * (1 + elapsed * 0.01)
     if (timeLeft <= 0) {
@@ -282,7 +283,7 @@ function update(dt: number) {
   }
   flyers = flyers.filter((f) => {
     if (f.life <= 0) {
-      burst(f.x, f.y, 6, f.color, 90)
+      fx.burst(f.x, f.y, 6, f.color, 90)
       return false
     }
     return true
@@ -291,14 +292,7 @@ function update(dt: number) {
   for (const b of blooms) b.life += dt
   blooms = blooms.filter((b) => b.life < b.maxLife)
 
-  for (const p of particles) {
-    p.life -= dt
-    p.x += p.vx * dt
-    p.y += p.vy * dt
-    p.vy += 80 * dt
-    p.vx *= 0.96
-  }
-  particles = particles.filter((p) => p.life > 0)
+  fx.update(dt)
   for (const f of floaters) {
     f.life -= dt
     f.y += f.vy * dt
@@ -306,21 +300,19 @@ function update(dt: number) {
   }
   floaters = floaters.filter((f) => f.life > 0)
 
-  shake = Math.max(0, shake - dt * 40)
+  shakeFx.update(dt)
   flash = Math.max(0, flash - dt * 2)
 }
 
-// ── 描画（ラボ・スキン：紙×インク、加算なし） ──
+// ── 描画（ラボ・スキン） ──
 function drawOrb(o: { x: number; y: number; r: number; phase?: number; color: string }) {
-  const r = o.r * (1 + Math.sin(o.phase ?? 0) * 0.1)
-  drawSpecimen(ctx, o.x, o.y, r, o.color)
+  drawSpecimen(ctx, o.x, o.y, o.r * (1 + Math.sin(o.phase ?? 0) * 0.08), o.color)
 }
 
 function drawHazard(hz: Hazard) {
   ctx.save()
   ctx.translate(hz.x, hz.y)
   ctx.rotate(hz.spin)
-  // にじみ
   const g = ctx.createRadialGradient(0, 0, 0, 0, 0, hz.r * 2)
   g.addColorStop(0, hexA(LAB.ink, 0.18))
   g.addColorStop(1, hexA(LAB.ink, 0))
@@ -328,7 +320,6 @@ function drawHazard(hz: Hazard) {
   ctx.beginPath()
   ctx.arc(0, 0, hz.r * 2, 0, 7)
   ctx.fill()
-  // インクのトゲ
   ctx.fillStyle = LAB.ink
   ctx.beginPath()
   for (let i = 0; i < 10; i++) {
@@ -377,7 +368,6 @@ function drawBlooms() {
     const k = b.life / b.maxLife
     const r = b.max * (1 - Math.pow(1 - k, 3))
     const alpha = (1 - k) * 0.8
-    // 水彩のにじみ
     const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, r)
     g.addColorStop(0, hexA(b.color, alpha * 0.5))
     g.addColorStop(0.6, hexA(b.color, alpha * 0.22))
@@ -386,24 +376,12 @@ function drawBlooms() {
     ctx.beginPath()
     ctx.arc(b.x, b.y, r, 0, 7)
     ctx.fill()
-    // 咲くリング
     ctx.strokeStyle = hexA(b.color, alpha)
     ctx.lineWidth = 3 * (1 - k) + 0.6
     ctx.beginPath()
     ctx.arc(b.x, b.y, r * 0.92, 0, 7)
     ctx.stroke()
   }
-}
-
-function drawParticles() {
-  for (const p of particles) {
-    ctx.globalAlpha = clamp(p.life / p.max, 0, 1)
-    ctx.fillStyle = p.color
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, p.r, 0, 7)
-    ctx.fill()
-  }
-  ctx.globalAlpha = 1
 }
 
 function drawFloaters() {
@@ -450,32 +428,19 @@ function drawHUD() {
   }
 }
 
-function drawCenter(title: string, lines: string[], accent: string) {
-  ctx.save()
-  ctx.textAlign = 'center'
-  ctx.fillStyle = accent
-  ctx.font = `800 clamp(30px, 8.5vw, 46px) ${LAB.font}`
-  ctx.fillText(title, W / 2, H * 0.4)
-  ctx.fillStyle = LAB.muted
-  ctx.font = `500 15px ${LAB.font}`
-  lines.forEach((l, i) => ctx.fillText(l, W / 2, H * 0.4 + 40 + i * 25))
-  ctx.restore()
-}
-
 function render() {
   ctx.save()
-  if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake))
+  shakeFx.apply(ctx)
   drawPaperBackground(ctx, W, H)
   drawBlooms()
   for (const o of orbs) drawOrb(o)
   for (const f of flyers) drawOrb(f)
   hazards.forEach(drawHazard)
   drawTrail()
-  drawParticles()
+  fx.draw(ctx)
   drawFloaters()
   ctx.restore()
 
-  // 残り時間わずか：紙の縁を朱で締めて焦り
   if (mode === 'play' && timeLeft < 4) {
     const p = (0.18 + 0.14 * Math.sin(elapsed * 9)) * (1 - timeLeft / 4)
     const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.7)
@@ -489,11 +454,15 @@ function render() {
     ctx.fillRect(0, 0, W, H)
   }
 
-  if (mode === 'play') drawHUD()
+  if (mode === 'play') {
+    drawHUD()
+    drawExpLabel(ctx, W, H, EXP, TITLE)
+  }
+  const scale = easeOutBack(clamp(panelT, 0, 1))
   if (mode === 'title')
-    drawCenter('囲って、咲かす。', ['標本をひと筆で囲むと咲く。', '大きく囲うほど時間が増える。', 'トゲは囲まない・触れない。', `best ${best}`, '', 'タップでスタート'], LAB.ink)
+    drawPanel(ctx, W, H, TITLE, ['標本をひと筆で囲むと咲く。', '大きく囲うほど時間が増える。', 'トゲは囲まない・触れない。', `best ${best}`, '', 'タップでスタート'], LAB.ink, scale)
   if (mode === 'over')
-    drawCenter('TIME UP', [newBest ? `NEW BEST!  ${score}` : `score ${score}`, `best ${best}`, '', 'タップでもう一回'], newBest ? LAB.amber : LAB.danger)
+    drawPanel(ctx, W, H, 'TIME UP', [newBest ? `NEW BEST!  ${score}` : `score ${score}`, `best ${best}`, '', 'タップでもう一回'], newBest ? LAB.amber : LAB.danger, scale)
 }
 
 function titleAmbient(dt: number) {
@@ -521,10 +490,7 @@ function setupShot() {
     trail.push({ x: cx + Math.cos(a) * 100, y: cy + Math.sin(a) * 100 })
   }
   blooms.push({ x: cx, y: cy, r: 0, max: 180, life: 0.3, maxLife: 0.75, color: SPECIMEN_COLORS[0] })
-  for (let i = 0; i < 26; i++) {
-    const a = rand(0, 7)
-    particles.push({ x: cx, y: cy, vx: Math.cos(a) * rand(40, 150), vy: Math.sin(a) * rand(40, 150), life: 0.6, max: 0.8, r: rand(1.5, 3.5), color: pick(SPECIMEN_COLORS) })
-  }
+  fx.burst(cx, cy, 26, SPECIMEN_COLORS[2], 150, 40)
   floaters.push({ x: cx, y: cy - 14, vy: 0, life: 1, text: '+210  4x', size: 28, color: LAB.ink })
   floaters.push({ x: cx, y: cy + 14, vy: 0, life: 1, text: '+2.6s', size: 15, color: '#2f7d6b' })
 }
@@ -549,5 +515,9 @@ if (shotMode) {
   orbs = []
   trail = []
   requestAnimationFrame(() => setupShot())
+} else {
+  enterTransition()
+  const back = document.querySelector('a.back') as HTMLAnchorElement | null
+  if (back) wireLink(back)
 }
 requestAnimationFrame(frame)

@@ -22,6 +22,12 @@ export function hexA(hex: string, a: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
 }
 
+// #rrggbb を f 倍に暗く（f<1）
+export function darken(hex: string, f: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgb(${(((n >> 16) & 255) * f) | 0}, ${(((n >> 8) & 255) * f) | 0}, ${((n & 255) * f) | 0})`
+}
+
 /** 紙＋方眼の背景。周辺を軽く沈めて中央に視線を集める。 */
 export function drawPaperBackground(ctx: CanvasRenderingContext2D, w: number, h: number) {
   ctx.fillStyle = LAB.paper
@@ -48,21 +54,23 @@ export function drawPaperBackground(ctx: CanvasRenderingContext2D, w: number, h:
   ctx.stroke()
 }
 
-/** 紙の上の“標本”ドット（インク＋にじみ＋ハイライト）。加算は使わない。 */
+/** 紙の上の“標本”（植物標本スケッチ風：細インクの輪郭＋淡い塗り＋標本ピン）。加算は使わない。 */
 export function drawSpecimen(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string) {
-  const aura = ctx.createRadialGradient(x, y, 0, x, y, r * 2.3)
-  aura.addColorStop(0, hexA(color, 0.3))
-  aura.addColorStop(1, hexA(color, 0))
-  ctx.fillStyle = aura
-  ctx.beginPath()
-  ctx.arc(x, y, r * 2.3, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.fillStyle = color
+  const edge = darken(color, 0.7)
+  // 淡い塗り
+  ctx.fillStyle = hexA(color, 0.2)
   ctx.beginPath()
   ctx.arc(x, y, r, 0, Math.PI * 2)
   ctx.fill()
-  ctx.fillStyle = 'rgba(255,255,255,0.55)'
+  // 細インクの輪郭
+  ctx.strokeStyle = edge
+  ctx.lineWidth = Math.max(1.4, r * 0.13)
   ctx.beginPath()
-  ctx.arc(x - r * 0.3, y - r * 0.32, r * 0.3, 0, Math.PI * 2)
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.stroke()
+  // 標本ピン（中心点）
+  ctx.fillStyle = edge
+  ctx.beginPath()
+  ctx.arc(x, y, Math.max(1.6, r * 0.16), 0, Math.PI * 2)
   ctx.fill()
 }
