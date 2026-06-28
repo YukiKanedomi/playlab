@@ -1,0 +1,111 @@
+/* Playlab ハブ — 実験ノートの手触り。AIっぽい量産デザインを避ける狙い：
+   絵文字なし・紫グラデなし・カード乱用なし。方眼紙＋インク＋琥珀1色のサイン。 */
+
+:root {
+  --paper: #f3efe6;
+  --ink: #181713;
+  --muted: #76726a;
+  --line: rgba(24, 23, 19, 0.09);
+  --amber: #c2701c; /* featured のサインだけに使う1色 */
+  --maxw: 980px;
+}
+
+* { box-sizing: border-box; min-width: 0; }
+
+html, body { margin: 0; overflow-x: hidden; }
+
+body {
+  background-color: var(--paper);
+  /* 方眼紙：実験室っぽさを地に効かせる（うるさくならない細線） */
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 28px 28px;
+  color: var(--ink);
+  font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
+  min-height: 100dvh;
+  padding: max(28px, env(safe-area-inset-top)) 20px 40px;
+}
+
+/* うっすらノイズで“紙”の質感（CSSのみ・軽量） */
+.grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  opacity: 0.035;
+  background-image: radial-gradient(var(--ink) 0.5px, transparent 0.5px);
+  background-size: 4px 4px;
+}
+
+.masthead, main, .foot { position: relative; z-index: 1; max-width: var(--maxw); margin-inline: auto; }
+
+/* ── ワードマーク ── */
+.masthead { padding: 24px 0 34px; }
+.wm {
+  font-size: clamp(40px, 11vw, 76px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: baseline;
+}
+.wm-play { color: var(--ink); }
+.wm-lab { color: var(--amber); }
+.wm-cursor {
+  display: inline-block;
+  width: 0.12em; height: 0.9em;
+  margin-left: 0.12em;
+  background: var(--ink);
+  transform: translateY(0.04em);
+  animation: blink 1.15s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+.tagline { margin: 16px 0 4px; font-size: clamp(15px, 4vw, 19px); font-weight: 600; overflow-wrap: anywhere; }
+.sub { margin: 0; max-width: 56ch; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+
+/* ── 棚（作品一覧） ── */
+.shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.loading { color: var(--muted); }
+
+/* 1作品 = ノートに貼った実験票。カードの“ありがち感”を避けて、左罫線＋台紙の見え方に。 */
+.card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink);
+  padding: 16px 16px 14px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.card:hover, .card:focus-visible {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 5px 7px 0 rgba(24, 23, 19, 0.08);
+  outline: none;
+}
+.card.is-featured { border-left-color: var(--amber); }
+
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.status {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 7px; border: 1px solid currentColor; border-radius: 999px;
+  color: var(--muted);
+}
+.status.featured { color: var(--amber); }
+.date { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.card-title { font-size: 19px; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 6px; }
+.card-desc { font-size: 13px; color: var(--muted); margin: 0 0 12px; min-height: 2.6em; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: 11px; color: var(--muted); padding: 1px 8px; background: rgba(24, 23, 19, 0.05); }
+
+.foot { margin-top: 40px; color: var(--muted); font-size: 12px; }
+.foot a { color: var(--muted); }
+.foot .dot { margin: 0 8px; }

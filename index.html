@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Playlab — 遊びの実験室</title>
+    <meta name="description" content="思いつきのゲームをどんどん形にして公開・試遊する実験室。" />
+    <link rel="stylesheet" href="/src/hub.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="masthead">
+      <div class="wm">
+        <span class="wm-play">Play</span><span class="wm-lab">lab</span>
+        <span class="wm-cursor" aria-hidden="true"></span>
+      </div>
+      <p class="tagline">遊びの実験室 — 思いつきを、すぐ動かす。</p>
+      <p class="sub">毎回ちがう技術で素早く試して、当たりを磨く。荒い実験も、磨いた一本も、ここに並ぶ。</p>
+    </header>
+
+    <main>
+      <section class="shelf" id="shelf" aria-live="polite">
+        <p class="loading">読み込み中…</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <span id="count"></span>
+      <span class="dot">·</span>
+      <a href="https://github.com/YukiKanedomi/playlab" target="_blank" rel="noopener">source</a>
+    </footer>
+
+    <script type="module" src="/src/hub.ts"></script>
+  </body>
+</html>
