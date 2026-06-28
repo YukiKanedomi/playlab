@@ -2,13 +2,12 @@
   "games": [
     {
       "slug": "trail",
-      "title": "なぞって、すくう。",
-      "desc": "指の軌跡で落ちてくる粒を巻き込み、連鎖でコンボ爆発。60秒タイムアタック。",
+      "title": "囲って、咲かす。",
+      "desc": "光をひと筆で囲うと、中身が中心で弾けて咲く。トゲは囲まない・触れない。",
       "tags": ["アクション", "Canvas2D", "juice", "タッチ"],
       "date": "2026-06-28",
       "status": "experiment",
-      "path": "games/trail/",
-      "credit": "LINEスタンプのキャラに学ぶ習作（モチーフのみ。絵・名前は自作）"
+      "path": "games/trail/"
     }
   ]
 }
