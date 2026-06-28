@@ -11,6 +11,7 @@ export default defineConfig({
         // ハブ + 各ゲームをマルチページで一括ビルド。新作はここに1行足す。
         hub: resolve(__dirname, 'index.html'),
         trail: resolve(__dirname, 'games/trail/index.html'),
+        dj: resolve(__dirname, 'games/dj/index.html'),
       },
     },
   },
