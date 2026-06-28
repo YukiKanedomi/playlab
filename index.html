@@ -39,5 +39,9 @@
     </footer>
 
     <script type="module" src="/src/hub.ts"></script>
+    <script>
+      if ('serviceWorker' in navigator)
+        navigator.serviceWorker.register('/playlab/sw.js').catch(() => {})
+    </script>
   </body>
 </html>
