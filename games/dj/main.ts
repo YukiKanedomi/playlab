@@ -30,6 +30,11 @@ let noiseBuf: AudioBuffer
 function ensureAudio() {
   if (actx) return
   actx = new (window.AudioContext || (window as any).webkitAudioContext)()
+  // iOS16.4+: マナースイッチを無視して鳴らす
+  try {
+    const ns: any = navigator
+    if (ns.audioSession) ns.audioSession.type = 'playback'
+  } catch {}
   master = actx.createGain()
   master.gain.value = 0.9
   const comp = actx.createDynamicsCompressor()
@@ -118,6 +123,18 @@ function dull(t: number) {
   o.stop(t + 0.14)
 }
 const audioTime = () => actx.currentTime - (actx.outputLatency || actx.baseLatency || 0)
+
+// iOS のオーディオ・アンロック（ジェスチャ内で resume＋無音1サンプル再生が必要）
+function unlockAudio() {
+  if (!actx) return
+  if (actx.state === 'suspended') actx.resume && actx.resume()
+  try {
+    const s = actx.createBufferSource()
+    s.buffer = actx.createBuffer(1, 1, 22050)
+    s.connect(actx.destination)
+    s.start(0)
+  } catch {}
+}
 
 // ── 状態 ──
 type State = 'title' | 'play' | 'over'
@@ -217,7 +234,7 @@ function scheduler() {
 
 function startGame() {
   ensureAudio()
-  actx.resume && actx.resume()
+  unlockAudio()
   score = 0
   combo = 0
   hype = 0.34
@@ -281,6 +298,8 @@ function pickNeon() {
 
 // 入力
 canvas.addEventListener('pointerdown', () => {
+  ensureAudio()
+  unlockAudio() // どのタップでも確実にオーディオを起こす（iOS対策）
   if (state === 'title') return startGame()
   if (state === 'over') return elapsed - elapsedAtOver > 0.4 ? startGame() : undefined
   if (state !== 'play') return
