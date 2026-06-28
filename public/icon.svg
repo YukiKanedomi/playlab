@@ -1,0 +1,13 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="42%" cy="36%" r="80%">
+      <stop offset="0" stop-color="#f6f1e7"/>
+      <stop offset="1" stop-color="#e8e0cf"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <text x="248" y="368" text-anchor="middle"
+    font-family="'Hiragino Sans','Helvetica Neue',Arial,system-ui,sans-serif"
+    font-size="360" font-weight="800" letter-spacing="-12" fill="#1a1813">P</text>
+  <circle cx="356" cy="332" r="30" fill="#c2701c"/>
+</svg>
