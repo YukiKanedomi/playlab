@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "petri",
+      "no": 3,
+      "title": "まもって、ふやして。",
+      "desc": "顕微鏡のシャーレでコアを守る。指で細胞を動かすと自動で撃つ。進化と分裂で群れを増やせ。",
+      "tags": ["サバイバー", "TD", "Canvas2D", "ローグライト"],
+      "date": "2026-06-29",
+      "status": "experiment",
+      "path": "games/petri/",
+      "thumb": "thumbs/petri.png"
+    },
+    {
       "slug": "dj",
       "no": 2,
       "title": "きいて、かえして。",

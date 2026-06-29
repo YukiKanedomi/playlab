@@ -12,6 +12,7 @@ export default defineConfig({
         hub: resolve(__dirname, 'index.html'),
         trail: resolve(__dirname, 'games/trail/index.html'),
         dj: resolve(__dirname, 'games/dj/index.html'),
+        petri: resolve(__dirname, 'games/petri/index.html'),
       },
     },
   },
