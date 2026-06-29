@@ -27,9 +27,15 @@ const BEST_KEY = 'playlab.dj.best'
 let actx: any = null
 let master: GainNode
 let noiseBuf: AudioBuffer
+let L = 0.03 // 出力遅延の推定/補正値（目・耳・判定を揃えるために全所で使う）
+const LAT_KEY = 'playlab.dj.lat'
+const WIN = 0.2 // 判定窓（簡単め）
+let calSum = 0,
+  calN = 0 // 自動キャリブレーション用
 function ensureAudio() {
   if (actx) return
-  actx = new (window.AudioContext || (window as any).webkitAudioContext)()
+  actx = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' })
+  L = clamp(Number(localStorage.getItem(LAT_KEY)) || actx.outputLatency || actx.baseLatency || 0.03, 0, 0.35)
   // iOS16.4+: マナースイッチを無視して鳴らす
   try {
     const ns: any = navigator
@@ -122,7 +128,7 @@ function dull(t: number) {
   o.start(t)
   o.stop(t + 0.14)
 }
-const audioTime = () => actx.currentTime - (actx.outputLatency || actx.baseLatency || 0)
+const audioTime = () => actx.currentTime - L
 
 // iOS のオーディオ・アンロック（ジェスチャ内で resume＋無音1サンプル再生が必要）
 function unlockAudio() {
@@ -318,12 +324,21 @@ canvas.addEventListener('pointerdown', () => {
       bi = i
     }
   }
-  if (bi >= 0 && bd < 0.17) {
+  if (bi >= 0 && bd < WIN) {
     expected[bi].matched = true
     stab(actx.currentTime, SCALE[bi % SCALE.length], 0.55)
     padFlash[pattern[bi]] = 1
     charArm = 1
     fx.burst(padX(pattern[bi]), padY(), 6, bd < 0.07 ? C.amber : C.cyan, 120, 30)
+    // 自動キャリブレーション：成功タップのズレ平均でLを微調整（端末/Bluetooth差を吸収）
+    calSum += jt - expected[bi].time
+    calN++
+    if (calN >= 4) {
+      L = clamp(L + (calSum / calN) * 0.4, 0, 0.35)
+      localStorage.setItem(LAT_KEY, String(L))
+      calSum = 0
+      calN = 0
+    }
   } else {
     extraTaps++
     dull(actx.currentTime)
@@ -352,8 +367,8 @@ function update(dt: number) {
 
   if (state === 'play' && actx) {
     const now = audioTime()
-    // キュー消化
-    while (cues.length && cues[0].time <= actx.currentTime) {
+    // キュー消化（出力遅延Lぶん遅らせて＝音が聞こえる瞬間に光らせる）
+    while (cues.length && cues[0].time + L <= actx.currentTime) {
       const c = cues.shift()!
       if (c.kind === 'beat') beatPulse = 1
       else if (c.kind === 'call-start') {
@@ -368,7 +383,7 @@ function update(dt: number) {
       }
     }
     // レスポンス採点（バー終了後）
-    if (!respEvaluated && now > respBarEnd + 0.06) {
+    if (!respEvaluated && now > respBarEnd + WIN + 0.05) {
       respEvaluated = true
       evaluateResponse()
     }
