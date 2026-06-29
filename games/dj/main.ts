@@ -36,8 +36,6 @@ let noiseBuf: AudioBuffer
 let L = 0.03 // 出力遅延の推定/補正値（目・耳・判定を揃えるために全所で使う）
 const LAT_KEY = 'playlab.dj.lat'
 const WIN = 0.2 // 判定窓（簡単め）
-let calSum = 0,
-  calN = 0 // 自動キャリブレーション用
 function ensureAudio() {
   if (actx) return
   actx = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' })
@@ -188,6 +186,32 @@ let audienceShown = 6
 let charArm = 0 // 0..1 腕上げ
 let charBob = 0
 let elapsed = 0
+// 判定フィードバック
+let judgeText = ''
+let judgeColor = ''
+let judgeLife = 0
+let offsets: number[] = [] // 直近のズレ（−はやい/＋おそい）。タイミングバー用
+function showJudge(off: number | null) {
+  if (off === null) {
+    judgeText = 'ミス'
+    judgeColor = C.dim
+    judgeLife = 0.5
+    return
+  }
+  offsets.push(off)
+  if (offsets.length > 8) offsets.shift()
+  if (Math.abs(off) < 0.05) {
+    judgeText = 'ジャスト'
+    judgeColor = C.amber
+  } else if (off < 0) {
+    judgeText = 'はやい'
+    judgeColor = C.cyan
+  } else {
+    judgeText = 'おそい'
+    judgeColor = C.magenta
+  }
+  judgeLife = 0.7
+}
 
 // スケジューラ
 let slot = 0
@@ -404,24 +428,18 @@ canvas.addEventListener('pointerdown', () => {
     }
   }
   if (bi >= 0 && bd < WIN) {
+    const off = jt - expected[bi].time // −はやい / ＋おそい
     expected[bi].matched = true
     stab(actx.currentTime, SCALE[bi % SCALE.length], 0.55)
     padFlash[pattern[bi]] = 1
     charArm = 1
-    fx.burst(padX(pattern[bi]), padY(), 6, bd < 0.07 ? C.amber : C.cyan, 120, 30)
-    // 自動キャリブレーション：成功タップのズレ平均でLを微調整（端末/Bluetooth差を吸収）
-    calSum += jt - expected[bi].time
-    calN++
-    if (calN >= 4) {
-      L = clamp(L + (calSum / calN) * 0.4, 0, 0.35)
-      localStorage.setItem(LAT_KEY, String(L))
-      calSum = 0
-      calN = 0
-    }
+    fx.burst(padX(pattern[bi]), padY(), 6, Math.abs(off) < 0.05 ? C.amber : C.cyan, 120, 30)
+    showJudge(off)
   } else {
     extraTaps++
     dull(actx.currentTime)
     shakeFx.add(4)
+    showJudge(null)
   }
 })
 
@@ -439,6 +457,7 @@ function update(dt: number) {
   flash = Math.max(0, flash - dt * 2)
   for (let i = 0; i < SUBDIV; i++) padFlash[i] = Math.max(0, padFlash[i] - dt * 4)
   charArm = Math.max(0, charArm - dt * 2.5)
+  judgeLife = Math.max(0, judgeLife - dt)
   charBob += dt * (2 + hype * 3)
   audienceShown += (audienceTarget - audienceShown) * Math.min(1, dt * 3)
   shakeFx.update(dt)
@@ -448,8 +467,8 @@ function update(dt: number) {
     // キュー消化（出力遅延Lぶん遅らせて＝音が聞こえる瞬間に光らせる）
     while (cues.length && cues[0].time + L <= actx.currentTime) {
       const c = cues.shift()!
-      if (c.kind === 'beat' || c.kind === 'calbeat') beatPulse = 1
-      if (c.kind === 'calbeat') calibHeard++
+      if (c.kind === 'beat') beatPulse = 1
+      if (c.kind === 'calbeat') calibHeard++ // キャリブ中は“光”で誘導しない（耳でタップ）
       else if (c.kind === 'call-start') {
         phase = 'call'
         curBarStart = c.time
@@ -626,12 +645,26 @@ function drawPads() {
       ctx.arc(x, y, 8, 0, 7)
       ctx.fill()
     }
-    // プレイヘッド
-    if (head >= 0 && Math.floor(head) === i) {
-      ctx.strokeStyle = hexA(C.amber, 0.8)
-      ctx.lineWidth = 2
+    // レスポンス中は「叩く対象」を明確に（クリア済みは琥珀で塗り）
+    if (phase === 'response' && inPattern) {
+      const k = pattern.indexOf(i)
+      const done = !!(expected[k] && expected[k].matched)
+      ctx.strokeStyle = hexA(done ? C.amber : C.cyan, 0.95)
+      ctx.lineWidth = 3
       ctx.beginPath()
-      ctx.arc(x, y, 18, 0, 7)
+      ctx.arc(x, y, 16, 0, 7)
+      ctx.stroke()
+      ctx.fillStyle = hexA(done ? C.amber : C.cyan, done ? 0.55 : 0.18)
+      ctx.beginPath()
+      ctx.arc(x, y, done ? 10 : 7, 0, 7)
+      ctx.fill()
+    }
+    // プレイヘッド（今ここ＝この線が対象に重なった瞬間にタップ）
+    if (head >= 0 && Math.floor(head) === i) {
+      ctx.strokeStyle = hexA(C.amber, 0.9)
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.arc(x, y, 20, 0, 7)
       ctx.stroke()
     }
   }
@@ -728,7 +761,7 @@ function drawCalib() {
   ctx.textAlign = 'center'
   ctx.fillStyle = C.ink
   ctx.font = `700 17px "Hiragino Sans", system-ui, sans-serif`
-  ctx.fillText('ビートに合わせてタップ', cx, cy + 96)
+  ctx.fillText('音に合わせてタップ（耳で）', cx, cy + 96)
   ctx.fillStyle = C.dim
   ctx.font = `500 13px "Hiragino Sans", system-ui, sans-serif`
   ctx.fillText(`タップ ${calibTaps.length} / 6`, cx, cy + 124)
@@ -748,6 +781,38 @@ function drawCalibDone() {
     neonText('スキップ', cx, cy, 28, C.dim)
   }
   neonText('タップでスタート', cx, cy + 84, 18, C.amber)
+}
+
+function drawJudge() {
+  if (judgeLife <= 0) return
+  ctx.save()
+  ctx.globalAlpha = clamp(judgeLife / 0.7, 0, 1)
+  neonText(judgeText, W / 2, H * 0.3, 30, judgeColor)
+  ctx.restore()
+}
+function drawTimingMeter() {
+  const cx = W / 2,
+    y = H * 0.7,
+    w = Math.min(240, W - 80)
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.fillStyle = 'rgba(255,255,255,0.1)'
+  ctx.fillRect(cx - w / 2, y, w, 4)
+  ctx.fillStyle = hexA(C.amber, 0.85) // 中央＝ジャスト
+  ctx.fillRect(cx - 1, y - 5, 2, 14)
+  ctx.fillStyle = C.dim
+  ctx.font = `600 10px "Hiragino Sans", system-ui, sans-serif`
+  ctx.fillText('はやい', cx - w / 2 + 16, y + 18)
+  ctx.fillText('おそい', cx + w / 2 - 16, y + 18)
+  offsets.forEach((o, idx) => {
+    const px = cx + clamp(o / WIN, -1, 1) * (w / 2)
+    const a = 0.3 + 0.7 * ((idx + 1) / offsets.length)
+    ctx.fillStyle = hexA(Math.abs(o) < 0.05 ? C.amber : o < 0 ? C.cyan : C.magenta, a)
+    ctx.beginPath()
+    ctx.arc(px, y + 2, 4, 0, 7)
+    ctx.fill()
+  })
+  ctx.restore()
 }
 
 function render() {
@@ -776,7 +841,11 @@ function render() {
   ctx.fillText('No.02', 16, H - 14)
   ctx.restore()
 
-  if (state === 'play') drawHUD()
+  if (state === 'play') {
+    drawHUD()
+    drawTimingMeter()
+    drawJudge()
+  }
   if (state === 'calib') drawCalib()
   if (state === 'calibdone') drawCalibDone()
   if (state === 'title') {
@@ -816,6 +885,10 @@ function setupShot() {
   charArm = 1
   beatPulse = 1
   flash = 0.3
+  offsets = [-0.05, 0.04, 0.0, -0.02, 0.06]
+  judgeText = 'ジャスト'
+  judgeColor = C.amber
+  judgeLife = 0.7
   for (let i = 0; i < 40; i++) {
     const a = Math.random() * 7
     fx.list.push({ x: W / 2 + Math.cos(a) * Math.random() * 160, y: H * 0.4 + Math.sin(a) * Math.random() * 120, vx: 0, vy: 0, life: 0.8, max: 0.8, r: 2 + Math.random() * 3, color: pickNeon(), grav: 0 })
