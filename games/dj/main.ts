@@ -132,6 +132,81 @@ function dull(t: number) {
   o.start(t)
   o.stop(t + 0.14)
 }
+// ── 音が主役：ベース＆キャラ寸劇の効果音 ──
+const ROOTS = [0, 0, -3, -1] // 小節ごとのベース根音
+function bass(t: number, semi: number, gain = 0.5) {
+  const o = actx.createOscillator(),
+    g = actx.createGain()
+  o.type = 'triangle'
+  o.frequency.value = 55 * Math.pow(2, semi / 12)
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.02)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.3)
+  o.connect(g).connect(master)
+  o.start(t)
+  o.stop(t + 0.32)
+}
+function scratch(t: number, semi: number) {
+  stab(t, semi, 0.5)
+  const s = actx.createBufferSource()
+  s.buffer = noiseBuf
+  const bp = actx.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.setValueAtTime(1100, t)
+  bp.frequency.exponentialRampToValueAtTime(3200, t + 0.08)
+  bp.Q.value = 2
+  const g = actx.createGain()
+  g.gain.setValueAtTime(0.25, t)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.1)
+  s.connect(bp).connect(g).connect(master)
+  s.start(t)
+  s.stop(t + 0.12)
+}
+function airhorn(t: number) {
+  const g = actx.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.32, t + 0.03)
+  g.gain.setValueAtTime(0.32, t + 0.32)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.6)
+  g.connect(master)
+  for (const m of [1, 1.5, 2.01]) {
+    const o = actx.createOscillator()
+    o.type = 'sawtooth'
+    o.frequency.setValueAtTime(330 * m, t)
+    o.frequency.linearRampToValueAtTime(392 * m, t + 0.06)
+    o.connect(g)
+    o.start(t)
+    o.stop(t + 0.62)
+  }
+}
+function cheer(t: number) {
+  const s = actx.createBufferSource()
+  s.buffer = noiseBuf
+  const bp = actx.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.value = 900
+  bp.Q.value = 0.5
+  const g = actx.createGain()
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.linearRampToValueAtTime(0.3, t + 0.15)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.7)
+  s.connect(bp).connect(g).connect(master)
+  s.start(t)
+  s.stop(t + 0.75)
+}
+function recordStop(t: number) {
+  const o = actx.createOscillator(),
+    g = actx.createGain()
+  o.type = 'sawtooth'
+  o.frequency.setValueAtTime(300, t)
+  o.frequency.exponentialRampToValueAtTime(45, t + 0.4)
+  g.gain.setValueAtTime(0.4, t)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.45)
+  o.connect(g).connect(master)
+  o.start(t)
+  o.stop(t + 0.46)
+}
+
 const audioTime = () => actx.currentTime - L
 
 // iOS のオーディオ・アンロック（ジェスチャ内で resume＋無音1サンプル再生が必要）
@@ -183,8 +258,15 @@ let flash = 0
 let padFlash: number[] = new Array(SUBDIV).fill(0)
 let audienceTarget = 6
 let audienceShown = 6
-let charArm = 0 // 0..1 腕上げ
+let charArm = 0 // 0..1 腕上げ/スクラッチ衝撃
 let charBob = 0
+let charCelebrate = 0 // 成功で沸く
+let charSlump = 0 // ミスで落ち込む
+let crowdCheer = 0 // 客が沸く
+let crowdShock = 0 // 客がしーん
+let countLabel = ''
+let countLife = 0
+let counting = false
 let elapsed = 0
 // 判定フィードバック
 let judgeText = ''
@@ -219,45 +301,61 @@ let nextNoteTime = 0
 let schedTimer: any = null
 const cues: { time: number; kind: string; idx?: number }[] = []
 
+// パターンの音楽化：手作りのリズム句（易→難）。ランダム卒業。
+const PATTERNS = {
+  e: [[0, 4], [0, 2, 4], [0, 4, 6], [0, 2, 4, 6]],
+  m: [[0, 3, 4, 6], [0, 2, 4, 7], [0, 4, 5, 7], [0, 2, 4, 6, 7]],
+  h: [[0, 2, 3, 5, 6], [0, 3, 4, 6, 7], [0, 1, 3, 4, 6], [0, 2, 3, 5, 6, 7]],
+}
+let lastPattern: number[] = []
+let themeRepeat = 0
 function startNewPattern() {
   phraseCount++
   level = Math.min(9, Math.floor((phraseCount - 1) / 2))
-  const k = clamp(2 + Math.floor(level / 2), 2, 5)
-  const strong = [0, 4, 2, 6]
-  const weak = [3, 1, 5, 7]
-  const slots = new Set<number>()
-  for (const s of strong) {
-    if (slots.size >= k) break
-    slots.add(s)
+  const tier = level < 2 ? PATTERNS.e : level < 5 ? PATTERNS.m : PATTERNS.h
+  // テーマ→変化：たまに同じ句を1回繰り返して耳に馴染ませる
+  if (lastPattern.length && themeRepeat === 0 && Math.random() < 0.4) {
+    themeRepeat = 1
+    pattern = lastPattern
+  } else {
+    themeRepeat = 0
+    let p = tier[Math.floor(Math.random() * tier.length)]
+    if (p === lastPattern && tier.length > 1) p = tier[(tier.indexOf(p) + 1) % tier.length]
+    pattern = p
+    lastPattern = p
   }
-  // レベルが上がると裏拍も
-  let wi = 0
-  while (slots.size < k && wi < weak.length) {
-    if (level >= 2 || Math.random() < 0.4) slots.add(weak[wi])
-    wi++
-  }
-  pattern = [...slots].sort((a, b) => a - b)
 }
 
 function scheduleSlot(s: number, t: number) {
   const slotInBar = s % SUBDIV
   const bar = Math.floor(s / SUBDIV)
-  const isCall = bar % 2 === 0
-  // グルーヴ
+  // グルーヴ＋ベース（音が主役）
   if (slotInBar === 0 || slotInBar === 4) {
     kick(t)
     cues.push({ time: t, kind: 'beat' })
+    if (bar > 0) bass(t, ROOTS[bar % ROOTS.length] + (slotInBar === 4 ? 7 : 0))
   }
-  hat(t, slotInBar % 2 === 0 ? 0.28 : 0.16)
-  if (slotInBar === 4 && hype > 0.5) clap(t, 0.35)
+  hat(t, slotInBar % 2 === 0 ? 0.26 : 0.15)
+  if (slotInBar === 4 && hype > 0.5) clap(t, 0.32)
 
+  // bar 0 はカウントイン（3・2・1・GO）
+  if (bar === 0) {
+    if (slotInBar === 0) cues.push({ time: t, kind: 'count', idx: 3 })
+    else if (slotInBar === 2) cues.push({ time: t, kind: 'count', idx: 2 })
+    else if (slotInBar === 4) cues.push({ time: t, kind: 'count', idx: 1 })
+    else if (slotInBar === 6) cues.push({ time: t, kind: 'count', idx: 0 }) // GO
+    return
+  }
+
+  const isCall = (bar - 1) % 2 === 0
   if (slotInBar === 0) {
     if (isCall) {
       startNewPattern()
       cues.push({ time: t, kind: 'call-start' })
       pattern.forEach((idx, n) => {
         const ht = t + idx * eighth()
-        stab(ht, SCALE[n % SCALE.length], 0.5)
+        if (idx >= 1) cues.push({ time: ht - eighth(), kind: 'windup' }) // 予備拍：直前にキャラが溜める
+        scratch(ht, SCALE[n % SCALE.length])
         cues.push({ time: ht, kind: 'call-hit', idx })
       })
     } else {
@@ -354,8 +452,15 @@ function startGame() {
   slot = 0
   cues.length = 0
   phase = 'call'
+  lastPattern = []
+  themeRepeat = 0
+  charCelebrate = charSlump = crowdCheer = crowdShock = 0
+  countLabel = ''
+  countLife = 0
+  counting = true // 最初はカウントイン
+  offsets = []
   state = 'play'
-  nextNoteTime = actx.currentTime + 0.25
+  nextNoteTime = actx.currentTime + 0.3
   curBarStart = nextNoteTime
   if (schedTimer) clearInterval(schedTimer)
   schedTimer = setInterval(scheduler, 25)
@@ -387,12 +492,19 @@ function evaluateResponse() {
     shakeFx.add(4 + Math.min(combo, 8))
     flash = 0.35
     charArm = 1
+    charCelebrate = 0.6
+    crowdCheer = 0.7
+    cheer(actx.currentTime)
+    if (combo % 4 === 0) airhorn(actx.currentTime + 0.04) // 連続成功でエアホーン
   } else {
     combo = 0
     hype = clamp(hype - 0.17, 0, 1)
     lastResult = 'miss'
     audienceTarget = Math.round(6 + hype * 80)
     shakeFx.add(6)
+    charSlump = 0.7
+    crowdShock = 0.7
+    recordStop(actx.currentTime) // ミスはレコード停止音で可笑しく
     if (hype <= 0) gameOver()
   }
 }
@@ -429,7 +541,7 @@ canvas.addEventListener('pointerdown', () => {
   if (bi >= 0 && bd < WIN) {
     const off = jt - expected[bi].time // −はやい / ＋おそい
     expected[bi].matched = true
-    stab(actx.currentTime, SCALE[bi % SCALE.length], 0.55)
+    scratch(actx.currentTime, SCALE[bi % SCALE.length])
     padFlash[pattern[bi]] = 1
     charArm = 1
     fx.burst(padX(pattern[bi]), padY(), 6, Math.abs(off) < 0.05 ? C.amber : C.cyan, 120, 30)
@@ -456,6 +568,11 @@ function update(dt: number) {
   flash = Math.max(0, flash - dt * 2)
   for (let i = 0; i < SUBDIV; i++) padFlash[i] = Math.max(0, padFlash[i] - dt * 4)
   charArm = Math.max(0, charArm - dt * 2.5)
+  charCelebrate = Math.max(0, charCelebrate - dt)
+  charSlump = Math.max(0, charSlump - dt)
+  crowdCheer = Math.max(0, crowdCheer - dt)
+  crowdShock = Math.max(0, crowdShock - dt)
+  countLife = Math.max(0, countLife - dt)
   judgeLife = Math.max(0, judgeLife - dt)
   charBob += dt * (2 + hype * 3)
   audienceShown += (audienceTarget - audienceShown) * Math.min(1, dt * 3)
@@ -468,9 +585,16 @@ function update(dt: number) {
       const c = cues.shift()!
       if (c.kind === 'beat') beatPulse = 1
       if (c.kind === 'calbeat') calibHeard++ // キャリブ中は“光”で誘導しない（耳でタップ）
-      else if (c.kind === 'call-start') {
+      else if (c.kind === 'count') {
+        countLabel = c.idx ? String(c.idx) : 'GO'
+        countLife = 0.55
+        beatPulse = 1
+      } else if (c.kind === 'windup') {
+        charArm = Math.max(charArm, 0.5) // 予備動作：直前にキャラが溜める
+      } else if (c.kind === 'call-start') {
         phase = 'call'
         curBarStart = c.time
+        counting = false
       } else if (c.kind === 'resp-start') {
         phase = 'response'
         curBarStart = c.time
@@ -554,7 +678,7 @@ function hexA(hex: string, a: number) {
 
 function drawChar() {
   const cx = W / 2,
-    cy = H * 0.42 + Math.sin(charBob) * 4
+    boothCy = H * 0.42 + Math.sin(charBob) * 4
   // ブース
   ctx.save()
   ctx.strokeStyle = hexA(C.cyan, 0.8)
@@ -562,49 +686,66 @@ function drawChar() {
   ctx.shadowColor = C.cyan
   ctx.shadowBlur = 14
   const bw = Math.min(220, W * 0.6)
-  ctx.strokeRect(cx - bw / 2, cy + 20, bw, 70)
-  // ターンテーブル2枚
+  ctx.strokeRect(cx - bw / 2, boothCy + 20, bw, 70)
   for (const dx of [-bw * 0.26, bw * 0.26]) {
     ctx.beginPath()
-    ctx.arc(cx + dx, cy + 55, 18, 0, 7)
+    ctx.arc(cx + dx, boothCy + 55, 18, 0, 7)
     ctx.stroke()
   }
   ctx.restore()
-  // ミニキャラ（丸頭＋体＋腕）
+  // ミニキャラ：成功で跳ねる／ミスで落ち込む／ヒットで腕を振る
+  const jump = charCelebrate > 0 ? Math.sin((1 - charCelebrate / 0.6) * Math.PI) * 16 : 0
+  const slump = charSlump > 0 ? 1 : 0
+  const cy = boothCy - jump + slump * 6
   ctx.save()
   ctx.translate(cx, cy)
   ctx.strokeStyle = C.ink
-  ctx.fillStyle = C.ink
   ctx.lineWidth = 4
   ctx.lineCap = 'round'
-  // 体
   ctx.beginPath()
   ctx.moveTo(0, -2)
   ctx.lineTo(0, 22)
   ctx.stroke()
   // 頭
   ctx.beginPath()
-  ctx.arc(0, -16, 13, 0, 7)
+  ctx.arc(0, -16 + slump * 3, 13, 0, 7)
   ctx.fillStyle = C.amber
   ctx.shadowColor = C.amber
   ctx.shadowBlur = 12
   ctx.fill()
   ctx.shadowBlur = 0
-  // 目
+  // 目（ミス＝＞＜風、それ以外＝点目）
+  ctx.strokeStyle = '#2a1c00'
   ctx.fillStyle = '#2a1c00'
-  ctx.beginPath()
-  ctx.arc(-4, -17, 1.8, 0, 7)
-  ctx.arc(4, -17, 1.8, 0, 7)
-  ctx.fill()
-  // 腕（ヒット時に上げる）
+  ctx.lineWidth = 2
+  if (slump) {
+    ctx.beginPath()
+    ctx.moveTo(-7, -19); ctx.lineTo(-2, -16); ctx.moveTo(-2, -19); ctx.lineTo(-7, -16)
+    ctx.moveTo(2, -19); ctx.lineTo(7, -16); ctx.moveTo(7, -19); ctx.lineTo(2, -16)
+    ctx.stroke()
+  } else {
+    ctx.beginPath()
+    ctx.arc(-4, -17, 1.8, 0, 7)
+    ctx.arc(4, -17, 1.8, 0, 7)
+    ctx.fill()
+  }
+  // 腕
   ctx.strokeStyle = C.ink
-  const up = charArm
-  ctx.beginPath()
-  ctx.moveTo(0, 4)
-  ctx.lineTo(-14, 4 - up * 22)
-  ctx.moveTo(0, 4)
-  ctx.lineTo(14, 4 - up * 22)
-  ctx.stroke()
+  ctx.lineWidth = 4
+  if (charCelebrate > 0) {
+    ctx.beginPath()
+    ctx.moveTo(0, 4); ctx.lineTo(-15, -16); ctx.moveTo(0, 4); ctx.lineTo(15, -16) // バンザイ
+    ctx.stroke()
+  } else if (slump) {
+    ctx.beginPath()
+    ctx.moveTo(0, 4); ctx.lineTo(-12, 16); ctx.moveTo(0, 4); ctx.lineTo(12, 16) // だらり
+    ctx.stroke()
+  } else {
+    const up = charArm
+    ctx.beginPath()
+    ctx.moveTo(0, 4); ctx.lineTo(-14, 4 - up * 22); ctx.moveTo(0, 4); ctx.lineTo(14, 4 - up * 22)
+    ctx.stroke()
+  }
   ctx.restore()
 }
 
@@ -679,9 +820,10 @@ function drawAudience() {
     const row = i % 3
     const x = 14 + rx * (W - 28)
     const y = baseY - row * 16
-    const bob = Math.sin(charBob * 1.0 + i) * (1.5 + hype * 4)
-    const armUp = lastResult === 'good' && Math.sin(elapsed * 8 + i) > 0
-    const col = i % 4 === 0 ? hexA(C.violet, 0.9) : 'rgba(8,5,16,0.92)'
+    const shock = crowdShock > 0
+    const bob = shock ? 0 : Math.sin(charBob * 1.0 + i) * (1.5 + hype * 4 + crowdCheer * 8)
+    const armUp = !shock && (crowdCheer > 0 || (lastResult === 'good' && Math.sin(elapsed * 8 + i) > 0))
+    const col = i % 4 === 0 ? hexA(C.violet, shock ? 0.5 : 0.9) : `rgba(8,5,16,${shock ? 0.7 : 0.92})`
     ctx.fillStyle = col
     // 体
     ctx.beginPath()
@@ -729,8 +871,13 @@ function drawHUD() {
   ctx.fillStyle = C.dim
   ctx.fillText(`best ${best}`, W - 16, y + 50)
   if (combo >= 2) neonText(`${combo} COMBO`, 16 + 60, y + 34, 18, C.amber, 'left')
-  // フェーズ表示
-  if (state === 'play') {
+  // カウントイン or フェーズ表示
+  if (countLife > 0) {
+    ctx.save()
+    ctx.globalAlpha = clamp(countLife / 0.55, 0, 1)
+    neonText(countLabel, W / 2, H * 0.34, countLabel === 'GO' ? 48 : 64, C.amber)
+    ctx.restore()
+  } else if (state === 'play' && !counting) {
     const label = phase === 'call' ? 'きいて！' : 'かえして！'
     const col = phase === 'call' ? C.magenta : C.cyan
     neonText(label, W / 2, H * 0.52, 26, col)
