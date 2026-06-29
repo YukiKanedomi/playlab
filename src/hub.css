@@ -91,6 +91,22 @@ body {
 }
 .card.is-featured { border-left-color: var(--amber); }
 
+/* サムネ＝額装した標本写真。中央バンドだけ切り出してHUDの被りを避ける。 */
+.thumb {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  background: #e8e0cf;
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  display: block;
+}
+
 .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .status {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.12em;

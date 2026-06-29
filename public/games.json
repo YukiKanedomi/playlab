@@ -7,7 +7,8 @@
       "tags": ["リズム", "WebAudio", "音", "タッチ"],
       "date": "2026-06-28",
       "status": "experiment",
-      "path": "games/dj/"
+      "path": "games/dj/",
+      "thumb": "thumbs/dj.png"
     },
     {
       "slug": "trail",
@@ -16,7 +17,8 @@
       "tags": ["アクション", "Canvas2D", "juice", "タッチ"],
       "date": "2026-06-28",
       "status": "experiment",
-      "path": "games/trail/"
+      "path": "games/trail/",
+      "thumb": "thumbs/trail.png"
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { loadGames, gameUrl, type GameEntry } from '../shared/registry'
+import { loadGames, gameUrl, assetUrl, type GameEntry } from '../shared/registry'
 import { enterTransition, wireLink } from '../shared/transition'
 
 const shelf = document.getElementById('shelf')!
@@ -14,7 +14,11 @@ function card(g: GameEntry): HTMLAnchorElement {
   const featured = g.status === 'featured'
   const statusLabel = featured ? 'featured' : '実験中'
 
+  const thumbHtml = g.thumb
+    ? `<div class="thumb"><img src="${assetUrl(g.thumb)}" alt="" loading="lazy" /></div>`
+    : ''
   a.innerHTML = `
+    ${thumbHtml}
     <div class="card-top">
       <span class="status ${featured ? 'featured' : ''}">${statusLabel}</span>
       <span class="date">${g.date}</span>

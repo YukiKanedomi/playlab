@@ -9,7 +9,12 @@ export type GameEntry = {
   date: string
   status: 'experiment' | 'featured'
   path: string
+  thumb?: string
   credit?: string
+}
+
+export function assetUrl(p: string): string {
+  return import.meta.env.BASE_URL + p
 }
 
 export async function loadGames(): Promise<GameEntry[]> {
