@@ -642,6 +642,14 @@ function render() {
     ctx.fillRect(0, 0, W, H)
   }
 
+  // 作品No.（額装・控えめ）
+  ctx.save()
+  ctx.textAlign = 'left'
+  ctx.fillStyle = C.dim
+  ctx.font = `600 11px "Courier New", monospace`
+  ctx.fillText('No.02', 16, H - 14)
+  ctx.restore()
+
   if (state === 'play') drawHUD()
   if (state === 'title') {
     neonText('きいて、かえして。', W / 2, H * 0.4, 34, C.cyan)

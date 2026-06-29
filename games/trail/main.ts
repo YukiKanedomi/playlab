@@ -18,7 +18,7 @@ fitCanvas(canvas, (w, h) => {
 })
 const params = new URLSearchParams(location.search)
 
-const EXP = 'EXP-01'
+const EXP = 'No.01'
 const TITLE = '囲って、咲かす。'
 
 // ── チューニング ──

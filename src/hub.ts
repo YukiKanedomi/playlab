@@ -17,10 +17,14 @@ function card(g: GameEntry): HTMLAnchorElement {
   const thumbHtml = g.thumb
     ? `<div class="thumb"><img src="${assetUrl(g.thumb)}" alt="" loading="lazy" /></div>`
     : ''
+  const no = g.no ? 'No.' + String(g.no).padStart(2, '0') : ''
   a.innerHTML = `
     ${thumbHtml}
     <div class="card-top">
-      <span class="status ${featured ? 'featured' : ''}">${statusLabel}</span>
+      <span class="meta-left">
+        ${no ? `<span class="no">${no}</span>` : ''}
+        <span class="status ${featured ? 'featured' : ''}">${statusLabel}</span>
+      </span>
       <span class="date">${g.date}</span>
     </div>
     <h2 class="card-title"></h2>

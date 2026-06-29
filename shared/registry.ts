@@ -3,6 +3,7 @@
 
 export type GameEntry = {
   slug: string
+  no?: number
   title: string
   desc: string
   tags: string[]
@@ -23,8 +24,8 @@ export async function loadGames(): Promise<GameEntry[]> {
   if (!res.ok) throw new Error(`games.json を取得できません: ${res.status}`)
   const data = await res.json()
   const games: GameEntry[] = data.games ?? []
-  // 新着順
-  return games.sort((a, b) => (a.date < b.date ? 1 : -1))
+  // 作品No.の大きい順（新着が上）。No.が無ければ日付で。
+  return games.sort((a, b) => (b.no ?? 0) - (a.no ?? 0) || (a.date < b.date ? 1 : -1))
 }
 
 export function gameUrl(entry: GameEntry): string {
