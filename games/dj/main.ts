@@ -15,7 +15,13 @@ fitCanvas(canvas, (w, h) => {
   H = h
 })
 const params = new URLSearchParams(location.search)
-const shotMode = params.get('shot') === '1'
+const shot = params.get('shot')
+const shotMode = !!shot
+function setupShotCalib() {
+  state = 'calib'
+  calibTaps = [0.05, 0.04, 0.06]
+  beatPulse = 0.7
+}
 
 // ── ネオン配色 ──
 const C = { bg0: '#171029', bg1: '#0b0815', cyan: '#28e0d0', magenta: '#ff3d9a', violet: '#9b6cff', amber: '#ffc24a', ink: '#f3eeff', dim: 'rgba(243,238,255,0.5)' }
@@ -143,7 +149,7 @@ function unlockAudio() {
 }
 
 // ── 状態 ──
-type State = 'title' | 'play' | 'over'
+type State = 'title' | 'calib' | 'calibdone' | 'play' | 'over'
 let state: State = 'title'
 let best = Number(localStorage.getItem(BEST_KEY) || 0)
 let score = 0
@@ -152,6 +158,16 @@ let hype = 0.34
 let phraseCount = 0
 let level = 0
 let phase: 'call' | 'response' = 'call'
+
+// キャリブレーション（音ズレ調整）
+const CAL_BEATS = 8
+const CAL_KEY = 'playlab.dj.cal'
+let calibTimer: any = null
+let calibNext = 0
+let calibBeats: number[] = []
+let calibTaps: number[] = []
+let calibHeard = 0
+let calibResult: number | null = null
 
 let pattern: number[] = []
 let expected: { time: number; matched: boolean }[] = []
@@ -238,6 +254,63 @@ function scheduler() {
   }
 }
 
+// ── キャリブレーション（ビートに合わせてタップ→ズレ平均でLを決める。BT遅延対策） ──
+function startCalib() {
+  ensureAudio()
+  unlockAudio()
+  state = 'calib'
+  calibBeats = []
+  calibTaps = []
+  calibHeard = 0
+  calibResult = null
+  cues.length = 0
+  calibNext = actx.currentTime + 0.5
+  if (calibTimer) clearInterval(calibTimer)
+  calibTimer = setInterval(calibScheduler, 25)
+}
+function calibScheduler() {
+  while (calibNext < actx.currentTime + 0.12) {
+    const t = calibNext
+    kick(t, 1)
+    cues.push({ time: t, kind: 'calbeat' })
+    calibBeats.push(t)
+    if (calibBeats.length > 16) calibBeats.shift()
+    calibNext += beatDur()
+  }
+}
+function calibTap() {
+  if (!calibBeats.length) return
+  const t = actx.currentTime
+  let nb = calibBeats[0]
+  for (const b of calibBeats) if (Math.abs(b - t) < Math.abs(nb - t)) nb = b
+  const r = t - nb
+  if (Math.abs(r) < beatDur() * 0.6) {
+    calibTaps.push(r)
+    beatPulse = 1
+    flash = 0.2
+  }
+  if (calibTaps.length >= 6) finalizeCalib()
+}
+function finalizeCalib() {
+  if (calibTimer) {
+    clearInterval(calibTimer)
+    calibTimer = null
+  }
+  cues.length = 0
+  if (calibTaps.length >= 3) {
+    const s = [...calibTaps].sort((a, b) => a - b)
+    const trimmed = s.length >= 5 ? s.slice(1, -1) : s // 外れ値を端から落とす
+    const avg = trimmed.reduce((a, b) => a + b, 0) / trimmed.length
+    L = clamp(avg, 0, 0.4)
+    localStorage.setItem(LAT_KEY, String(L))
+    calibResult = Math.round(L * 1000)
+  } else {
+    calibResult = -1 // スキップ（Lは据え置き）
+  }
+  localStorage.setItem(CAL_KEY, '1')
+  state = 'calibdone'
+}
+
 function startGame() {
   ensureAudio()
   unlockAudio()
@@ -303,10 +376,16 @@ function pickNeon() {
 }
 
 // 入力
+const recalY = () => H * 0.4 + 165 // タイトルの「音ズレ調整」リンクのy
 canvas.addEventListener('pointerdown', () => {
   ensureAudio()
   unlockAudio() // どのタップでも確実にオーディオを起こす（iOS対策）
-  if (state === 'title') return startGame()
+  if (state === 'title') {
+    if (pointer.y > recalY() - 24 && pointer.y < recalY() + 16) return startCalib() // 調整リンク
+    return localStorage.getItem(CAL_KEY) ? startGame() : startCalib() // 初回は調整から
+  }
+  if (state === 'calib') return calibTap()
+  if (state === 'calibdone') return startGame()
   if (state === 'over') return elapsed - elapsedAtOver > 0.4 ? startGame() : undefined
   if (state !== 'play') return
   if (phase !== 'response') {
@@ -365,12 +444,12 @@ function update(dt: number) {
   shakeFx.update(dt)
   fx.update(dt)
 
-  if (state === 'play' && actx) {
-    const now = audioTime()
+  if (actx && (state === 'play' || state === 'calib')) {
     // キュー消化（出力遅延Lぶん遅らせて＝音が聞こえる瞬間に光らせる）
     while (cues.length && cues[0].time + L <= actx.currentTime) {
       const c = cues.shift()!
-      if (c.kind === 'beat') beatPulse = 1
+      if (c.kind === 'beat' || c.kind === 'calbeat') beatPulse = 1
+      if (c.kind === 'calbeat') calibHeard++
       else if (c.kind === 'call-start') {
         phase = 'call'
         curBarStart = c.time
@@ -382,15 +461,17 @@ function update(dt: number) {
         charArm = 1
       }
     }
-    // レスポンス採点（バー終了後）
+  }
+  if (state === 'play' && actx) {
+    const now = audioTime()
     if (!respEvaluated && now > respBarEnd + WIN + 0.05) {
       respEvaluated = true
       evaluateResponse()
     }
-    // じわじわ冷める
     hype = clamp(hype - dt * 0.012, 0, 1)
     if (hype <= 0 && expected.length === 0) gameOver()
   }
+  if (state === 'calib' && actx && calibHeard >= CAL_BEATS) finalizeCalib()
 }
 
 // ── 描画 ──
@@ -624,6 +705,51 @@ function drawHUD() {
   }
 }
 
+function drawCalib() {
+  const cx = W / 2,
+    cy = H * 0.42
+  ctx.save()
+  ctx.globalCompositeOperation = 'lighter'
+  const r = 42 + beatPulse * 30
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.7)
+  g.addColorStop(0, hexA(C.cyan, 0.5 * (0.35 + beatPulse * 0.65)))
+  g.addColorStop(1, hexA(C.cyan, 0))
+  ctx.fillStyle = g
+  ctx.beginPath()
+  ctx.arc(cx, cy, r * 1.7, 0, 7)
+  ctx.fill()
+  ctx.restore()
+  ctx.strokeStyle = hexA(C.cyan, 0.85)
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, 7)
+  ctx.stroke()
+  neonText('音ズレ調整', cx, cy - 95, 28, C.cyan)
+  ctx.textAlign = 'center'
+  ctx.fillStyle = C.ink
+  ctx.font = `700 17px "Hiragino Sans", system-ui, sans-serif`
+  ctx.fillText('ビートに合わせてタップ', cx, cy + 96)
+  ctx.fillStyle = C.dim
+  ctx.font = `500 13px "Hiragino Sans", system-ui, sans-serif`
+  ctx.fillText(`タップ ${calibTaps.length} / 6`, cx, cy + 124)
+  ctx.fillText('イヤホン使用時は特におすすめ', cx, cy + 150)
+  ctx.fillText('（タップせず待つとスキップ）', cx, cy + 174)
+}
+function drawCalibDone() {
+  const cx = W / 2,
+    cy = H * 0.4
+  if (calibResult != null && calibResult >= 0) {
+    neonText('調整完了', cx, cy, 30, C.amber)
+    ctx.textAlign = 'center'
+    ctx.fillStyle = C.ink
+    ctx.font = `700 16px "Hiragino Sans", system-ui, sans-serif`
+    ctx.fillText(`ズレ +${calibResult}ms を補正`, cx, cy + 38)
+  } else {
+    neonText('スキップ', cx, cy, 28, C.dim)
+  }
+  neonText('タップでスタート', cx, cy + 84, 18, C.amber)
+}
+
 function render() {
   ctx.save()
   shakeFx.apply(ctx)
@@ -651,6 +777,8 @@ function render() {
   ctx.restore()
 
   if (state === 'play') drawHUD()
+  if (state === 'calib') drawCalib()
+  if (state === 'calibdone') drawCalibDone()
   if (state === 'title') {
     neonText('きいて、かえして。', W / 2, H * 0.4, 34, C.cyan)
     ctx.textAlign = 'center'
@@ -660,6 +788,7 @@ function render() {
     ctx.fillText('決めるほど客が増えて盛り上がる。', W / 2, H * 0.4 + 62)
     ctx.fillText(`best ${best}`, W / 2, H * 0.4 + 92)
     neonText('タップでスタート', W / 2, H * 0.4 + 130, 18, C.amber)
+    neonText('♪ 音ズレ調整（イヤホンはこちら）', W / 2, recalY(), 14, C.cyan)
   }
   if (state === 'over') {
     neonText('CLOSING TIME', W / 2, H * 0.4, 32, C.magenta)
@@ -703,7 +832,7 @@ function frame(now: number) {
 }
 if (shotMode) {
   const wait = () => {
-    if (W > 0) setupShot()
+    if (W > 0) shot === 'calib' ? setupShotCalib() : setupShot()
     else return requestAnimationFrame(wait)
   }
   requestAnimationFrame(wait)
