@@ -122,9 +122,9 @@ let bullets: Bullet[] = []
 let boss: Boss = null
 
 // 相対ドラッグ操作（survivor.io 系の標準＝片手・画面のどこでも・引いた方向へ歩く）
-const DRAG_MAXR = 64 // この距離引けば最高速
+const DRAG_MAXR = 76 // この距離引けば最高速（長めにして精密に）
 const DRAG_DEAD = 5 // これ未満は静止
-const MOVE_SPEED = 300 // px/s（最高速）
+const MOVE_SPEED = 200 // px/s（最高速。過敏だったので抑制）
 let dragging = false
 let anchorX = 0
 let anchorY = 0
@@ -144,9 +144,9 @@ let evoScale = 0
 let titleScale = 0
 
 function reset() {
-  S.fireInterval = 0.62
+  S.fireInterval = 0.42 // 初期火力を上げて開幕を撃ち切れるように
   S.damage = 1
-  S.range = 200
+  S.range = 210
   S.multishot = 1
   S.pierce = 0
   S.bulletSpeed = 430
@@ -165,6 +165,8 @@ function reset() {
   wave = 0
   // 最初の撃ち手（指で動かすメイン）
   cells.push({ x: W / 2, y: H / 2 + 90, ang: 0, cool: 0, main: true, pop: 1 })
+  // 最初から仲間1体＝間口を広く（Kirbyism）。コア周りの守りと火力の下限を確保
+  addColony(1)
 }
 
 function addColony(n: number) {
@@ -181,9 +183,10 @@ function startWave(n: number) {
     spawnBoss()
     return
   }
-  spawnQueue = 5 + n * 3
-  spawnGap = Math.max(0.35, 0.95 - n * 0.08)
-  spawnTimer = 0.4
+  // のこぎり波：Wave1 は少なく・ゆっくり（チュートリアル）→ 徐々に増やす
+  spawnQueue = 3 + n * 2 // w1=5, w2=7, w3=9, w4=11, w5=13
+  spawnGap = Math.max(0.4, 1.05 - (n - 1) * 0.08) // w1=1.05 と余裕、後半詰まる
+  spawnTimer = 0.5
 }
 
 function spawnEnemy() {
@@ -192,11 +195,12 @@ function spawnEnemy() {
   const rad = Math.max(W, H) * 0.62
   const x = core.x + Math.cos(a) * rad
   const y = core.y + Math.sin(a) * rad
-  const tank = Math.random() < 0.18 + wave * 0.03
-  const hpBase = 2 + wave * 0.9
+  // 敵は1種ずつ導入（マリオ1-1式）：タンクは Wave2 から
+  const tank = wave >= 2 && Math.random() < 0.1 + (wave - 2) * 0.04
+  const hpBase = 1.5 + (wave - 1) * 1.0 // w1=1.5(2発), w2=2.5, w3=3.5...
   const e: Enemy = tank
-    ? { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: 26 + wave * 2, kind: 'tank', wob: Math.random() * 9, hit: 0 }
-    : { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: 44 + wave * 4, kind: 'virus', wob: Math.random() * 9, hit: 0 }
+    ? { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: 24 + wave * 2, kind: 'tank', wob: Math.random() * 9, hit: 0 }
+    : { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: 34 + (wave - 1) * 6, kind: 'virus', wob: Math.random() * 9, hit: 0 }
   enemies.push(e)
 }
 
@@ -284,7 +288,9 @@ function update(dt: number) {
   }
   if (mode !== 'play') return
 
-  // 入力（相対ドラッグ）→ メイン細胞の速度を決める
+  // 入力（相対ドラッグ）→ 目標速度を決める
+  let tvx = 0
+  let tvy = 0
   if (ptr.down) {
     if (!dragging) {
       dragging = true
@@ -305,19 +311,20 @@ function update(dt: number) {
     }
     knobX = anchorX + dx
     knobY = anchorY + dy
-    if (mag < DRAG_DEAD) {
-      velX = 0
-      velY = 0
-    } else {
-      const sp = (mag / DRAG_MAXR) * MOVE_SPEED
-      velX = (dx / mag) * sp
-      velY = (dy / mag) * sp
+    if (mag >= DRAG_DEAD) {
+      // 入力カーブ：中央付近は繊細に、フルで引いて初めて最高速（"動きすぎ"の抑制）
+      const norm = mag / DRAG_MAXR
+      const sp = norm * norm * MOVE_SPEED
+      tvx = (dx / mag) * sp
+      tvy = (dy / mag) * sp
     }
   } else {
     dragging = false
-    velX = 0
-    velY = 0
   }
+  // 速度を滑らかに追従＝重さ（twitch防止）。停止はやや速めに収束。
+  const accel = tvx === 0 && tvy === 0 ? 20 : 12
+  velX = approach(velX, tvx, dt, accel)
+  velY = approach(velY, tvy, dt, accel)
 
   // 撃ち手の移動
   cells.forEach((c, i) => {
