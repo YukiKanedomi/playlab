@@ -86,6 +86,10 @@ export function fitCanvas(
     onResize?.(w, h)
   }
   apply()
+  // レイアウト/ビューポート確定後に測り直す（初回が誤幅になる事故を防ぐ）
+  requestAnimationFrame(apply)
+  setTimeout(apply, 120)
+  window.addEventListener('load', apply)
   window.addEventListener('resize', apply)
   return () => window.removeEventListener('resize', apply)
 }

@@ -3,6 +3,7 @@
 // 新技術＝WebAudioでビート合成＋タイミング同期。作風はラボ・スキンから卒業した暗いクラブ×ネオン。
 import { attachPointer, fitCanvas } from '../../shared/input'
 import { Particles, makeShake, clamp } from '../../shared/juice'
+import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -206,6 +207,18 @@ function recordStop(t: number) {
   o.start(t)
   o.stop(t + 0.46)
 }
+function click(t: number, hi = false) {
+  const o = actx.createOscillator(),
+    g = actx.createGain()
+  o.type = 'square'
+  o.frequency.value = hi ? 1500 : 950
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(0.22, t + 0.005)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.06)
+  o.connect(g).connect(master)
+  o.start(t)
+  o.stop(t + 0.07)
+}
 
 const audioTime = () => actx.currentTime - L
 
@@ -230,7 +243,7 @@ let combo = 0
 let hype = 0.34
 let phraseCount = 0
 let level = 0
-let phase: 'call' | 'response' = 'call'
+let phase: 'call' | 'prep' | 'response' = 'call'
 
 // キャリブレーション（音ズレ調整）
 const CAL_BEATS = 8
@@ -347,9 +360,12 @@ function scheduleSlot(s: number, t: number) {
     return
   }
 
-  const isCall = (bar - 1) % 2 === 0
+  // 3小節サイクル：0=コール(手本) / 1=予備(せーので構える) / 2=レスポンス(まねる)
+  const cyc = (bar - 1) % 3
+  // 予備小節：各拍にカウントのクリック（最後の拍は高く＝せーの！）
+  if (cyc === 1 && slotInBar % 2 === 0) click(t, slotInBar === 6)
   if (slotInBar === 0) {
-    if (isCall) {
+    if (cyc === 0) {
       startNewPattern()
       cues.push({ time: t, kind: 'call-start' })
       pattern.forEach((idx, n) => {
@@ -358,6 +374,8 @@ function scheduleSlot(s: number, t: number) {
         scratch(ht, SCALE[n % SCALE.length])
         cues.push({ time: ht, kind: 'call-hit', idx })
       })
+    } else if (cyc === 1) {
+      cues.push({ time: t, kind: 'prep-start' })
     } else {
       cues.push({ time: t, kind: 'resp-start' })
       expected = pattern.map((idx) => ({ time: t + idx * eighth(), matched: false }))
@@ -513,7 +531,7 @@ function pickNeon() {
 }
 
 // 入力
-const recalY = () => H * 0.4 + 165 // タイトルの「音ズレ調整」リンクのy
+const recalY = () => H * 0.84 // タイトルの「音ズレ調整」リンクのy
 canvas.addEventListener('pointerdown', () => {
   ensureAudio()
   unlockAudio() // どのタップでも確実にオーディオを起こす（iOS対策）
@@ -595,6 +613,9 @@ function update(dt: number) {
         phase = 'call'
         curBarStart = c.time
         counting = false
+      } else if (c.kind === 'prep-start') {
+        phase = 'prep'
+        curBarStart = c.time
       } else if (c.kind === 'resp-start') {
         phase = 'response'
         curBarStart = c.time
@@ -778,9 +799,9 @@ function drawPads() {
     ctx.beginPath()
     ctx.arc(x, y, 13, 0, 7)
     ctx.stroke()
-    // コール中はパターン位置をうっすら予告
-    if (phase === 'call' && inPattern) {
-      ctx.fillStyle = hexA(C.magenta, 0.25)
+    // コール/予備中はパターン位置をうっすら予告（予備は琥珀＝もうすぐ番）
+    if ((phase === 'call' || phase === 'prep') && inPattern) {
+      ctx.fillStyle = hexA(phase === 'prep' ? C.amber : C.magenta, 0.28)
       ctx.beginPath()
       ctx.arc(x, y, 8, 0, 7)
       ctx.fill()
@@ -878,8 +899,8 @@ function drawHUD() {
     neonText(countLabel, W / 2, H * 0.34, countLabel === 'GO' ? 48 : 64, C.amber)
     ctx.restore()
   } else if (state === 'play' && !counting) {
-    const label = phase === 'call' ? 'きいて！' : 'かえして！'
-    const col = phase === 'call' ? C.magenta : C.cyan
+    const label = phase === 'call' ? 'きいて！' : phase === 'prep' ? 'せーの…' : 'かえして！'
+    const col = phase === 'call' ? C.magenta : phase === 'prep' ? C.amber : C.cyan
     neonText(label, W / 2, H * 0.52, 26, col)
   }
 }
@@ -995,14 +1016,19 @@ function render() {
   if (state === 'calib') drawCalib()
   if (state === 'calibdone') drawCalibDone()
   if (state === 'title') {
-    neonText('きいて、かえして。', W / 2, H * 0.4, 34, C.cyan)
-    ctx.textAlign = 'center'
-    ctx.fillStyle = C.dim
-    ctx.font = `500 15px "Hiragino Sans", system-ui, sans-serif`
-    ctx.fillText('DJのお手本を、同じリズムでタップして返す。', W / 2, H * 0.4 + 38)
-    ctx.fillText('決めるほど客が増えて盛り上がる。', W / 2, H * 0.4 + 62)
-    ctx.fillText(`best ${best}`, W / 2, H * 0.4 + 92)
-    neonText('タップでスタート', W / 2, H * 0.4 + 130, 18, C.amber)
+    drawHowToCard(ctx, W, H, {
+      title: 'きいて、かえして。',
+      lines: ['DJのお手本を、同じリズムで返す。', '合図のあと「せーの」で構えてタップ。', '決めるほど客が増えて盛り上がる。'],
+      start: 'タップでスタート',
+      footer: `best ${best}`,
+      accent: C.cyan,
+      ink: C.ink,
+      muted: C.dim,
+      panel: 'rgba(255,255,255,0.06)',
+      border: 'rgba(255,255,255,0.16)',
+      glow: true,
+      t: elapsed,
+    })
     neonText('♪ 音ズレ調整（イヤホンはこちら）', W / 2, recalY(), 14, C.cyan)
   }
   if (state === 'over') {

@@ -3,7 +3,7 @@
 import { attachPointer, fitCanvas } from '../../shared/input'
 import { LAB, SPECIMEN_COLORS, hexA, drawPaperBackground, drawSpecimen } from '../../shared/theme'
 import { makeShake, Particles, easeOutBack, clamp } from '../../shared/juice'
-import { drawExpLabel, drawPanel } from '../../shared/shell'
+import { drawExpLabel, drawPanel, drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -460,7 +460,19 @@ function render() {
   }
   const scale = easeOutBack(clamp(panelT, 0, 1))
   if (mode === 'title')
-    drawPanel(ctx, W, H, TITLE, ['標本をひと筆で囲むと咲く。', '大きく囲うほど時間が増える。', 'トゲは囲まない・触れない。', `best ${best}`, '', 'タップでスタート'], LAB.ink, scale)
+    drawHowToCard(ctx, W, H, {
+      title: TITLE,
+      lines: ['光をひと筆で囲むと、中身が咲く。', '大きく囲うほど時間が増える。', 'トゲは囲まない・触れない。'],
+      start: 'タップでスタート',
+      footer: `best ${best}`,
+      accent: LAB.amber,
+      ink: LAB.ink,
+      muted: LAB.muted,
+      panel: 'rgba(255,255,255,0.66)',
+      border: hexA(LAB.ink, 0.1),
+      t: elapsed,
+      scale,
+    })
   if (mode === 'over')
     drawPanel(ctx, W, H, 'TIME UP', [newBest ? `NEW BEST!  ${score}` : `score ${score}`, `best ${best}`, '', 'タップでもう一回'], newBest ? LAB.amber : LAB.danger, scale)
 }
