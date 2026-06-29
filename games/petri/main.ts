@@ -7,6 +7,29 @@ import { attachPointer, fitCanvas, safeBottom } from '../../shared/input'
 import { clamp, lerp, makeShake, Particles, easeOutBack, approach } from '../../shared/juice'
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
+import * as tune from '../../shared/tune'
+
+// 実機調整パネル（右上の⚙）。const ではなく P.xxx を読む＝スライダーでライブ調整
+const P = tune.panel('petri', {
+  // 操作（即反映）
+  MOVE_SPEED: { v: 200, min: 80, max: 400, step: 5, group: '操作' },
+  DRAG_MAXR: { v: 76, min: 40, max: 130, step: 2, group: '操作', label: '反応距離' },
+  inputCurve: { v: 2, min: 1, max: 3, step: 0.1, group: '操作', label: '入力カーブ(指数)' },
+  // スコア/養分（即反映）
+  COMBO_HOLD: { v: 3.2, min: 1, max: 6, step: 0.1, group: 'スコア', label: 'コンボ持続(秒)' },
+  magnetR: { v: 82, min: 30, max: 170, step: 2, group: 'スコア', label: '養分の吸着範囲' },
+  // 火力（再開で反映）
+  fireInterval0: { v: 0.42, min: 0.12, max: 1, step: 0.01, group: '火力(再開で反映)', label: '初期連射間隔' },
+  damage0: { v: 1, min: 1, max: 5, step: 1, group: '火力(再開で反映)', label: '初期威力' },
+  range0: { v: 210, min: 120, max: 360, step: 10, group: '火力(再開で反映)', label: '初期射程' },
+  startColony: { v: 1, min: 0, max: 5, step: 1, group: '火力(再開で反映)', label: '開幕の仲間数' },
+  // 敵/難度（再開で反映）
+  enemyHpMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '敵HP倍率' },
+  enemySpdMul: { v: 1, min: 0.3, max: 2, step: 0.1, group: '敵(再開で反映)', label: '敵速度倍率' },
+  spawnCountMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '出現数倍率' },
+  coreMaxHp: { v: 10, min: 4, max: 30, step: 1, group: '敵(再開で反映)', label: 'コア最大HP' },
+  bossHpMul: { v: 1, min: 0.3, max: 3, step: 0.1, group: '敵(再開で反映)', label: 'ボスHP倍率' },
+})
 
 // ── 顕微鏡スライドの配色（ラボ・スキンの寒天タイント版） ──
 const C = {
@@ -199,7 +222,6 @@ let score = 0
 let bestScore = Number(localStorage.getItem('playlab.petri.bestscore') || 0)
 let combo = 0 // 連続撃破数
 let comboTimer = 0 // これが切れるとコンボ0へ
-const COMBO_HOLD = 3.2
 let orbs: Orb[] = []
 let floats: FloatText[] = []
 let freezeFrames = 0 // ヒットストップ
@@ -213,9 +235,8 @@ let bullets: Bullet[] = []
 let boss: Boss = null
 
 // 相対ドラッグ操作（survivor.io 系の標準＝片手・画面のどこでも・引いた方向へ歩く）
-const DRAG_MAXR = 76 // この距離引けば最高速（長めにして精密に）
+// 最高速・反応距離・入力カーブは調整パネル P から（実機でライブ調整）
 const DRAG_DEAD = 5 // これ未満は静止
-const MOVE_SPEED = 200 // px/s（最高速。過敏だったので抑制）
 let dragging = false
 let anchorX = 0
 let anchorY = 0
@@ -235,17 +256,17 @@ let evoScale = 0
 let titleScale = 0
 
 function reset() {
-  S.fireInterval = 0.42 // 初期火力を上げて開幕を撃ち切れるように
-  S.damage = 1
-  S.range = 210
+  S.fireInterval = P.fireInterval0 // 初期火力（調整パネル）
+  S.damage = P.damage0
+  S.range = P.range0
   S.multishot = 1
   S.pierce = 0
   S.bulletSpeed = 430
   S.orbitSpeed = 1.1
   core.x = W / 2
   core.y = H / 2
-  core.maxhp = 10
-  core.hp = 10
+  core.maxhp = P.coreMaxHp
+  core.hp = P.coreMaxHp
   core.pulse = 0
   core.hitFlash = 0
   cells = []
@@ -262,8 +283,8 @@ function reset() {
   freezeFrames = 0
   // 最初の撃ち手（指で動かすメイン）
   cells.push({ x: W / 2, y: H / 2 + 90, ang: 0, cool: 0, main: true, pop: 1 })
-  // 最初から仲間1体＝間口を広く（Kirbyism）。コア周りの守りと火力の下限を確保
-  addColony(1)
+  // 最初から仲間＝間口を広く（Kirbyism）。コア周りの守りと火力の下限を確保
+  addColony(P.startColony)
 }
 
 function addColony(n: number) {
@@ -281,7 +302,7 @@ function startWave(n: number) {
     return
   }
   // のこぎり波：Wave1 は少なく・ゆっくり（チュートリアル）→ 徐々に増やす
-  spawnQueue = 3 + n * 2 // w1=5, w2=7, w3=9, w4=11, w5=13
+  spawnQueue = Math.round((3 + n * 2) * P.spawnCountMul) // w1=5, w2=7, w3=9...（×倍率）
   spawnGap = Math.max(0.4, 1.05 - (n - 1) * 0.08) // w1=1.05 と余裕、後半詰まる
   spawnTimer = 0.5
 }
@@ -294,10 +315,12 @@ function spawnEnemy() {
   const y = core.y + Math.sin(a) * rad
   // 敵は1種ずつ導入（マリオ1-1式）：タンクは Wave2 から
   const tank = wave >= 2 && Math.random() < 0.1 + (wave - 2) * 0.04
-  const hpBase = 1.5 + (wave - 1) * 1.0 // w1=1.5(2発), w2=2.5, w3=3.5...
+  const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul // w1=1.5(2発)... ×倍率
+  const tspd = (24 + wave * 2) * P.enemySpdMul
+  const vspd = (34 + (wave - 1) * 6) * P.enemySpdMul
   const e: Enemy = tank
-    ? { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: 24 + wave * 2, kind: 'tank', wob: Math.random() * 9, hit: 0 }
-    : { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: 34 + (wave - 1) * 6, kind: 'virus', wob: Math.random() * 9, hit: 0 }
+    ? { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
+    : { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: vspd, kind: 'virus', wob: Math.random() * 9, hit: 0 }
   enemies.push(e)
 }
 
@@ -305,7 +328,7 @@ function spawnBoss() {
   const a = Math.random() * Math.PI * 2
   const rad = Math.max(W, H) * 0.6
   // コロニー規模で強さをスケール（強すぎ/弱すぎ回避）
-  const hp = 55 + cells.length * 12
+  const hp = Math.round((55 + cells.length * 12) * P.bossHpMul)
   boss = {
     x: core.x + Math.cos(a) * rad,
     y: core.y + Math.sin(a) * rad,
@@ -402,21 +425,21 @@ function update(dt: number) {
     let dx = ptr.x - anchorX
     let dy = ptr.y - anchorY
     let mag = Math.hypot(dx, dy)
-    if (mag > DRAG_MAXR) {
+    if (mag > P.DRAG_MAXR) {
       // ベース（基点）を指の方へ引き寄せる＝トレイル式フローティングパッド
-      const k = 1 - DRAG_MAXR / mag
+      const k = 1 - P.DRAG_MAXR / mag
       anchorX += dx * k
       anchorY += dy * k
       dx = ptr.x - anchorX
       dy = ptr.y - anchorY
-      mag = DRAG_MAXR
+      mag = P.DRAG_MAXR
     }
     knobX = anchorX + dx
     knobY = anchorY + dy
     if (mag >= DRAG_DEAD) {
       // 入力カーブ：中央付近は繊細に、フルで引いて初めて最高速（"動きすぎ"の抑制）
-      const norm = mag / DRAG_MAXR
-      const sp = norm * norm * MOVE_SPEED
+      const norm = mag / P.DRAG_MAXR
+      const sp = Math.pow(norm, P.inputCurve) * P.MOVE_SPEED
       tvx = (dx / mag) * sp
       tvy = (dy / mag) * sp
     }
@@ -541,7 +564,7 @@ function update(dt: number) {
       const dx = mainCell.x - o.x
       const dy = mainCell.y - o.y
       const d = Math.hypot(dx, dy) || 1
-      if (d < 82) {
+      if (d < P.magnetR) {
         const pull = 300 * dt
         o.x += (dx / d) * pull
         o.y += (dy / d) * pull
@@ -643,7 +666,7 @@ function killEnemy(e: Enemy) {
   shake.add(e.kind === 'tank' ? 4 : 1.5)
   // コンボ加算（連続撃破で倍率UP）
   combo++
-  comboTimer = COMBO_HOLD
+  comboTimer = P.COMBO_HOLD
   // 養分オーブを落とす（拾うとスコア＝動いて回収する＝コアを離れるリスク）
   const n = e.kind === 'tank' ? 3 : 1
   for (let i = 0; i < n; i++) {
@@ -914,7 +937,7 @@ function drawHUD() {
   // コンボ倍率（攻め続けると上がる。被弾で減る）
   if (combo >= 2) {
     const m = comboMult()
-    const p = 0.7 + 0.3 * clamp(comboTimer / COMBO_HOLD, 0, 1)
+    const p = 0.7 + 0.3 * clamp(comboTimer / P.COMBO_HOLD, 0, 1)
     ctx.fillStyle = m >= 2 ? C.core : C.muted
     ctx.font = `800 ${Math.round(13 * (0.9 + p * 0.25))}px ${FONT}`
     ctx.fillText(`x${m % 1 === 0 ? m : m.toFixed(1)}  (${combo})`, W / 2, 54)
@@ -949,11 +972,11 @@ function drawJoystick() {
   ctx.strokeStyle = hexA(C.cell, 0.28)
   ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.arc(anchorX, anchorY, DRAG_MAXR, 0, Math.PI * 2)
+  ctx.arc(anchorX, anchorY, P.DRAG_MAXR, 0, Math.PI * 2)
   ctx.stroke()
   ctx.fillStyle = hexA(C.cell, 0.16)
   ctx.beginPath()
-  ctx.arc(anchorX, anchorY, DRAG_MAXR, 0, Math.PI * 2)
+  ctx.arc(anchorX, anchorY, P.DRAG_MAXR, 0, Math.PI * 2)
   ctx.fill()
   // ノブ
   ctx.fillStyle = hexA(C.cell, 0.55)
@@ -1144,7 +1167,7 @@ function setupShot() {
   }
   score = 1240
   combo = 9
-  comboTimer = COMBO_HOLD
+  comboTimer = P.COMBO_HOLD
   S.range = 230
 }
 
