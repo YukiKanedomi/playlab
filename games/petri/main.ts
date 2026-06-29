@@ -8,7 +8,7 @@ import { clamp, lerp, makeShake, Particles, easeOutBack, approach } from '../../
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 import * as tune from '../../shared/tune'
-import { isMuted, mountMuteButton } from '../../shared/audio'
+import { isMuted, onMuteChange, mountMuteButton } from '../../shared/audio'
 
 // 実機調整パネル（右上の⚙）。const ではなく P.xxx を読む＝スライダーでライブ調整
 const P = tune.panel('petri', {
@@ -85,14 +85,15 @@ function ensureAudio() {
     master = actx.createGain()
     master.gain.value = 0.5
     master.connect(actx.destination)
+    // 'ambient'＝他アプリ(Apple Music等)と共存（再生を止めない）。'playback'は排他で止めてしまう
     try {
-      ;(navigator as any).audioSession && ((navigator as any).audioSession.type = 'playback')
+      ;(navigator as any).audioSession && ((navigator as any).audioSession.type = 'ambient')
     } catch {}
   } catch {}
 }
 function unlockAudio() {
   if (!actx) ensureAudio()
-  if (!actx) return
+  if (!actx || isMuted()) return // ミュート中はセッションを起こさない＝他アプリの再生を止めない
   if (actx.state === 'suspended') actx.resume()
   // iOS アンロック用の無音1サンプル
   const b = actx.createBuffer(1, 1, 22050)
@@ -101,6 +102,12 @@ function unlockAudio() {
   s.connect(actx.destination)
   s.start(0)
 }
+// ミュート切替：コンテキストを suspend/resume してセッションを手放す/取り戻す
+onMuteChange((m) => {
+  if (!actx) return
+  if (m) actx.suspend && actx.suspend()
+  else if (actx.state === 'suspended') actx.resume && actx.resume()
+})
 // 単音（osc）を鳴らす小ヘルパー
 function blip(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number) {
   if (!actx || !master || isMuted()) return

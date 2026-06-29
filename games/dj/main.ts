@@ -43,10 +43,11 @@ function ensureAudio() {
   if (actx) return
   actx = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' })
   L = clamp(Number(localStorage.getItem(LAT_KEY)) || actx.outputLatency || actx.baseLatency || 0.03, 0, 0.35)
-  // iOS16.4+: マナースイッチを無視して鳴らす
+  // セッション種別：通常は 'playback'（しっかり鳴らす）、ミュート時は 'ambient'
+  // （他アプリ=Apple Music 等と共存し再生を止めない）。リズムゲーはクロックを保つため suspend しない
   try {
     const ns: any = navigator
-    if (ns.audioSession) ns.audioSession.type = 'playback'
+    if (ns.audioSession) ns.audioSession.type = isMuted() ? 'ambient' : 'playback'
   } catch {}
   master = actx.createGain()
   master.gain.value = isMuted() ? 0 : 0.9 // 共通ミュート対応
@@ -1156,6 +1157,11 @@ if (shotMode) {
   mountMuteButton()
   onMuteChange((m) => {
     if (master) master.gain.value = m ? 0 : 0.9
+    // ミュート時は 'ambient' へ（Apple Music 等の再生を止めない）。解除で 'playback' に戻す
+    try {
+      const ns: any = navigator
+      if (ns.audioSession) ns.audioSession.type = m ? 'ambient' : 'playback'
+    } catch {}
   })
 }
 requestAnimationFrame(frame)
