@@ -271,7 +271,8 @@ function scheduleSlot(s: number, t: number) {
 }
 
 function scheduler() {
-  while (nextNoteTime < actx.currentTime + 0.12) {
+  // 先読みを広げて、応答スロットを早めに用意（食い気味の1音目も拾えるように）
+  while (nextNoteTime < actx.currentTime + 0.3) {
     scheduleSlot(slot, nextNoteTime)
     nextNoteTime += eighth()
     slot++
@@ -412,10 +413,8 @@ canvas.addEventListener('pointerdown', () => {
   if (state === 'calibdone') return startGame()
   if (state === 'over') return elapsed - elapsedAtOver > 0.4 ? startGame() : undefined
   if (state !== 'play') return
-  if (phase !== 'response') {
-    // コール中のタップは軽く鳴らすだけ（判定なし）
-    return
-  }
+  // 応答が用意できていれば局面ラベルに依らず受付（1音目を食い気味でも拾う）
+  if (respEvaluated || expected.length === 0) return
   const jt = audioTime()
   let bi = -1,
     bd = 1
