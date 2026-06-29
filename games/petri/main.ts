@@ -50,6 +50,85 @@ const ptr = ptrh.pointer
 const shake = makeShake(26)
 const fx = new Particles()
 
+// ── 効果音（WebAudio・合成。桜井「無反応を排除／音は妥協しない」） ──
+let actx: AudioContext | null = null
+let master: GainNode | null = null
+function ensureAudio() {
+  if (actx) return
+  try {
+    actx = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' })
+    master = actx.createGain()
+    master.gain.value = 0.5
+    master.connect(actx.destination)
+    try {
+      ;(navigator as any).audioSession && ((navigator as any).audioSession.type = 'playback')
+    } catch {}
+  } catch {}
+}
+function unlockAudio() {
+  if (!actx) ensureAudio()
+  if (!actx) return
+  if (actx.state === 'suspended') actx.resume()
+  // iOS アンロック用の無音1サンプル
+  const b = actx.createBuffer(1, 1, 22050)
+  const s = actx.createBufferSource()
+  s.buffer = b
+  s.connect(actx.destination)
+  s.start(0)
+}
+// 単音（osc）を鳴らす小ヘルパー
+function blip(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number) {
+  if (!actx || !master) return
+  const t = actx.currentTime
+  const o = actx.createOscillator()
+  const g = actx.createGain()
+  o.type = type
+  o.frequency.setValueAtTime(freq, t)
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(40, slideTo), t + dur)
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.008)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+  o.connect(g).connect(master)
+  o.start(t)
+  o.stop(t + dur + 0.02)
+}
+let lastShootSnd = 0
+const SFX = {
+  shoot() {
+    if (!actx || time - lastShootSnd < 0.07) return
+    lastShootSnd = time
+    blip(680, 0.05, 'square', 0.025, 520)
+  },
+  kill() {
+    blip(330, 0.09, 'triangle', 0.10, 200)
+  },
+  killTank() {
+    blip(180, 0.16, 'sawtooth', 0.12, 90)
+  },
+  pickup() {
+    blip(880, 0.06, 'square', 0.06, 1180)
+  },
+  split() {
+    blip(520, 0.12, 'triangle', 0.12, 900)
+  },
+  coreHit() {
+    blip(140, 0.18, 'sawtooth', 0.16, 70)
+  },
+  evolve() {
+    blip(523, 0.1, 'triangle', 0.12)
+    setTimeout(() => blip(784, 0.16, 'triangle', 0.12), 90)
+  },
+  bossDefeat() {
+    ;[392, 523, 659, 784].forEach((f, i) => setTimeout(() => blip(f, 0.22, 'triangle', 0.13), i * 110))
+  },
+  win() {
+    ;[523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.2, 'triangle', 0.12), i * 120))
+  },
+  lose() {
+    ;[440, 330, 247].forEach((f, i) => setTimeout(() => blip(f, 0.25, 'sawtooth', 0.12), i * 140))
+  },
+}
+
 document.querySelectorAll<HTMLAnchorElement>('a.back').forEach(wireLink)
 const SHOT = new URLSearchParams(location.search).get('shot')
 if (!SHOT) enterTransition()
@@ -69,6 +148,8 @@ type Enemy = {
   hit: number // 被弾フラッシュ
 }
 type Bullet = { x: number; y: number; vx: number; vy: number; r: number; dmg: number; pierce: number; life: number; hit: Set<any> }
+type Orb = { x: number; y: number; vx: number; vy: number; life: number; value: number }
+type FloatText = { x: number; y: number; text: string; life: number; color: string }
 type Cell = { x: number; y: number; ang: number; cool: number; main: boolean; pop: number }
 type Boss = {
   x: number
@@ -113,6 +194,16 @@ let mode: Mode = 'title'
 let time = 0
 let result: 'win' | 'lose' = 'win'
 let bestWave = Number(localStorage.getItem('playlab.petri.best') || 0)
+// スコア＆コンボ（リスク&リターン／ごほうびの可視化）
+let score = 0
+let bestScore = Number(localStorage.getItem('playlab.petri.bestscore') || 0)
+let combo = 0 // 連続撃破数
+let comboTimer = 0 // これが切れるとコンボ0へ
+const COMBO_HOLD = 3.2
+let orbs: Orb[] = []
+let floats: FloatText[] = []
+let freezeFrames = 0 // ヒットストップ
+const comboMult = () => clamp(1 + Math.floor(combo / 4) * 0.5, 1, 5) // x1〜x5
 
 const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1 }
 const core = { x: 0, y: 0, r: 30, hp: 10, maxhp: 10, pulse: 0, hitFlash: 0 }
@@ -161,8 +252,14 @@ function reset() {
   enemies = []
   bullets = []
   boss = null
+  orbs = []
+  floats = []
   fx.list = []
   wave = 0
+  score = 0
+  combo = 0
+  comboTimer = 0
+  freezeFrames = 0
   // 最初の撃ち手（指で動かすメイン）
   cells.push({ x: W / 2, y: H / 2 + 90, ang: 0, cool: 0, main: true, pop: 1 })
   // 最初から仲間1体＝間口を広く（Kirbyism）。コア周りの守りと火力の下限を確保
@@ -207,12 +304,14 @@ function spawnEnemy() {
 function spawnBoss() {
   const a = Math.random() * Math.PI * 2
   const rad = Math.max(W, H) * 0.6
+  // コロニー規模で強さをスケール（強すぎ/弱すぎ回避）
+  const hp = 55 + cells.length * 12
   boss = {
     x: core.x + Math.cos(a) * rad,
     y: core.y + Math.sin(a) * rad,
     ang: a,
-    hp: 70 + 0 * wave,
-    maxhp: 70,
+    hp,
+    maxhp: hp,
     r: 26,
     trail: [],
     minionCool: 2,
@@ -222,6 +321,7 @@ function spawnBoss() {
 
 // ── 入力（状態ごと） ──
 canvas.addEventListener('pointerdown', () => {
+  unlockAudio() // iOS: タップ内で必ずアンロック
   if (mode === 'title') {
     reset()
     mode = 'play'
@@ -266,6 +366,8 @@ function pickEvolveAt(px: number, py: number) {
       fx.burst(core.x, core.y, 22, C.core, 220)
       shake.add(6)
       core.pulse = 1
+      SFX.evolve()
+      if (r.e.id === 'split') SFX.split()
       mode = 'play'
       startWave(wave + 1)
       return
@@ -361,6 +463,7 @@ function update(dt: number) {
           })
         }
         c.cool = S.fireInterval
+        if (c.main) SFX.shoot() // メインのみ・throttle済み（機関銃ノイズ回避）
       } else {
         c.cool = 0.08 // 的が無ければ素早く再走査
       }
@@ -418,9 +521,45 @@ function update(dt: number) {
       e.hp = 0
     }
   }
-  const before = enemies.length
   enemies = enemies.filter((e) => e.hp > 0)
-  void before
+
+  // コンボ減衰（攻め続けないと倍率が落ちる）
+  if (comboTimer > 0) {
+    comboTimer -= dt
+    if (comboTimer <= 0) combo = 0
+  }
+
+  // 養分オーブ：移動・摩擦・寿命・メイン細胞へ磁力で吸着→回収（拾う＝動く＝コアを離れるリスク）
+  const mainCell = cells.find((c) => c.main)
+  for (const o of orbs) {
+    o.life -= dt
+    o.x += o.vx * dt
+    o.y += o.vy * dt
+    o.vx *= 0.9
+    o.vy *= 0.9
+    if (mainCell) {
+      const dx = mainCell.x - o.x
+      const dy = mainCell.y - o.y
+      const d = Math.hypot(dx, dy) || 1
+      if (d < 82) {
+        const pull = 300 * dt
+        o.x += (dx / d) * pull
+        o.y += (dy / d) * pull
+        if (d < 20) {
+          pickupOrb(o)
+          o.life = 0
+        }
+      }
+    }
+  }
+  orbs = orbs.filter((o) => o.life > 0)
+
+  // フロートテキスト
+  for (const f of floats) {
+    f.life -= dt
+    f.y -= 24 * dt
+  }
+  floats = floats.filter((f) => f.life > 0)
 
   // ボス
   if (boss) updateBoss(dt)
@@ -502,12 +641,36 @@ function updateBoss(dt: number) {
 function killEnemy(e: Enemy) {
   fx.burst(e.x, e.y, e.kind === 'tank' ? 18 : 10, e.kind === 'tank' ? C.tank : C.virus, 200)
   shake.add(e.kind === 'tank' ? 4 : 1.5)
+  // コンボ加算（連続撃破で倍率UP）
+  combo++
+  comboTimer = COMBO_HOLD
+  // 養分オーブを落とす（拾うとスコア＝動いて回収する＝コアを離れるリスク）
+  const n = e.kind === 'tank' ? 3 : 1
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2
+    const s = 40 + Math.random() * 60
+    orbs.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 7, value: e.kind === 'tank' ? 2 : 1 })
+  }
+  if (e.kind === 'tank') {
+    SFX.killTank()
+    freezeFrames = 3 // ヒットストップ（重い敵だけ。雑魚は群れるので無し）
+  } else {
+    SFX.kill()
+  }
 }
 
 function defeatBoss() {
   const b = boss!
   for (let i = 0; i < 5; i++) fx.burst(b.x + (Math.random() * 60 - 30), b.y + (Math.random() * 60 - 30), 26, C.boss, 260)
+  // 養分を大量にばらまく（ごほうび）
+  for (let i = 0; i < 14; i++) {
+    const a = Math.random() * Math.PI * 2
+    const s = 60 + Math.random() * 120
+    orbs.push({ x: b.x, y: b.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 9, value: 3 })
+  }
   shake.add(18)
+  freezeFrames = 8
+  SFX.bossDefeat()
   boss = null
   endRun('win')
 }
@@ -516,16 +679,32 @@ function damageCore(n: number) {
   core.hp -= n
   core.hitFlash = 1
   shake.add(7)
+  combo = Math.floor(combo / 2) // 被弾でコンボ半減＝攻めすぎのリスク
+  SFX.coreHit()
+}
+
+function pickupOrb(o: Orb) {
+  const gain = o.value * comboMult()
+  score += gain
+  floats.push({ x: o.x, y: o.y - 6, text: '+' + gain, life: 0.8, color: C.core })
+  SFX.pickup()
 }
 
 function endRun(r: 'win' | 'lose') {
   result = r
   mode = 'over'
+  if (r === 'win') score += 100 // クリアボーナス
   const reached = r === 'win' ? TOTAL_WAVES : wave
   if (reached > bestWave) {
     bestWave = reached
     localStorage.setItem('playlab.petri.best', String(bestWave))
   }
+  if (score > bestScore) {
+    bestScore = score
+    localStorage.setItem('playlab.petri.bestscore', String(bestScore))
+  }
+  if (r === 'win') SFX.win()
+  else SFX.lose()
 }
 
 // ── 描画 ──
@@ -675,10 +854,10 @@ function drawBoss() {
   ctx.beginPath()
   ctx.arc(b.x, b.y, b.r * 0.3, 0, Math.PI * 2)
   ctx.fill()
-  // ボスHPバー（上部）
+  // ボスHPバー（スコアの下に置く）
   const bw = Math.min(W - 40, 320)
   const bx = W / 2 - bw / 2
-  const by = 18
+  const by = 60
   ctx.fillStyle = hexA(C.ink, 0.12)
   ctx.fillRect(bx, by, bw, 7)
   ctx.fillStyle = C.boss
@@ -698,7 +877,49 @@ function drawBullets() {
   }
 }
 
+function drawOrbs() {
+  for (const o of orbs) {
+    const a = clamp(o.life / 1.2, 0, 1) // 消える間際にフェード
+    const r = 3.2 + (o.value > 1 ? 1.8 : 0)
+    ctx.globalAlpha = a * 0.35
+    ctx.fillStyle = C.core
+    ctx.beginPath()
+    ctx.arc(o.x, o.y, r + 2.6 + Math.sin(time * 6 + o.x) * 0.8, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.globalAlpha = a
+    ctx.beginPath()
+    ctx.arc(o.x, o.y, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.globalAlpha = 1
+}
+
+function drawFloats() {
+  ctx.textAlign = 'center'
+  for (const f of floats) {
+    ctx.globalAlpha = clamp(f.life / 0.8, 0, 1)
+    ctx.fillStyle = f.color
+    ctx.font = `800 14px ${FONT}`
+    ctx.fillText(f.text, f.x, f.y)
+  }
+  ctx.globalAlpha = 1
+}
+
 function drawHUD() {
+  // スコア（上部中央・大きめ＝ごほうびは見える所に）
+  ctx.textAlign = 'center'
+  ctx.fillStyle = C.ink
+  ctx.font = `800 24px ${FONT}`
+  ctx.fillText(String(score), W / 2, 36)
+  // コンボ倍率（攻め続けると上がる。被弾で減る）
+  if (combo >= 2) {
+    const m = comboMult()
+    const p = 0.7 + 0.3 * clamp(comboTimer / COMBO_HOLD, 0, 1)
+    ctx.fillStyle = m >= 2 ? C.core : C.muted
+    ctx.font = `800 ${Math.round(13 * (0.9 + p * 0.25))}px ${FONT}`
+    ctx.fillText(`x${m % 1 === 0 ? m : m.toFixed(1)}  (${combo})`, W / 2, 54)
+  }
+
   const base = H - 14 - safeBottom() // セーフエリア分だけ持ち上げる
   // コアHP
   const bw = Math.min(W - 120, 220)
@@ -796,7 +1017,7 @@ function drawEvolve() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: 'まもって、ふやして。',
-    lines: ['画面を引いた方向へ移動（射撃は自動）', '親指は画面下でOK・コアを守れ', 'ウェーブ毎に進化、分裂で増やす'],
+    lines: ['画面を引いた方向へ移動（射撃は自動）', '養分を拾ってスコア・コアを守れ', '進化と分裂で群れを増やす'],
     start: 'タップでスタート',
     footer: bestWave > 0 ? `best: ${bestWave === TOTAL_WAVES ? 'クリア' : 'WAVE ' + bestWave}` : undefined,
     accent: C.core,
@@ -824,13 +1045,19 @@ function drawOver() {
   ctx.fillStyle = C.muted
   ctx.font = `500 15px ${FONT}`
   const msg = result === 'win' ? `全${TOTAL_WAVES - 1}ウェーブ＋ボスを撃退` : `WAVE ${wave} で力尽きた`
-  ctx.fillText(msg, W / 2, H * 0.42 + 34)
-  ctx.fillText(`コロニー最大 ${cells.length}`, W / 2, H * 0.42 + 58)
+  ctx.fillText(msg, W / 2, H * 0.42 + 32)
+  // スコア（ごほうびを大きく見せる）
+  ctx.fillStyle = C.core
+  ctx.font = `800 30px ${FONT}`
+  ctx.fillText(`${score}`, W / 2, H * 0.42 + 74)
+  ctx.fillStyle = C.muted
+  ctx.font = `600 13px ${FONT}`
+  ctx.fillText(`SCORE${score >= bestScore && score > 0 ? '（自己ベスト更新！）' : `  /  best ${bestScore}`}`, W / 2, H * 0.42 + 94)
   ctx.fillStyle = C.core
   ctx.font = `800 16px ${FONT}`
   const pulse = 0.65 + 0.35 * Math.sin(time * 4)
   ctx.globalAlpha = pulse
-  ctx.fillText('タップでタイトルへ', W / 2, H * 0.42 + 100)
+  ctx.fillText('タップでタイトルへ', W / 2, H * 0.42 + 128)
   ctx.globalAlpha = 1
 }
 
@@ -843,19 +1070,23 @@ function frame(now: number) {
     requestAnimationFrame(frame)
     return
   }
-  update(dt)
+  // ヒットストップ：数フレーム更新を止める（描画は続ける＝打撃の重み）
+  if (freezeFrames > 0 && mode === 'play') freezeFrames--
+  else update(dt)
 
   ctx.save()
   shake.apply(ctx)
   drawBackground()
   if (mode !== 'title') {
-    // コア → 弾 → 敵 → 撃ち手 → 粒子
+    // コア → 弾 → オーブ → 敵 → 撃ち手 → 粒子 → フロート
     drawCore()
     drawBullets()
+    drawOrbs()
     enemies.forEach(drawEnemy)
     if (boss) drawBoss()
     cells.forEach(drawCell)
     fx.draw(ctx)
+    drawFloats()
     drawJoystick()
     drawHUD()
   } else {
@@ -905,6 +1136,15 @@ function setupShot() {
     bullets.push({ x: lerp(cells[0].x, e.x, 0.4), y: lerp(cells[0].y, e.y, 0.4), vx: (dx / d) * 430, vy: (dy / d) * 430, r: 4.5, dmg: 1, pierce: 0, life: 1, hit: new Set() })
   }
   for (let i = 0; i < 30; i++) fx.burst(core.x + (Math.random() * 200 - 100), core.y + (Math.random() * 200 - 100), 1, i % 2 ? C.virus : C.core, 60)
+  // 養分オーブをいくつか（新メカを映えフレームでも見せる）
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2
+    const d = 70 + Math.random() * 130
+    orbs.push({ x: core.x + Math.cos(a) * d, y: core.y + Math.sin(a) * d, vx: 0, vy: 0, life: 7, value: i % 3 === 0 ? 2 : 1 })
+  }
+  score = 1240
+  combo = 9
+  comboTimer = COMBO_HOLD
   S.range = 230
 }
 
