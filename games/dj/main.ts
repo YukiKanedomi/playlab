@@ -1,7 +1,7 @@
 // きいて、かえして。 — コール&レスポンスのリズムゲー。DJ(ミニキャラ)のお手本を同じリズムで返す。
 // 成功を重ねるほどヒート上昇→オーディエンス増→演出が派手に。冷めると客が帰る(負け)。
 // 新技術＝WebAudioでビート合成＋タイミング同期。作風はラボ・スキンから卒業した暗いクラブ×ネオン。
-import { attachPointer, fitCanvas } from '../../shared/input'
+import { attachPointer, fitCanvas, safeBottom } from '../../shared/input'
 import { Particles, makeShake, clamp } from '../../shared/juice'
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
@@ -899,7 +899,7 @@ function drawPads() {
 
 function drawAudience() {
   const n = Math.round(audienceShown)
-  const baseY = H - 8
+  const baseY = H - 8 - safeBottom()
   ctx.save()
   for (let i = 0; i < n; i++) {
     // 擬似ランダム配置（iベース）
@@ -1071,7 +1071,7 @@ function render() {
   ctx.textAlign = 'left'
   ctx.fillStyle = C.dim
   ctx.font = `600 11px "Courier New", monospace`
-  ctx.fillText('No.02', 16, H - 14)
+  ctx.fillText('No.02', 16, H - 14 - safeBottom())
   ctx.restore()
 
   if (state === 'play') {

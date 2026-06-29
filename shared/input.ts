@@ -66,6 +66,26 @@ export function attachPointer(canvas: HTMLCanvasElement): PointerHandle {
   }
 }
 
+// iOS のホームバー等（下部セーフエリア）の高さ。下端のテキスト/HUDが被らないよう
+// 各ゲームはこの値ぶん上へ寄せる。初回呼び出しで実測＆resize 追従でキャッシュ更新。
+let _safeBottom = -1
+function measureSafeBottom() {
+  const p = document.createElement('div')
+  p.style.cssText =
+    'position:fixed;left:0;bottom:0;width:0;height:env(safe-area-inset-bottom,0px);pointer-events:none;visibility:hidden;'
+  document.body.appendChild(p)
+  _safeBottom = p.getBoundingClientRect().height || 0
+  p.remove()
+}
+export function safeBottom(): number {
+  if (_safeBottom < 0) {
+    measureSafeBottom()
+    window.addEventListener('resize', measureSafeBottom)
+    window.addEventListener('load', measureSafeBottom)
+  }
+  return _safeBottom
+}
+
 /**
  * canvas を親要素いっぱい＋高DPI対応にする。resize に追従。
  * 描画は ctx.scale(dpr,dpr) 済みなので CSSピクセルで描けばよい。

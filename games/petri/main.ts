@@ -3,7 +3,7 @@
 // 移動＋自動射撃のサバイバー×タワーディフェンス。ウェーブ毎に「進化」を選び、
 // 分裂で群れ（コロニー）を増やして火力と画面を盛り上げる。
 // 商標名・公式アートは使わず、絵・敵・名前は自作。
-import { attachPointer, fitCanvas } from '../../shared/input'
+import { attachPointer, fitCanvas, safeBottom } from '../../shared/input'
 import { clamp, lerp, makeShake, Particles, easeOutBack, approach } from '../../shared/juice'
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
@@ -45,7 +45,8 @@ fitCanvas(canvas, (w, h) => {
   W = w
   H = h
 })
-const ptr = attachPointer(canvas)
+const ptrh = attachPointer(canvas)
+const ptr = ptrh.pointer
 const shake = makeShake(26)
 const fx = new Particles()
 
@@ -646,10 +647,11 @@ function drawBullets() {
 }
 
 function drawHUD() {
+  const base = H - 14 - safeBottom() // セーフエリア分だけ持ち上げる
   // コアHP
   const bw = Math.min(W - 120, 220)
   const bx = W / 2 - bw / 2
-  const by = H - 26
+  const by = base - 12
   ctx.fillStyle = hexA(C.ink, 0.12)
   ctx.fillRect(bx, by, bw, 8)
   ctx.fillStyle = core.hp / core.maxhp < 0.34 ? C.danger : C.core
@@ -663,9 +665,9 @@ function drawHUD() {
   ctx.fillStyle = C.muted
   ctx.font = `700 12px ${FONT}`
   const label = boss ? 'BOSS' : `WAVE ${wave}/${TOTAL_WAVES - 1}`
-  ctx.fillText(label, W - 16, H - 14)
+  ctx.fillText(label, W - 16, base)
   ctx.textAlign = 'left'
-  ctx.fillText(`コロニー ${cells.length}`, 16, H - 14)
+  ctx.fillText(`コロニー ${cells.length}`, 16, base)
 }
 
 function roundRect(x: number, y: number, w: number, h: number, r: number) {
@@ -732,7 +734,7 @@ function drawTitle() {
   ctx.textAlign = 'center'
   ctx.fillStyle = hexA(C.ink, 0.4)
   ctx.font = `500 10px ${FONT}`
-  ctx.fillText('「セルサバイバー」に学ぶ習作 / 絵・敵・名前は自作', W / 2, H - 16)
+  ctx.fillText('「セルサバイバー」に学ぶ習作 / 絵・敵・名前は自作', W / 2, H - 16 - safeBottom())
 }
 
 function drawOver() {
@@ -787,7 +789,7 @@ function frame(now: number) {
   else if (mode === 'evolve') drawEvolve()
   else if (mode === 'over') drawOver()
 
-  ptr.endFrame()
+  ptrh.endFrame()
   requestAnimationFrame(frame)
 }
 

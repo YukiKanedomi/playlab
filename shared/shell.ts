@@ -1,17 +1,19 @@
 // shared/shell.ts — 共通の“額装”（任意の道具箱）。実験を「標本」として枠に入れる canvas chrome。
 // 紙背景は theme.drawPaperBackground、戻るチップは各ゲームHTML、遷移は transition.ts。
 import { LAB, hexA } from './theme'
+import { safeBottom } from './input'
 
 /** 実験ラベル（左下に小さく EXP番号＋タイトル）。荒い試作も“標本”として意図的に見せる。 */
 export function drawExpLabel(ctx: CanvasRenderingContext2D, _W: number, H: number, code: string, title: string) {
+  const sb = safeBottom()
   ctx.save()
   ctx.textAlign = 'left'
   ctx.fillStyle = LAB.muted
   ctx.font = `600 11px "Courier New", monospace`
-  ctx.fillText(code, 18, H - 26)
+  ctx.fillText(code, 18, H - 26 - sb)
   ctx.fillStyle = hexA(LAB.ink, 0.5)
   ctx.font = `600 12px ${LAB.font}`
-  ctx.fillText(title, 18, H - 11)
+  ctx.fillText(title, 18, H - 11 - sb)
   ctx.restore()
 }
 
