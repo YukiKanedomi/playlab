@@ -2,6 +2,7 @@
 // 成功を重ねるほどヒート上昇→オーディエンス増→演出が派手に。冷めると客が帰る(負け)。
 // 新技術＝WebAudioでビート合成＋タイミング同期。作風はラボ・スキンから卒業した暗いクラブ×ネオン。
 import { attachPointer, fitCanvas, safeBottom } from '../../shared/input'
+import { isMuted, onMuteChange, mountMuteButton } from '../../shared/audio'
 import { Particles, makeShake, clamp } from '../../shared/juice'
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
@@ -48,7 +49,7 @@ function ensureAudio() {
     if (ns.audioSession) ns.audioSession.type = 'playback'
   } catch {}
   master = actx.createGain()
-  master.gain.value = 0.9
+  master.gain.value = isMuted() ? 0 : 0.9 // 共通ミュート対応
   const comp = actx.createDynamicsCompressor()
   master.connect(comp).connect(actx.destination)
   const len = actx.sampleRate * 1
@@ -1151,5 +1152,10 @@ if (shotMode) {
   enterTransition()
   const back = document.querySelector('a.back') as HTMLAnchorElement | null
   if (back) wireLink(back)
+  // 共通ミュート：ボタン設置＋トグルで master gain を切替（音楽を聴きながら遊ぶ用）
+  mountMuteButton()
+  onMuteChange((m) => {
+    if (master) master.gain.value = m ? 0 : 0.9
+  })
 }
 requestAnimationFrame(frame)

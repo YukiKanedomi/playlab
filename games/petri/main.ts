@@ -8,28 +8,30 @@ import { clamp, lerp, makeShake, Particles, easeOutBack, approach } from '../../
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 import * as tune from '../../shared/tune'
+import { isMuted, mountMuteButton } from '../../shared/audio'
 
 // 実機調整パネル（右上の⚙）。const ではなく P.xxx を読む＝スライダーでライブ調整
 const P = tune.panel('petri', {
   // 操作（即反映）
-  MOVE_SPEED: { v: 200, min: 80, max: 400, step: 5, group: '操作' },
-  DRAG_MAXR: { v: 76, min: 40, max: 130, step: 2, group: '操作', label: '反応距離' },
-  inputCurve: { v: 2, min: 1, max: 3, step: 0.1, group: '操作', label: '入力カーブ(指数)' },
+  MOVE_SPEED: { v: 200, min: 80, max: 400, step: 5, group: '操作', label: '最高速', desc: '細胞が動ける最高スピード。大きいほどキビキビ＝速く、小さいほどゆったり。' },
+  DRAG_MAXR: { v: 76, min: 40, max: 130, step: 2, group: '操作', label: '反応距離', desc: '指をこの距離まで引くと最高速。大きいほど精密に・小さいほど少しの操作で速く動く。' },
+  inputCurve: { v: 2, min: 1, max: 3, step: 0.1, group: '操作', label: '入力カーブ', desc: '1=引いた量にそのまま比例。大きいほど中央付近が繊細になり、微調整しやすい。' },
   // スコア/養分（即反映）
-  COMBO_HOLD: { v: 3.2, min: 1, max: 6, step: 0.1, group: 'スコア', label: 'コンボ持続(秒)' },
-  magnetR: { v: 82, min: 30, max: 170, step: 2, group: 'スコア', label: '養分の吸着範囲' },
+  COMBO_HOLD: { v: 3.2, min: 1, max: 6, step: 0.1, group: 'スコア', label: 'コンボ持続(秒)', desc: '撃破が途切れてからコンボ倍率が消えるまでの猶予。長いほど倍率を維持しやすい。' },
+  magnetR: { v: 82, min: 30, max: 170, step: 2, group: 'スコア', label: '養分の吸着範囲', desc: 'この距離まで近づくと養分オーブが吸い寄せられる。大きいほど拾いやすい＝楽。' },
   // 火力（再開で反映）
-  fireInterval0: { v: 0.42, min: 0.12, max: 1, step: 0.01, group: '火力(再開で反映)', label: '初期連射間隔' },
+  fireInterval0: { v: 0.42, min: 0.12, max: 1, step: 0.01, group: '火力(再開で反映)', label: '初期連射間隔(秒)', desc: '1発ごとの間隔。小さいほど連射が速い＝開幕の火力が上がる。' },
   damage0: { v: 1, min: 1, max: 5, step: 1, group: '火力(再開で反映)', label: '初期威力' },
-  range0: { v: 210, min: 120, max: 360, step: 10, group: '火力(再開で反映)', label: '初期射程' },
-  startColony: { v: 1, min: 0, max: 5, step: 1, group: '火力(再開で反映)', label: '開幕の仲間数' },
+  range0: { v: 210, min: 120, max: 360, step: 10, group: '火力(再開で反映)', label: '初期射程', desc: 'この範囲内の敵を自動で狙う。' },
+  startColony: { v: 1, min: 0, max: 5, step: 1, group: '火力(再開で反映)', label: '開幕の仲間数', desc: 'スタート時にコアの周りを回る撃ち手の数。多いほど開幕が楽。' },
   // 敵/難度（再開で反映）
-  enemyHpMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '敵HP倍率' },
-  enemySpdMul: { v: 1, min: 0.3, max: 2, step: 0.1, group: '敵(再開で反映)', label: '敵速度倍率' },
-  spawnCountMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '出現数倍率' },
-  coreMaxHp: { v: 10, min: 4, max: 30, step: 1, group: '敵(再開で反映)', label: 'コア最大HP' },
-  bossHpMul: { v: 1, min: 0.3, max: 3, step: 0.1, group: '敵(再開で反映)', label: 'ボスHP倍率' },
+  enemyHpMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '敵HP倍率', desc: '1.0が基準。上げると硬く（難）、下げると脆い（易）。' },
+  enemySpdMul: { v: 1, min: 0.3, max: 2, step: 0.1, group: '敵(再開で反映)', label: '敵速度倍率', desc: '1.0が基準。上げると速く迫る（難）。' },
+  spawnCountMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '出現数倍率', desc: '1.0が基準。各ウェーブの敵の数を増減。' },
+  coreMaxHp: { v: 10, min: 4, max: 30, step: 1, group: '敵(再開で反映)', label: 'コア最大HP', desc: '守るコアの耐久。敵が触れると減り、0で負け。' },
+  bossHpMul: { v: 1, min: 0.3, max: 3, step: 0.1, group: '敵(再開で反映)', label: 'ボスHP倍率', desc: '1.0が基準。ボスの硬さ＝戦いの長さ。' },
 })
+mountMuteButton()
 
 // ── 顕微鏡スライドの配色（ラボ・スキンの寒天タイント版） ──
 const C = {
@@ -101,7 +103,7 @@ function unlockAudio() {
 }
 // 単音（osc）を鳴らす小ヘルパー
 function blip(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number) {
-  if (!actx || !master) return
+  if (!actx || !master || isMuted()) return
   const t = actx.currentTime
   const o = actx.createOscillator()
   const g = actx.createGain()

@@ -6,8 +6,9 @@
 // 右下の⚙でドロワーが開き、スライダー/トグルでライブ反映＋localStorage保存。
 // 「コピー」で“既定から変えた値だけ”のJSONがクリップボードへ → チャットに貼れば焼き込み。
 
-type NumDef = { v: number; min?: number; max?: number; step?: number; group?: string; label?: string }
-type BoolDef = { v: boolean; group?: string; label?: string }
+type Base = { group?: string; label?: string; desc?: string } // desc=分かりにくい設定の一文説明
+type NumDef = Base & { v: number; min?: number; max?: number; step?: number }
+type BoolDef = Base & { v: boolean }
 type Def = NumDef | BoolDef
 type Schema = Record<string, Def>
 
@@ -73,7 +74,7 @@ function mountUI(
   // ⚙ ボタン（右上・控えめ・常設）
   const btn = el(
     'button',
-    `position:fixed;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));
+    `position:fixed;top:max(10px,env(safe-area-inset-top));right:calc(max(10px,env(safe-area-inset-right)) + 42px);
      z-index:50;width:34px;height:34px;border-radius:50%;border:1px solid rgba(255,255,255,.25);
      background:rgba(22,26,24,.55);color:#fff;font-size:17px;line-height:1;cursor:pointer;
      -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);touch-action:manipulation;padding:0;`,
@@ -162,6 +163,8 @@ function mountUI(
         upd()
       })
     }
+    // 分かりにくい設定の一文説明
+    if (d.desc) el('div', `margin-top:4px;font-size:11px;line-height:1.35;color:${SUB};`, row, d.desc)
   }
 
   // 操作
