@@ -121,6 +121,18 @@ let enemies: Enemy[] = []
 let bullets: Bullet[] = []
 let boss: Boss = null
 
+// 相対ドラッグ操作（survivor.io 系の標準＝片手・画面のどこでも・引いた方向へ歩く）
+const DRAG_MAXR = 64 // この距離引けば最高速
+const DRAG_DEAD = 5 // これ未満は静止
+const MOVE_SPEED = 300 // px/s（最高速）
+let dragging = false
+let anchorX = 0
+let anchorY = 0
+let knobX = 0
+let knobY = 0
+let velX = 0
+let velY = 0
+
 // ウェーブ進行
 let wave = 0
 const TOTAL_WAVES = 6 // 6体目がボス
@@ -272,14 +284,47 @@ function update(dt: number) {
   }
   if (mode !== 'play') return
 
+  // 入力（相対ドラッグ）→ メイン細胞の速度を決める
+  if (ptr.down) {
+    if (!dragging) {
+      dragging = true
+      anchorX = ptr.x
+      anchorY = ptr.y
+    }
+    let dx = ptr.x - anchorX
+    let dy = ptr.y - anchorY
+    let mag = Math.hypot(dx, dy)
+    if (mag > DRAG_MAXR) {
+      // ベース（基点）を指の方へ引き寄せる＝トレイル式フローティングパッド
+      const k = 1 - DRAG_MAXR / mag
+      anchorX += dx * k
+      anchorY += dy * k
+      dx = ptr.x - anchorX
+      dy = ptr.y - anchorY
+      mag = DRAG_MAXR
+    }
+    knobX = anchorX + dx
+    knobY = anchorY + dy
+    if (mag < DRAG_DEAD) {
+      velX = 0
+      velY = 0
+    } else {
+      const sp = (mag / DRAG_MAXR) * MOVE_SPEED
+      velX = (dx / mag) * sp
+      velY = (dy / mag) * sp
+    }
+  } else {
+    dragging = false
+    velX = 0
+    velY = 0
+  }
+
   // 撃ち手の移動
   cells.forEach((c, i) => {
     c.pop = approach(c.pop, 1, dt, 6)
     if (c.main) {
-      if (ptr.down) {
-        c.x = approach(c.x, ptr.x, dt, 18)
-        c.y = approach(c.y, ptr.y, dt, 18)
-      }
+      c.x = clamp(c.x + velX * dt, 12, W - 12)
+      c.y = clamp(c.y + velY * dt, 12, H - 12)
     } else {
       // コアの周りを周回（コロニー）
       c.ang += S.orbitSpeed * dt
@@ -670,6 +715,31 @@ function drawHUD() {
   ctx.fillText(`コロニー ${cells.length}`, 16, base)
 }
 
+function drawJoystick() {
+  if (!dragging) return
+  ctx.save()
+  ctx.strokeStyle = hexA(C.cell, 0.28)
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(anchorX, anchorY, DRAG_MAXR, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.fillStyle = hexA(C.cell, 0.16)
+  ctx.beginPath()
+  ctx.arc(anchorX, anchorY, DRAG_MAXR, 0, Math.PI * 2)
+  ctx.fill()
+  // ノブ
+  ctx.fillStyle = hexA(C.cell, 0.55)
+  ctx.beginPath()
+  ctx.arc(knobX, knobY, 17, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.strokeStyle = hexA(C.cellDeep, 0.7)
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(knobX, knobY, 17, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+}
+
 function roundRect(x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
   if ((ctx as any).roundRect) (ctx as any).roundRect(x, y, w, h, r)
@@ -719,7 +789,7 @@ function drawEvolve() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: 'まもって、ふやして。',
-    lines: ['指で細胞を動かす（射撃は自動）', '敵を中央のコアに触れさせない', 'ウェーブ毎に進化、分裂で増やす'],
+    lines: ['画面を引いた方向へ移動（射撃は自動）', '親指は画面下でOK・コアを守れ', 'ウェーブ毎に進化、分裂で増やす'],
     start: 'タップでスタート',
     footer: bestWave > 0 ? `best: ${bestWave === TOTAL_WAVES ? 'クリア' : 'WAVE ' + bestWave}` : undefined,
     accent: C.core,
@@ -779,6 +849,7 @@ function frame(now: number) {
     if (boss) drawBoss()
     cells.forEach(drawCell)
     fx.draw(ctx)
+    drawJoystick()
     drawHUD()
   } else {
     fx.draw(ctx)
