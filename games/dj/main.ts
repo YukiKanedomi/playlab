@@ -33,6 +33,7 @@ const SUBDIV = 8 // 1小節=8つの8分
 const BEST_KEY = 'playlab.dj.best'
 let actx: any = null
 let master: GainNode
+let reverb: any = null // 残響バス（送り）
 let noiseBuf: AudioBuffer
 let L = 0.03 // 出力遅延の推定/補正値（目・耳・判定を揃えるために全所で使う）
 const LAT_KEY = 'playlab.dj.lat'
@@ -54,6 +55,19 @@ function ensureAudio() {
   noiseBuf = actx.createBuffer(1, len, actx.sampleRate)
   const d = noiseBuf.getChannelData(0)
   for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1
+  // 残響（合成インパルス）。メロディ/和音/歓声を少し送って“空間”を出す
+  const rl = Math.floor(actx.sampleRate * 1.1)
+  const rb = actx.createBuffer(2, rl, actx.sampleRate)
+  for (let ch = 0; ch < 2; ch++) {
+    const cd = rb.getChannelData(ch)
+    for (let i = 0; i < rl; i++) cd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / rl, 2.6)
+  }
+  const conv = actx.createConvolver()
+  conv.buffer = rb
+  const rg = actx.createGain()
+  rg.gain.value = 0.22
+  conv.connect(rg).connect(master)
+  reverb = conv
 }
 const beatDur = () => 60 / BPM
 const eighth = () => beatDur() / 2
@@ -133,8 +147,15 @@ function dull(t: number) {
   o.start(t)
   o.stop(t + 0.14)
 }
-// ── 音が主役：ベース＆キャラ寸劇の効果音 ──
-const ROOTS = [0, 0, -3, -1] // 小節ごとのベース根音
+// ── 音が主役：コード進行＋ベース＋パッド＋メロディ＋効果音 ──
+// 4小節ループ Am→F→C→G（Aを基準=半音0）。和音はトライアド。
+const CHORDS = [
+  [0, 3, 7], // Am
+  [-4, 0, 3], // F (F A C)
+  [-9, -5, -2], // C (低めのCEG)
+  [-2, 2, 5], // G (G B D)
+]
+const chordOf = (bar: number) => CHORDS[((bar % 4) + 4) % 4]
 function bass(t: number, semi: number, gain = 0.5) {
   const o = actx.createOscillator(),
     g = actx.createGain()
@@ -218,6 +239,42 @@ function click(t: number, hi = false) {
   o.connect(g).connect(master)
   o.start(t)
   o.stop(t + 0.07)
+}
+// 和音パッド（やわらかい持続音＋残響）＝曲の土台
+function pad(t: number, notes: number[]) {
+  const dur = barDur()
+  for (const s of notes) {
+    const o = actx.createOscillator(),
+      g = actx.createGain(),
+      f = actx.createBiquadFilter()
+    o.type = 'triangle'
+    o.frequency.value = 220 * Math.pow(2, s / 12)
+    f.type = 'lowpass'
+    f.frequency.value = 1300
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.05, t + 0.25)
+    g.gain.linearRampToValueAtTime(0.0001, t + dur * 0.95)
+    o.connect(f).connect(g)
+    g.connect(master)
+    if (reverb) g.connect(reverb)
+    o.start(t)
+    o.stop(t + dur)
+  }
+}
+// メロディの一音（プラック＋残響）。ヒート高で増える
+function pluck(t: number, semi: number, gain = 0.12) {
+  const o = actx.createOscillator(),
+    g = actx.createGain()
+  o.type = 'triangle'
+  o.frequency.value = 440 * Math.pow(2, semi / 12)
+  g.gain.setValueAtTime(0.0001, t)
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.01)
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.26)
+  o.connect(g)
+  g.connect(master)
+  if (reverb) g.connect(reverb)
+  o.start(t)
+  o.stop(t + 0.28)
 }
 
 const audioTime = () => actx.currentTime - L
@@ -342,14 +399,23 @@ function startNewPattern() {
 function scheduleSlot(s: number, t: number) {
   const slotInBar = s % SUBDIV
   const bar = Math.floor(s / SUBDIV)
-  // グルーヴ＋ベース（音が主役）
+  // グルーヴ＋コード（音が主役）
+  const chord = chordOf(bar)
   if (slotInBar === 0 || slotInBar === 4) {
     kick(t)
     cues.push({ time: t, kind: 'beat' })
-    if (bar > 0) bass(t, ROOTS[bar % ROOTS.length] + (slotInBar === 4 ? 7 : 0))
+    if (bar > 0) bass(t, chord[0] + (slotInBar === 4 ? 7 : 0))
   }
-  hat(t, slotInBar % 2 === 0 ? 0.26 : 0.15)
+  if (bar > 0 && slotInBar === 0) pad(t, chord) // 小節頭に和音パッド
+  // ハイハット（裏拍はスウィングで少し後ろ＝グルーヴ）
+  const sw = slotInBar % 2 === 1 ? eighth() * 0.16 : 0
+  hat(t + sw, slotInBar % 2 === 0 ? 0.24 : 0.14)
   if (slotInBar === 4 && hype > 0.5) clap(t, 0.32)
+  // メロディ（ヒートが上がるほど増える）
+  if (bar > 0) {
+    if (hype > 0.4 && (slotInBar === 2 || slotInBar === 6)) pluck(t + sw, chord[1] + 12, 0.1)
+    if (hype > 0.72 && (slotInBar === 3 || slotInBar === 7)) pluck(t + sw, chord[2] + 12, 0.08)
+  }
 
   // bar 0 はカウントイン（3・2・1・GO）
   if (bar === 0) {
