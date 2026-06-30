@@ -51,6 +51,8 @@ const C = {
   split: '#7e8b35', // 分裂体（黄緑）
   boss: '#7a2d2d',
   danger: '#9b2f2f',
+  amber: '#c2701c', // = core（宝箱/エリート/レベル表示用エイリアス）
+  teal: '#2f7d6b', // = cell（XPゲージ用エイリアス）
 }
 const FONT = '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", system-ui, sans-serif'
 
@@ -179,9 +181,10 @@ type Enemy = {
   hit: number // 被弾フラッシュ
   slow?: number // 減速の残り時間（粘性毒）
   mini?: boolean // 分裂で生まれた小型（さらに分裂しない）
+  elite?: boolean // エリート（強個体・宝箱ドロップ）
 }
 type Bullet = { x: number; y: number; vx: number; vy: number; r: number; dmg: number; pierce: number; ricochet: number; life: number; hit: Set<any> }
-type Orb = { x: number; y: number; vx: number; vy: number; life: number; value: number }
+type Orb = { x: number; y: number; vx: number; vy: number; life: number; value: number; chest?: boolean }
 type FloatText = { x: number; y: number; text: string; life: number; color: string }
 type Cell = { x: number; y: number; ang: number; cool: number; main: boolean; pop: number }
 // 蛇ボス：頭＋連なる体節（各節に個別HP・撃つと千切れて短くなる）
@@ -251,7 +254,6 @@ function evoPool(): Evo[] {
 type Mode = 'title' | 'play' | 'evolve' | 'over'
 let mode: Mode = 'title'
 let time = 0
-let result: 'win' | 'lose' = 'win'
 let bestWave = Number(localStorage.getItem('playlab.petri.best') || 0)
 // スコア＆コンボ（リスク&リターン／ごほうびの可視化）
 let score = 0
@@ -262,6 +264,15 @@ let orbs: Orb[] = []
 let floats: FloatText[] = []
 let freezeFrames = 0 // ヒットストップ
 const comboMult = () => clamp(1 + Math.floor(combo / 4) * 0.5, 1, 5) // x1〜x5
+// レベル＆経験値（ヴァンパイアサバイバー式：養分=XPでレベルアップ→進化）
+let xp = 0
+let level = 1
+let pendingLevels = 0 // 溜まったレベルアップ回数（宝箱や複数同時昇格）
+const xpForLevel = (lv: number) => Math.round(5 + lv * 4 + lv * lv * 0.6)
+// ウェーブ/ボス告知バナー
+let banner = ''
+let bannerT = 0
+function showBanner(t: string) { banner = t; bannerT = 1.9 }
 
 const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1, ricochet: 0, explode: 0, slow: 0, knock: 0, aura: 0, overdrive: 0, orbBoost: 0 }
 const core = { x: 0, y: 0, r: 30, hp: 10, maxhp: 10, pulse: 0, hitFlash: 0 }
@@ -281,9 +292,9 @@ let knobY = 0
 let velX = 0
 let velY = 0
 
-// ウェーブ進行
+// ウェーブ進行（エンドレス：BOSS_EVERY 毎にボス、コア崩壊まで続く）
 let wave = 0
-const TOTAL_WAVES = 6 // 6体目がボス
+const BOSS_EVERY = 6 // 6,12,18… がボスウェーブ
 let spawnQueue = 0 // このウェーブで残り出現数
 let spawnTimer = 0
 let spawnGap = 0.9
@@ -325,6 +336,11 @@ function reset() {
   combo = 0
   comboTimer = 0
   freezeFrames = 0
+  xp = 0
+  level = 1
+  pendingLevels = 0
+  banner = ''
+  bannerT = 0
   // 最初の撃ち手（指で動かすメイン）
   cells.push({ x: W / 2, y: H / 2 + 90, ang: 0, cool: 0, main: true, pop: 1 })
   // 最初から仲間＝間口を広く（Kirbyism）。コア周りの守りと火力の下限を確保
@@ -341,13 +357,15 @@ function addColony(n: number) {
 // ── ウェーブ ──
 function startWave(n: number) {
   wave = n
-  if (n >= TOTAL_WAVES) {
+  if (n % BOSS_EVERY === 0) {
+    showBanner('変異ボス 出現')
     spawnBoss()
     return
   }
+  showBanner('WAVE ' + n)
   // のこぎり波：Wave1 は少なく・ゆっくり（チュートリアル）→ 徐々に増やす
   spawnQueue = Math.round((3 + n * 2) * P.spawnCountMul) // w1=5, w2=7, w3=9...（×倍率）
-  spawnGap = Math.max(0.4, 1.05 - (n - 1) * 0.08) // w1=1.05 と余裕、後半詰まる
+  spawnGap = Math.max(0.32, 1.05 - (n - 1) * 0.07) // 後半ほど詰まる
   spawnTimer = 0.5
 }
 
@@ -357,15 +375,19 @@ function spawnEnemy() {
   const rad = Math.max(W, H) * 0.62
   const x = core.x + Math.cos(a) * rad
   const y = core.y + Math.sin(a) * rad
-  // 敵は1種ずつ導入（マリオ1-1式）：タンク=Wave2〜、分裂体=Wave3〜
+  // 敵は1種ずつ導入（マリオ1-1式）：タンク=Wave2〜、分裂体=Wave3〜、エリート=Wave4〜
   const roll = Math.random()
-  const tank = wave >= 2 && roll < 0.1 + (wave - 2) * 0.035
-  const splitter = !tank && wave >= 3 && roll > 0.78
+  const elite = wave >= 4 && Math.random() < 0.06
+  const tank = !elite && wave >= 2 && roll < 0.1 + (wave - 2) * 0.035
+  const splitter = !elite && !tank && wave >= 3 && roll > 0.78
   const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul // w1=1.5(2発)... ×倍率
   const tspd = (24 + wave * 2) * P.enemySpdMul
   const vspd = (34 + (wave - 1) * 6) * P.enemySpdMul
   let e: Enemy
-  if (tank) e = { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
+  if (elite) {
+    const hp = hpBase * 5.5
+    e = { x, y, vx: 0, vy: 0, r: 23, hp, maxhp: hp, spd: vspd * 0.62, kind: 'tank', wob: Math.random() * 9, hit: 0, elite: true }
+  } else if (tank) e = { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
   else if (splitter) e = { x, y, vx: 0, vy: 0, r: 15, hp: hpBase * 1.5, maxhp: hpBase * 1.5, spd: vspd * 0.8, kind: 'splitter', wob: Math.random() * 9, hit: 0 }
   else e = { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: vspd, kind: 'virus', wob: Math.random() * 9, hit: 0 }
   enemies.push(e)
@@ -452,11 +474,24 @@ function pickEvolveAt(px: number, py: number) {
       core.pulse = 1
       SFX.evolve()
       if (r.e.id === 'split') SFX.split()
-      mode = 'play'
-      startWave(wave + 1)
+      pendingLevels = Math.max(0, pendingLevels - 1)
+      if (pendingLevels > 0) showEvolve() // まだ昇格分が残っていれば続けて選ぶ
+      else mode = 'play'
       return
     }
   }
+}
+
+// 養分=XPを得る。閾値を超えたらレベルアップ（pendingに溜める）
+function gainXp(amount: number) {
+  xp += amount
+  while (xp >= xpForLevel(level)) {
+    xp -= xpForLevel(level)
+    level++
+    pendingLevels++
+    shake.add(3)
+  }
+  if (pendingLevels > 0 && mode === 'play') showEvolve()
 }
 
 // ── 更新 ──
@@ -692,8 +727,8 @@ function update(dt: number) {
   // ボス
   if (boss) updateBoss(dt)
 
-  // スポーン
-  if (boss == null && wave < TOTAL_WAVES) {
+  // スポーン（エンドレス：クリアで次ウェーブへ。進化は養分=XPのレベルアップで）
+  if (boss == null) {
     if (spawnQueue > 0) {
       spawnTimer -= dt
       if (spawnTimer <= 0) {
@@ -702,12 +737,14 @@ function update(dt: number) {
         spawnTimer = spawnGap
       }
     } else if (enemies.length === 0) {
-      // ウェーブクリア → 進化
-      if (wave >= 1) showEvolve()
+      startWave(wave + 1) // 次のウェーブへ
     }
   }
 
-  if (core.hp <= 0) endRun('lose')
+  // バナー減衰
+  if (bannerT > 0) bannerT -= dt
+
+  if (core.hp <= 0) endRun()
 }
 
 function nearestTargets(x: number, y: number, range: number, n: number) {
@@ -823,12 +860,18 @@ function killEnemy(e: Enemy, allowExplode = true) {
   shake.add(e.kind === 'tank' ? 4 : 1.5)
   combo++
   comboTimer = P.COMBO_HOLD
-  // 養分オーブ
-  const n = e.kind === 'tank' ? 3 : e.kind === 'splitter' ? 2 : 1
+  // 養分オーブ（エリートは大量＋宝箱）
+  const n = e.elite ? 8 : e.kind === 'tank' ? 3 : e.kind === 'splitter' ? 2 : 1
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2
-    const s = 40 + Math.random() * 60
-    orbs.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 7, value: e.kind === 'tank' ? 2 : 1 })
+    const s = 40 + Math.random() * 70
+    orbs.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: e.elite ? 10 : 7, value: e.kind === 'tank' ? 2 : 1 })
+  }
+  if (e.elite) {
+    orbs.push({ x: e.x, y: e.y, vx: 0, vy: 0, life: 14, value: 0, chest: true }) // 宝箱ドロップ
+    for (let k = 0; k < 5; k++) fx.burst(e.x, e.y, 8, C.amber, 220)
+    shake.add(8)
+    freezeFrames = 5
   }
   // 分裂体：倒すと小型2体に割れる（創発的な事故）
   if (e.kind === 'splitter' && !e.mini) {
@@ -858,17 +901,20 @@ function killEnemy(e: Enemy, allowExplode = true) {
 function defeatBoss() {
   const b = boss!
   for (let i = 0; i < 5; i++) fx.burst(b.hx + (Math.random() * 60 - 30), b.hy + (Math.random() * 60 - 30), 26, C.boss, 260)
-  // 養分を大量にばらまく（ごほうび）
+  // 養分を大量にばらまく＋宝箱2つ（ごほうび）
   for (let i = 0; i < 16; i++) {
     const a = Math.random() * Math.PI * 2
     const s = 60 + Math.random() * 120
-    orbs.push({ x: b.hx, y: b.hy, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 9, value: 3 })
+    orbs.push({ x: b.hx, y: b.hy, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 11, value: 3 })
   }
+  for (let i = 0; i < 2; i++) orbs.push({ x: b.hx + (i ? 24 : -24), y: b.hy, vx: 0, vy: 0, life: 16, value: 0, chest: true })
   shake.add(18)
   freezeFrames = 8
+  score += 150
   SFX.bossDefeat()
+  showBanner('ボス撃破！')
   boss = null
-  endRun('win')
+  startWave(wave + 1) // エンドレス続行
 }
 
 function damageCore(n: number) {
@@ -880,27 +926,32 @@ function damageCore(n: number) {
 }
 
 function pickupOrb(o: Orb) {
+  if (o.chest) {
+    // 宝箱＝即レベルアップ（無料の進化1回）
+    pendingLevels++
+    floats.push({ x: o.x, y: o.y - 8, text: '宝箱！', life: 1.0, color: C.amber })
+    SFX.split()
+    if (mode === 'play') showEvolve()
+    return
+  }
   const gain = Math.round(o.value * comboMult() * (1 + S.orbBoost * 0.5))
   score += gain
   floats.push({ x: o.x, y: o.y - 6, text: '+' + gain, life: 0.8, color: C.core })
   SFX.pickup()
+  gainXp(o.value) // 養分はXPにもなる＝集めるとレベルアップ
 }
 
-function endRun(r: 'win' | 'lose') {
-  result = r
+function endRun() {
   mode = 'over'
-  if (r === 'win') score += 100 // クリアボーナス
-  const reached = r === 'win' ? TOTAL_WAVES : wave
-  if (reached > bestWave) {
-    bestWave = reached
+  if (wave > bestWave) {
+    bestWave = wave
     localStorage.setItem('playlab.petri.best', String(bestWave))
   }
   if (score > bestScore) {
     bestScore = score
     localStorage.setItem('playlab.petri.bestscore', String(bestScore))
   }
-  if (r === 'win') SFX.win()
-  else SFX.lose()
+  SFX.lose()
 }
 
 // ── 描画 ──
@@ -1024,7 +1075,20 @@ function drawCell(c: Cell) {
 }
 
 function drawEnemy(e: Enemy) {
-  if (e.kind === 'tank') organism(e.x, e.y, e.r, hexA(C.tank, 0.22), darken(C.tank, 0.7), 0, e.wob, e.hit)
+  // エリート：脈打つ琥珀のオーラ＋外輪（強個体の予告）
+  if (e.elite) {
+    const pr = 1 + 0.12 * Math.sin(time * 5)
+    ctx.fillStyle = hexA(C.amber, 0.1)
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, (e.r + 9) * pr, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = hexA(C.amber, 0.8)
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, (e.r + 6) * pr, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+  if (e.kind === 'tank') organism(e.x, e.y, e.r, hexA(e.elite ? C.amber : C.tank, 0.22), darken(e.elite ? C.amber : C.tank, 0.7), 0, e.wob, e.hit)
   else if (e.kind === 'splitter') {
     organism(e.x, e.y, e.r, hexA(C.split, 0.24), darken(C.split, 0.7), 0, e.wob, e.hit)
     // 分裂を示す割れ目（縦線）
@@ -1111,6 +1175,29 @@ function drawBullets() {
 function drawOrbs() {
   for (const o of orbs) {
     const a = clamp(o.life / 1.2, 0, 1) // 消える間際にフェード
+    if (o.chest) {
+      // 宝箱：ぴょこぴょこ跳ねる琥珀の箱（拾うとレベルアップ）
+      const bob = Math.sin(time * 5 + o.x) * 2
+      const s = 9
+      ctx.globalAlpha = a
+      ctx.fillStyle = hexA(C.amber, 0.3)
+      ctx.fillRect(o.x - s, o.y - s + bob, s * 2, s * 2)
+      ctx.strokeStyle = C.amber
+      ctx.lineWidth = 2
+      ctx.strokeRect(o.x - s, o.y - s + bob, s * 2, s * 2)
+      ctx.beginPath()
+      ctx.moveTo(o.x - s, o.y - 2 + bob)
+      ctx.lineTo(o.x + s, o.y - 2 + bob)
+      ctx.stroke()
+      // きらめき
+      ctx.globalAlpha = a * (0.4 + 0.6 * Math.abs(Math.sin(time * 4)))
+      ctx.fillStyle = '#fff'
+      ctx.beginPath()
+      ctx.arc(o.x + s * 0.4, o.y - s * 0.5 + bob, 1.6, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.globalAlpha = 1
+      continue
+    }
     const r = 3.2 + (o.value > 1 ? 1.8 : 0)
     ctx.globalAlpha = a * 0.35
     ctx.fillStyle = C.core
@@ -1137,11 +1224,23 @@ function drawFloats() {
 }
 
 function drawHUD() {
+  // 経験値ゲージ（最上部・全幅）＝養分を集めるとレベルアップ（ヴァンサバ式）
+  const xn = xpForLevel(level)
+  const gx = 12
+  const gw = W - 24
+  ctx.fillStyle = hexA(C.ink, 0.1)
+  ctx.fillRect(gx, 6, gw, 5)
+  ctx.fillStyle = C.teal
+  ctx.fillRect(gx, 6, gw * clamp(xp / xn, 0, 1), 5)
+  ctx.fillStyle = C.teal
+  ctx.font = `800 12px ${FONT}`
+  ctx.textAlign = 'left'
+  ctx.fillText('Lv ' + level, 14, 58) // 左上の「← lab」と被らない位置
   // スコア（上部中央・大きめ＝ごほうびは見える所に）
   ctx.textAlign = 'center'
   ctx.fillStyle = C.ink
   ctx.font = `800 24px ${FONT}`
-  ctx.fillText(String(score), W / 2, 36)
+  ctx.fillText(String(score), W / 2, 40)
   // コンボ倍率（攻め続けると上がる。被弾で減る）
   if (combo >= 2) {
     const m = comboMult()
@@ -1168,7 +1267,7 @@ function drawHUD() {
   ctx.textAlign = 'right'
   ctx.fillStyle = C.muted
   ctx.font = `700 12px ${FONT}`
-  const label = boss ? 'BOSS' : `WAVE ${wave}/${TOTAL_WAVES - 1}`
+  const label = boss ? 'BOSS' : `WAVE ${wave}`
   ctx.fillText(label, W - 16, base)
   ctx.textAlign = 'left'
   ctx.fillText(`コロニー ${cells.length}`, 16, base)
@@ -1255,9 +1354,9 @@ function drawEvolve() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: 'まもって、ふやして。',
-    lines: ['画面を引いた方向へ移動（射撃は自動）', '養分を拾ってスコア・コアを守れ', '進化と分裂で群れを増やす'],
+    lines: ['画面を引いた方向へ移動（射撃は自動）', '養分を集めてレベルUP→進化を選ぶ', 'コアを守りどこまで生き延びる？'],
     start: 'タップでスタート',
-    footer: bestWave > 0 ? `best: ${bestWave === TOTAL_WAVES ? 'クリア' : 'WAVE ' + bestWave}` : undefined,
+    footer: bestWave > 0 ? `best: WAVE ${bestWave}` : undefined,
     accent: C.core,
     ink: C.ink,
     muted: C.muted,
@@ -1277,13 +1376,12 @@ function drawOver() {
   ctx.fillStyle = hexA(C.agar, 0.82)
   ctx.fillRect(0, 0, W, H)
   ctx.textAlign = 'center'
-  ctx.fillStyle = result === 'win' ? C.cell : C.danger
+  ctx.fillStyle = C.danger
   ctx.font = `800 34px ${FONT}`
-  ctx.fillText(result === 'win' ? '培養成功！' : 'コア崩壊…', W / 2, H * 0.42)
+  ctx.fillText('コア崩壊…', W / 2, H * 0.42)
   ctx.fillStyle = C.muted
   ctx.font = `500 15px ${FONT}`
-  const msg = result === 'win' ? `全${TOTAL_WAVES - 1}ウェーブ＋ボスを撃退` : `WAVE ${wave} で力尽きた`
-  ctx.fillText(msg, W / 2, H * 0.42 + 32)
+  ctx.fillText(`WAVE ${wave} ・ Lv ${level} で力尽きた`, W / 2, H * 0.42 + 32)
   // スコア（ごほうびを大きく見せる）
   ctx.fillStyle = C.core
   ctx.font = `800 30px ${FONT}`
@@ -1335,6 +1433,30 @@ function frame(now: number) {
     fx.draw(ctx)
   }
   ctx.restore()
+
+  // 低HP警告ヴィネット（赤い縁が脈打つ）
+  if (mode === 'play' && core.hp / core.maxhp < 0.34 && core.hp > 0) {
+    const pulse = 0.25 + 0.2 * Math.sin(time * 6)
+    const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.62)
+    v.addColorStop(0, 'rgba(155,47,47,0)')
+    v.addColorStop(1, `rgba(155,47,47,${pulse})`)
+    ctx.fillStyle = v
+    ctx.fillRect(0, 0, W, H)
+  }
+
+  // ウェーブ/ボス告知バナー（中央に出てフェード）
+  if (bannerT > 0 && mode === 'play') {
+    const k = clamp(bannerT / 1.9, 0, 1)
+    const appear = 1 - clamp((bannerT - 1.5) / 0.4, 0, 1) // 出だしのスライドイン
+    ctx.save()
+    ctx.globalAlpha = Math.min(k * 2.2, 1)
+    ctx.textAlign = 'center'
+    const isBoss = banner.indexOf('ボス') >= 0
+    ctx.fillStyle = isBoss ? C.danger : C.ink
+    ctx.font = `800 ${isBoss ? 30 : 26}px ${FONT}`
+    ctx.fillText(banner, W / 2, H * 0.3 + (1 - appear) * 16)
+    ctx.restore()
+  }
 
   if (mode === 'title') drawTitle()
   else if (mode === 'evolve') drawEvolve()
@@ -1415,7 +1537,7 @@ if (SHOT) {
     else if (SHOT === 'boss') {
       reset()
       mode = 'play'
-      wave = TOTAL_WAVES
+      wave = BOSS_EVERY
       addColony(4)
       cells.forEach((c, i) => {
         if (c.main) { c.x = core.x; c.y = core.y + 120 }
