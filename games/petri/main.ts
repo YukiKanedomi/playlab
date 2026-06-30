@@ -303,7 +303,7 @@ const comboMult = () => clamp(1 + Math.floor(combo / 4) * 0.5, 1, 5) // x1〜x5
 let xp = 0
 let level = 1
 let pendingLevels = 0 // 溜まったレベルアップ回数（宝箱や複数同時昇格）
-const xpForLevel = (lv: number) => Math.round(5 + lv * 4 + lv * lv * 0.6)
+const xpForLevel = (lv: number) => Math.round(6 + lv * 6 + lv * lv * 1.2) // 後半ほど重く＝成長を緩やかに
 // ウェーブ/ボス告知バナー
 let banner = ''
 let bannerT = 0
@@ -418,9 +418,9 @@ function startWave(n: number) {
     return
   }
   showBanner('WAVE ' + n)
-  // のこぎり波：序盤ゆるく→後半は数も加速度的に増やす（インフレ）
-  spawnQueue = Math.round((3 + n * 2 + Math.max(0, n - 6) * 1.5) * P.spawnCountMul)
-  spawnGap = Math.max(0.22, 1.05 - (n - 1) * 0.07)
+  // のこぎり波：序盤ゆるく→後半は数も加速度的に増やす（インフレ強め）
+  spawnQueue = Math.round((4 + n * 2 + Math.max(0, n - 5) * 2.4) * P.spawnCountMul)
+  spawnGap = Math.max(0.16, 1.0 - (n - 1) * 0.075)
   spawnTimer = 0.5
 }
 
@@ -437,8 +437,8 @@ function spawnEnemy() {
   const darter = !elite && !tank && wave >= 4 && roll > 0.58 && roll < 0.72
   const spitter = !elite && !tank && !darter && wave >= 6 && roll > 0.74 && roll < 0.8 // 少なめ
   const splitter = !elite && !tank && !darter && !spitter && wave >= 3 && roll > 0.82
-  // HPは後半に二次関数で加速（インフレ）。速度は上限を設けて理不尽回避
-  const hpBase = (1.5 + (wave - 1) * 1.0 + wave * wave * 0.05) * P.enemyHpMul
+  // HPは後半に二次関数で強く加速（インフレ）。速度は上限を設けて理不尽回避
+  const hpBase = (1.5 + (wave - 1) * 1.2 + wave * wave * 0.1) * P.enemyHpMul
   const tspd = Math.min(150, 24 + wave * 2) * P.enemySpdMul
   const vspd = Math.min(170, 34 + (wave - 1) * 6) * P.enemySpdMul
   let e: Enemy
@@ -733,6 +733,16 @@ function update(dt: number) {
         }
       }
     }
+    // 敵弾を撃ち落とせる（防ぐ手段）
+    if (b.life > 0) {
+      for (const s of eshots) {
+        if (s.life > 0 && Math.hypot(s.x - b.x, s.y - b.y) < 7 + b.r) {
+          s.life = 0
+          fx.burst(s.x, s.y, 5, C.enzyme, 120)
+          break
+        }
+      }
+    }
   }
   bullets = bullets.filter((b) => b.life > 0 && b.x > -40 && b.x < W + 40 && b.y > -40 && b.y < H + 40)
 
@@ -809,11 +819,24 @@ function update(dt: number) {
   }
   enemies = enemies.filter((e) => e.hp > 0)
 
-  // 敵の弾（spitter）：コアへ。当たるとコアにダメージ
+  // 敵の弾（spitter）：コアへ。細胞が盾になり、弾でも撃ち落とせる＝防ぐ手段
   for (const s of eshots) {
     s.life -= dt
     s.x += s.vx * dt
     s.y += s.vy * dt
+    // 自機/仲間/タレットが盾（当たると弾消滅・細胞は無傷）
+    let blocked = false
+    for (const c of cells) {
+      if (Math.hypot(c.x - s.x, c.y - s.y) < (c.main ? 16 : c.turret ? 13 : 11) + 4) {
+        blocked = true
+        break
+      }
+    }
+    if (blocked) {
+      fx.burst(s.x, s.y, 6, C.player, 130)
+      s.life = 0
+      continue
+    }
     if (Math.hypot(core.x - s.x, core.y - s.y) < core.r + 4) {
       damageCore(1)
       fx.burst(s.x, s.y, 6, C.danger, 140)
@@ -1328,8 +1351,16 @@ function drawEnemy(e: Enemy) {
     ctx.stroke()
     ctx.restore()
   } else if (e.kind === 'spitter') {
+    // 発射前のタメ（予兆）＝避けやすく
+    if (e.fire != null && e.fire > 0 && e.fire < 0.5) {
+      const ch = 1 - e.fire / 0.5
+      ctx.strokeStyle = hexA(C.danger, 0.3 + ch * 0.5)
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(e.x, e.y, e.r + 4 + ch * 6, 0, Math.PI * 2)
+      ctx.stroke()
+    }
     organism(e.x, e.y, e.r, hexA(C.spit, 0.26), darken(C.spit, 0.65), 5, e.wob, e.hit)
-    // 砲口（コア向き）
     ctx.fillStyle = darken(C.spit, 0.6)
     ctx.beginPath()
     ctx.arc(e.x, e.y, e.r * 0.34, 0, Math.PI * 2)
