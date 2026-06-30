@@ -14,6 +14,7 @@ export default defineConfig({
         trail: resolve(__dirname, 'games/trail/index.html'),
         dj: resolve(__dirname, 'games/dj/index.html'),
         petri: resolve(__dirname, 'games/petri/index.html'),
+        loop5: resolve(__dirname, 'games/loop5/index.html'),
       },
     },
   },

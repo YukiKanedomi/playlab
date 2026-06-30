@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "loop5",
+      "no": 4,
+      "title": "5秒、くりかえし。",
+      "desc": "5秒の時間ループ。過去の自分が幽霊で再生され、昔の自分と協力して養分を全部集める。何周で解ける？",
+      "tags": ["時間ループ", "パズル", "Canvas2D", "5秒"],
+      "date": "2026-07-01",
+      "status": "experiment",
+      "path": "games/loop5/",
+      "thumb": "thumbs/loop5.png"
+    },
+    {
       "slug": "petri",
       "no": 3,
       "title": "まもって、ふやして。",
