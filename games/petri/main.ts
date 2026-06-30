@@ -14,7 +14,7 @@ import { isMuted, onMuteChange, mountMuteButton, configureMixedSession } from '.
 // 実機調整パネル（右上の⚙）。const ではなく P.xxx を読む＝スライダーでライブ調整
 const P = tune.panel('petri', {
   // 操作（即反映）
-  MOVE_SPEED: { v: 200, min: 80, max: 400, step: 5, group: '操作', label: '最高速', desc: '細胞が動ける最高スピード。大きいほどキビキビ＝速く、小さいほどゆったり。' },
+  MOVE_SPEED: { v: 100, min: 50, max: 300, step: 5, group: '操作', label: '初期の最高速', desc: '開始時の移動スピード。進化「運動性」で+50ずつ上がる。' },
   DRAG_MAXR: { v: 76, min: 40, max: 130, step: 2, group: '操作', label: '反応距離', desc: '指をこの距離まで引くと最高速。大きいほど精密に・小さいほど少しの操作で速く動く。' },
   inputCurve: { v: 2, min: 1, max: 3, step: 0.1, group: '操作', label: '入力カーブ', desc: '1=引いた量にそのまま比例。大きいほど中央付近が繊細になり、微調整しやすい。' },
   // スコア/養分（即反映）
@@ -43,8 +43,12 @@ const C = {
   line: 'rgba(28,40,33,0.08)',
   core: '#c2701c', // 核＝琥珀
   coreDeep: '#9a560f',
-  cell: '#2f7d6b', // 自分（撃ち手の細胞）＝青緑
-  cellDeep: '#1f5849',
+  cell: '#5f9a72', // 仲間コロニー＝くすんだ緑（自機と差をつける）
+  cellDeep: '#3c6b4c',
+  player: '#15b3c4', // 自機＝鮮やかなシアン（一目で分かる）
+  playerDeep: '#0c6f7c',
+  darter: '#d2622a', // ダーター＝俊足のオレンジ
+  spit: '#3f7fa8', // 射撃する敵＝青
   enzyme: '#27604f', // 弾（酵素）
   virus: '#b1492e', // 雑魚ウイルス
   tank: '#6d4b8c', // 厚い細菌
@@ -151,6 +155,12 @@ const SFX = {
     blip(523, 0.1, 'triangle', 0.12)
     setTimeout(() => blip(784, 0.16, 'triangle', 0.12), 90)
   },
+  levelup() {
+    ;[523, 659, 880].forEach((f, i) => setTimeout(() => blip(f, 0.14, 'triangle', 0.13), i * 70))
+  },
+  spit() {
+    blip(300, 0.08, 'sawtooth', 0.05, 200)
+  },
   bossDefeat() {
     ;[392, 523, 659, 784].forEach((f, i) => setTimeout(() => blip(f, 0.22, 'triangle', 0.13), i * 110))
   },
@@ -176,16 +186,18 @@ type Enemy = {
   hp: number
   maxhp: number
   spd: number
-  kind: 'virus' | 'tank' | 'splitter'
+  kind: 'virus' | 'tank' | 'splitter' | 'darter' | 'spitter'
   wob: number
   hit: number // 被弾フラッシュ
   slow?: number // 減速の残り時間（粘性毒）
   mini?: boolean // 分裂で生まれた小型（さらに分裂しない）
   elite?: boolean // エリート（強個体・宝箱ドロップ）
+  fire?: number // 射撃クールダウン（spitter用）
 }
 type Bullet = { x: number; y: number; vx: number; vy: number; r: number; dmg: number; pierce: number; ricochet: number; life: number; hit: Set<any> }
+type EShot = { x: number; y: number; vx: number; vy: number; life: number } // 敵の弾（spitter）
 type Orb = { x: number; y: number; vx: number; vy: number; life: number; value: number; chest?: boolean }
-type FloatText = { x: number; y: number; text: string; life: number; color: string }
+type FloatText = { x: number; y: number; text: string; life: number; color: string; small?: boolean }
 type Cell = { x: number; y: number; ang: number; cool: number; main: boolean; pop: number }
 // 蛇ボス：頭＋連なる体節（各節に個別HP・撃つと千切れて短くなる）
 type BossSeg = { x: number; y: number; hp: number; maxhp: number; r: number; hit: number }
@@ -223,6 +235,7 @@ type Stats = {
   aura: number // 接触膜Lv（近接持続ダメージ）
   overdrive: number // 暴走Lv（コンボで連射UP）
   orbBoost: number // 高栄養Lv（養分の価値・吸着UP）
+  moveBonus: number // 運動性（移動速度+）
 }
 type Evo = { id: string; name: string; desc: string; max?: number; apply: () => void }
 const evoLv: Record<string, number> = {} // 取得Lv（重ねがけ）
@@ -233,6 +246,7 @@ function evoPool(): Evo[] {
     { id: 'dmg', name: '溶解力', desc: '一発の威力 +1', apply: () => (S.damage += 1) },
     { id: 'range', name: '走化性', desc: '射程が伸びる', apply: () => (S.range += 50) },
     { id: 'split', name: '分裂', desc: '仲間が1体増える', max: 6, apply: () => addColony(1) },
+    { id: 'move', name: '運動性', desc: '移動速度 +50', max: 6, apply: () => (S.moveBonus += 50) },
     { id: 'spread', name: '多核化', desc: '同時に狙う数 +1', max: 5, apply: () => (S.multishot += 1) },
     { id: 'pierce', name: '貫通', desc: '弾が敵を1体多く貫く', max: 5, apply: () => (S.pierce += 1) },
     { id: 'speed', name: '弾速', desc: '弾が速くなる', max: 4, apply: () => (S.bulletSpeed += 110) },
@@ -274,7 +288,9 @@ let banner = ''
 let bannerT = 0
 function showBanner(t: string) { banner = t; bannerT = 1.9 }
 
-const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1, ricochet: 0, explode: 0, slow: 0, knock: 0, aura: 0, overdrive: 0, orbBoost: 0 }
+const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1, ricochet: 0, explode: 0, slow: 0, knock: 0, aura: 0, overdrive: 0, orbBoost: 0, moveBonus: 0 }
+let eshots: EShot[] = [] // 敵の弾
+let levelFlash = 0 // レベルアップ演出
 const core = { x: 0, y: 0, r: 30, hp: 10, maxhp: 10, pulse: 0, hitFlash: 0 }
 let cells: Cell[] = []
 let enemies: Enemy[] = []
@@ -317,6 +333,9 @@ function reset() {
   S.aura = 0
   S.overdrive = 0
   S.orbBoost = 0
+  S.moveBonus = 0
+  eshots = []
+  levelFlash = 0
   for (const k in evoLv) delete evoLv[k]
   core.x = W / 2
   core.y = H / 2
@@ -375,19 +394,23 @@ function spawnEnemy() {
   const rad = Math.max(W, H) * 0.62
   const x = core.x + Math.cos(a) * rad
   const y = core.y + Math.sin(a) * rad
-  // 敵は1種ずつ導入（マリオ1-1式）：タンク=Wave2〜、分裂体=Wave3〜、エリート=Wave4〜
+  // 敵を多彩に・1種ずつ導入：タンク2〜/分裂3〜/ダーター4〜/エリート4〜/射撃5〜
   const roll = Math.random()
   const elite = wave >= 4 && Math.random() < 0.06
-  const tank = !elite && wave >= 2 && roll < 0.1 + (wave - 2) * 0.035
-  const splitter = !elite && !tank && wave >= 3 && roll > 0.78
-  const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul // w1=1.5(2発)... ×倍率
+  const tank = !elite && wave >= 2 && roll < 0.1 + (wave - 2) * 0.03
+  const darter = !elite && !tank && wave >= 4 && roll > 0.58 && roll < 0.72
+  const spitter = !elite && !tank && !darter && wave >= 5 && roll > 0.72 && roll < 0.82
+  const splitter = !elite && !tank && !darter && !spitter && wave >= 3 && roll > 0.82
+  const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul
   const tspd = (24 + wave * 2) * P.enemySpdMul
   const vspd = (34 + (wave - 1) * 6) * P.enemySpdMul
   let e: Enemy
   if (elite) {
     const hp = hpBase * 5.5
-    e = { x, y, vx: 0, vy: 0, r: 23, hp, maxhp: hp, spd: vspd * 0.62, kind: 'tank', wob: Math.random() * 9, hit: 0, elite: true }
+    e = { x, y, vx: 0, vy: 0, r: 25, hp, maxhp: hp, spd: vspd * 0.6, kind: 'tank', wob: Math.random() * 9, hit: 0, elite: true }
   } else if (tank) e = { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
+  else if (darter) e = { x, y, vx: 0, vy: 0, r: 10, hp: hpBase * 0.8, maxhp: hpBase * 0.8, spd: vspd * 1.7, kind: 'darter', wob: Math.random() * 9, hit: 0 }
+  else if (spitter) e = { x, y, vx: 0, vy: 0, r: 14, hp: hpBase * 1.3, maxhp: hpBase * 1.3, spd: vspd * 0.7, kind: 'spitter', wob: Math.random() * 9, hit: 0, fire: 1.5 }
   else if (splitter) e = { x, y, vx: 0, vy: 0, r: 15, hp: hpBase * 1.5, maxhp: hpBase * 1.5, spd: vspd * 0.8, kind: 'splitter', wob: Math.random() * 9, hit: 0 }
   else e = { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: vspd, kind: 'virus', wob: Math.random() * 9, hit: 0 }
   enemies.push(e)
@@ -489,7 +512,12 @@ function gainXp(amount: number) {
     xp -= xpForLevel(level)
     level++
     pendingLevels++
-    shake.add(3)
+    // レベルアップ演出（ドーパミン）：フラッシュ＋リング＋音
+    levelFlash = 1
+    shake.add(6)
+    for (let i = 0; i < 26; i++) fx.burst(core.x, core.y, 1, i % 2 ? C.amber : C.teal, 260)
+    floats.push({ x: core.x, y: core.y - 40, text: 'LEVEL UP!', life: 1.1, color: C.amber })
+    SFX.levelup()
   }
   if (pendingLevels > 0 && mode === 'play') showEvolve()
 }
@@ -535,7 +563,7 @@ function update(dt: number) {
     if (mag >= DRAG_DEAD) {
       // 入力カーブ：中央付近は繊細に、フルで引いて初めて最高速（"動きすぎ"の抑制）
       const norm = mag / P.DRAG_MAXR
-      const sp = Math.pow(norm, P.inputCurve) * P.MOVE_SPEED
+      const sp = Math.pow(norm, P.inputCurve) * (P.MOVE_SPEED + S.moveBonus) // 進化で加速
       tvx = (dx / mag) * sp
       tvy = (dy / mag) * sp
     }
@@ -610,7 +638,7 @@ function update(dt: number) {
           e.x += (b.vx / d) * S.knock * 9
           e.y += (b.vy / d) * S.knock * 9
         }
-        damageEnemy(e, b.dmg, true)
+        damageEnemy(e, b.dmg, true, true)
         // 貫通を消費。尽きたら跳弾 or 消滅
         if (b.pierce-- <= 0) {
           if (b.ricochet > 0 && redirectBullet(b)) b.ricochet--
@@ -667,17 +695,42 @@ function update(dt: number) {
     }
   }
 
-  // 敵の移動＋コア接触
+  // 敵の移動＋コア接触（種類ごとの個性）
   for (const e of enemies) {
     e.hit = Math.max(0, e.hit - dt * 4)
     e.wob += dt * 6
     if (e.slow && e.slow > 0) e.slow -= dt
-    const spd = e.spd * (e.slow && e.slow > 0 ? 0.45 : 1) // 粘性毒で鈍足
+    let spd = e.spd * (e.slow && e.slow > 0 ? 0.45 : 1) // 粘性毒で鈍足
+    if (e.elite) spd *= 1 + 0.9 * Math.max(0, Math.sin(time * 1.1 + e.wob)) // エリート＝うねる加減速（突進）
     const dx = core.x - e.x
     const dy = core.y - e.y
     const d = Math.hypot(dx, dy) || 1
-    e.x += (dx / d) * spd * dt
-    e.y += (dy / d) * spd * dt
+    const ux = dx / d
+    const uy = dy / d
+    if (e.kind === 'darter') {
+      // ジグザグに蛇行しながら接近
+      const px = -uy
+      const py = ux
+      const weave = Math.sin(time * 7 + e.wob) * spd * 0.9
+      e.x += (ux * spd + px * weave) * dt
+      e.y += (uy * spd + py * weave) * dt
+    } else if (e.kind === 'spitter') {
+      // 中距離で止まってコアへ弾を撃つ
+      if (d > 190) {
+        e.x += ux * spd * dt
+        e.y += uy * spd * dt
+      }
+      e.fire = (e.fire ?? 1.5) - dt
+      if (e.fire <= 0) {
+        e.fire = 2.2
+        const ss = 150
+        eshots.push({ x: e.x, y: e.y, vx: ux * ss, vy: uy * ss, life: 4 })
+        SFX.spit()
+      }
+    } else {
+      e.x += ux * spd * dt
+      e.y += uy * spd * dt
+    }
     if (d < core.r + e.r) {
       damageCore(e.kind === 'tank' ? 2 : 1)
       fx.burst(e.x, e.y, 10, C.danger, 160)
@@ -685,6 +738,19 @@ function update(dt: number) {
     }
   }
   enemies = enemies.filter((e) => e.hp > 0)
+
+  // 敵の弾（spitter）：コアへ。当たるとコアにダメージ
+  for (const s of eshots) {
+    s.life -= dt
+    s.x += s.vx * dt
+    s.y += s.vy * dt
+    if (Math.hypot(core.x - s.x, core.y - s.y) < core.r + 4) {
+      damageCore(1)
+      fx.burst(s.x, s.y, 6, C.danger, 140)
+      s.life = 0
+    }
+  }
+  eshots = eshots.filter((s) => s.life > 0 && s.x > -20 && s.x < W + 20 && s.y > -20 && s.y < H + 20)
 
   // コンボ減衰（攻め続けないと倍率が落ちる）
   if (comboTimer > 0) {
@@ -846,16 +912,20 @@ function redirectBullet(b: Bullet): boolean {
 }
 
 // 敵にダメージ（撃破時のコンボ/オーブ/炸裂を集約）。allowExplode=false で連鎖の暴走を防ぐ
-function damageEnemy(e: Enemy, dmg: number, allowExplode: boolean) {
+function damageEnemy(e: Enemy, dmg: number, allowExplode: boolean, showDmg = false) {
   if (e.hp <= 0) return
   e.hp -= dmg
   e.hit = 1
+  // ダメージ数字（成長を実感）＝弾/炸裂のみ。aura の連続tickは出さない
+  if (showDmg && floats.length < 48) {
+    floats.push({ x: e.x + (Math.random() * 10 - 5), y: e.y - e.r - 2, text: String(Math.round(dmg)), life: 0.45, color: '#ffffff', small: true })
+  }
   if (e.hp <= 0) killEnemy(e, allowExplode)
 }
 
 function killEnemy(e: Enemy, allowExplode = true) {
   if (e.hp > 0) e.hp = 0
-  const col = e.kind === 'tank' ? C.tank : e.kind === 'splitter' ? C.split : C.virus
+  const col = e.elite ? C.danger : e.kind === 'tank' ? C.tank : e.kind === 'splitter' ? C.split : e.kind === 'darter' ? C.darter : e.kind === 'spitter' ? C.spit : C.virus
   fx.burst(e.x, e.y, e.kind === 'tank' ? 18 : 10, col, 200)
   shake.add(e.kind === 'tank' ? 4 : 1.5)
   combo++
@@ -887,7 +957,7 @@ function killEnemy(e: Enemy, allowExplode = true) {
     fx.burst(e.x, e.y, 8, C.core, 140)
     for (const o of enemies) {
       if (o === e || o.hp <= 0) continue
-      if (Math.hypot(o.x - e.x, o.y - e.y) < rad) damageEnemy(o, adm, false)
+      if (Math.hypot(o.x - e.x, o.y - e.y) < rad) damageEnemy(o, adm, false, true)
     }
   }
   if (e.kind === 'tank') {
@@ -1058,15 +1128,23 @@ function drawCore() {
 
 function drawCell(c: Cell) {
   const s = easeOutBack(clamp(c.pop, 0, 1))
-  const r = (c.main ? 15 : 12) * s
-  organism(c.x, c.y, r, hexA(C.cell, 0.22), C.cellDeep, 0, time * 1.2 + c.ang, 0)
-  ctx.fillStyle = C.cell
+  const r = (c.main ? 16 : 11) * s
+  const fill = c.main ? C.player : C.cell
+  const edge = c.main ? C.playerDeep : C.cellDeep
+  organism(c.x, c.y, r, hexA(fill, c.main ? 0.3 : 0.22), edge, 0, time * 1.2 + c.ang, 0)
+  ctx.fillStyle = fill
   ctx.beginPath()
   ctx.arc(c.x, c.y, r * 0.32, 0, Math.PI * 2)
   ctx.fill()
   if (c.main) {
+    // 自機マーカー：白い二重リングで一目で「自分」と分かる
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(c.x, c.y, r + 3, 0, Math.PI * 2)
+    ctx.stroke()
     // 射程の薄い輪
-    ctx.strokeStyle = hexA(C.cell, 0.14)
+    ctx.strokeStyle = hexA(C.player, 0.16)
     ctx.lineWidth = 1.5
     ctx.beginPath()
     ctx.arc(c.x, c.y, S.range, 0, Math.PI * 2)
@@ -1075,29 +1153,68 @@ function drawCell(c: Cell) {
 }
 
 function drawEnemy(e: Enemy) {
-  // エリート：脈打つ琥珀のオーラ＋外輪（強個体の予告）
+  // エリート：脈打つ濃赤紫のオーラ＋回転するトゲ冠＋ラベル（強烈な存在感）
   if (e.elite) {
-    const pr = 1 + 0.12 * Math.sin(time * 5)
-    ctx.fillStyle = hexA(C.amber, 0.1)
+    const pr = 1 + 0.14 * Math.sin(time * 5)
+    ctx.fillStyle = hexA(C.danger, 0.12)
     ctx.beginPath()
-    ctx.arc(e.x, e.y, (e.r + 9) * pr, 0, Math.PI * 2)
+    ctx.arc(e.x, e.y, (e.r + 12) * pr, 0, Math.PI * 2)
     ctx.fill()
-    ctx.strokeStyle = hexA(C.amber, 0.8)
-    ctx.lineWidth = 2.5
+    // 回転するトゲ冠
+    ctx.strokeStyle = C.amber
+    ctx.lineWidth = 3
+    const spikes = 10
+    for (let i = 0; i < spikes; i++) {
+      const a = (i / spikes) * Math.PI * 2 + time * 0.8
+      const r1 = (e.r + 4) * pr
+      const r2 = (e.r + 13) * pr
+      ctx.beginPath()
+      ctx.moveTo(e.x + Math.cos(a) * r1, e.y + Math.sin(a) * r1)
+      ctx.lineTo(e.x + Math.cos(a) * r2, e.y + Math.sin(a) * r2)
+      ctx.stroke()
+    }
+    organism(e.x, e.y, e.r, hexA(C.danger, 0.32), darken(C.danger, 0.55), 0, e.wob, e.hit)
+    ctx.fillStyle = C.amber
     ctx.beginPath()
-    ctx.arc(e.x, e.y, (e.r + 6) * pr, 0, Math.PI * 2)
-    ctx.stroke()
-  }
-  if (e.kind === 'tank') organism(e.x, e.y, e.r, hexA(e.elite ? C.amber : C.tank, 0.22), darken(e.elite ? C.amber : C.tank, 0.7), 0, e.wob, e.hit)
+    ctx.arc(e.x, e.y, e.r * 0.34, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = C.amber
+    ctx.font = `800 10px ${FONT}`
+    ctx.textAlign = 'center'
+    ctx.fillText('ELITE', e.x, e.y - e.r - 14)
+  } else if (e.kind === 'tank') organism(e.x, e.y, e.r, hexA(C.tank, 0.22), darken(C.tank, 0.7), 0, e.wob, e.hit)
   else if (e.kind === 'splitter') {
     organism(e.x, e.y, e.r, hexA(C.split, 0.24), darken(C.split, 0.7), 0, e.wob, e.hit)
-    // 分裂を示す割れ目（縦線）
     ctx.strokeStyle = darken(C.split, 0.7)
     ctx.lineWidth = 1.6
     ctx.beginPath()
     ctx.moveTo(e.x, e.y - e.r * 0.8)
     ctx.lineTo(e.x, e.y + e.r * 0.8)
     ctx.stroke()
+  } else if (e.kind === 'darter') {
+    // 俊足：進行方向に尖った菱形＋トレイル感
+    const ang = Math.atan2(core.y - e.y, core.x - e.x)
+    ctx.save()
+    ctx.translate(e.x, e.y)
+    ctx.rotate(ang)
+    ctx.fillStyle = e.hit > 0 ? '#fff' : hexA(C.darter, 0.32)
+    ctx.strokeStyle = darken(C.darter, 0.7)
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(e.r * 1.6, 0)
+    ctx.lineTo(-e.r * 0.7, e.r * 0.9)
+    ctx.lineTo(-e.r * 0.7, -e.r * 0.9)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+  } else if (e.kind === 'spitter') {
+    organism(e.x, e.y, e.r, hexA(C.spit, 0.26), darken(C.spit, 0.65), 5, e.wob, e.hit)
+    // 砲口（コア向き）
+    ctx.fillStyle = darken(C.spit, 0.6)
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r * 0.34, 0, Math.PI * 2)
+    ctx.fill()
   } else organism(e.x, e.y, e.r, hexA(C.virus, 0.22), darken(C.virus, 0.7), 6, e.wob, e.hit)
   // 減速中はうっすら青いリング
   if (e.slow && e.slow > 0) {
@@ -1172,6 +1289,19 @@ function drawBullets() {
   }
 }
 
+function drawEShots() {
+  for (const s of eshots) {
+    ctx.fillStyle = hexA(C.danger, 0.25)
+    ctx.beginPath()
+    ctx.arc(s.x, s.y, 7, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.fillStyle = C.danger
+    ctx.beginPath()
+    ctx.arc(s.x, s.y, 4, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
 function drawOrbs() {
   for (const o of orbs) {
     const a = clamp(o.life / 1.2, 0, 1) // 消える間際にフェード
@@ -1215,10 +1345,20 @@ function drawOrbs() {
 function drawFloats() {
   ctx.textAlign = 'center'
   for (const f of floats) {
-    ctx.globalAlpha = clamp(f.life / 0.8, 0, 1)
-    ctx.fillStyle = f.color
-    ctx.font = `800 14px ${FONT}`
-    ctx.fillText(f.text, f.x, f.y)
+    ctx.globalAlpha = clamp(f.life / (f.small ? 0.45 : 0.8), 0, 1)
+    if (f.small) {
+      // ダメージ数字：白に薄い縁取りで読みやすく
+      ctx.font = `800 12px ${FONT}`
+      ctx.strokeStyle = hexA(C.ink, 0.5)
+      ctx.lineWidth = 2.5
+      ctx.strokeText(f.text, f.x, f.y)
+      ctx.fillStyle = f.color
+      ctx.fillText(f.text, f.x, f.y)
+    } else {
+      ctx.fillStyle = f.color
+      ctx.font = `800 14px ${FONT}`
+      ctx.fillText(f.text, f.x, f.y)
+    }
   }
   ctx.globalAlpha = 1
 }
@@ -1421,6 +1561,7 @@ function frame(now: number) {
     // コア → 弾 → オーブ → 敵 → 撃ち手 → 粒子 → フロート
     drawCore()
     drawBullets()
+    drawEShots()
     drawOrbs()
     enemies.forEach(drawEnemy)
     if (boss) drawBoss()
@@ -1433,6 +1574,13 @@ function frame(now: number) {
     fx.draw(ctx)
   }
   ctx.restore()
+
+  // レベルアップのフラッシュ（ドーパミン）。pause中でも自然に消えるよう frame で減衰
+  if (levelFlash > 0) {
+    ctx.fillStyle = hexA(C.amber, levelFlash * 0.28)
+    ctx.fillRect(0, 0, W, H)
+    levelFlash = Math.max(0, levelFlash - dt * 2.2)
+  }
 
   // 低HP警告ヴィネット（赤い縁が脈打つ）
   if (mode === 'play' && core.hp / core.maxhp < 0.34 && core.hp > 0) {
