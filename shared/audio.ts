@@ -15,6 +15,18 @@ export function isMuted(): boolean {
   return muted
 }
 
+/**
+ * ゲーム音を他アプリ（Apple Music 等）と"共存"させる音声セッション設定。
+ * iOS/Safari: 'ambient' はミックス（他の音を止めない）＝Playlab の既定ポリシー。
+ * 代償として端末のサイレントスイッチで消音される。AudioContext 作成直後に呼ぶ。
+ */
+export function configureMixedSession(): void {
+  try {
+    const ns: any = navigator
+    if (ns.audioSession) ns.audioSession.type = 'ambient'
+  } catch {}
+}
+
 /** ミュート状態が変わったら呼ばれる（dj のように master gain を切り替えたい時用）。登録時に現在値も即通知。 */
 export function onMuteChange(cb: (m: boolean) => void): void {
   listeners.push(cb)

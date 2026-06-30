@@ -2,7 +2,7 @@
 // 成功を重ねるほどヒート上昇→オーディエンス増→演出が派手に。冷めると客が帰る(負け)。
 // 新技術＝WebAudioでビート合成＋タイミング同期。作風はラボ・スキンから卒業した暗いクラブ×ネオン。
 import { attachPointer, fitCanvas, safeBottom } from '../../shared/input'
-import { isMuted, onMuteChange, mountMuteButton } from '../../shared/audio'
+import { isMuted, onMuteChange, mountMuteButton, configureMixedSession } from '../../shared/audio'
 import { Particles, makeShake, clamp } from '../../shared/juice'
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
@@ -43,12 +43,8 @@ function ensureAudio() {
   if (actx) return
   actx = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'interactive' })
   L = clamp(Number(localStorage.getItem(LAT_KEY)) || actx.outputLatency || actx.baseLatency || 0.03, 0, 0.35)
-  // セッション種別：通常は 'playback'（しっかり鳴らす）、ミュート時は 'ambient'
-  // （他アプリ=Apple Music 等と共存し再生を止めない）。リズムゲーはクロックを保つため suspend しない
-  try {
-    const ns: any = navigator
-    if (ns.audioSession) ns.audioSession.type = isMuted() ? 'ambient' : 'playback'
-  } catch {}
+  // 既定で他アプリ(Apple Music 等)と共存（ミックス）。リズムはクロックを保つため suspend しない
+  configureMixedSession()
   master = actx.createGain()
   master.gain.value = isMuted() ? 0 : 0.9 // 共通ミュート対応
   const comp = actx.createDynamicsCompressor()
@@ -1156,12 +1152,7 @@ if (shotMode) {
   // 共通ミュート：ボタン設置＋トグルで master gain を切替（音楽を聴きながら遊ぶ用）
   mountMuteButton()
   onMuteChange((m) => {
-    if (master) master.gain.value = m ? 0 : 0.9
-    // ミュート時は 'ambient' へ（Apple Music 等の再生を止めない）。解除で 'playback' に戻す
-    try {
-      const ns: any = navigator
-      if (ns.audioSession) ns.audioSession.type = m ? 'ambient' : 'playback'
-    } catch {}
+    if (master) master.gain.value = m ? 0 : 0.9 // 常に ambient（共存）。ミュートは音量0
   })
 }
 requestAnimationFrame(frame)

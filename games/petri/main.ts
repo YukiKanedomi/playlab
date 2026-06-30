@@ -8,7 +8,7 @@ import { clamp, lerp, makeShake, Particles, easeOutBack, approach } from '../../
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 import * as tune from '../../shared/tune'
-import { isMuted, onMuteChange, mountMuteButton } from '../../shared/audio'
+import { isMuted, onMuteChange, mountMuteButton, configureMixedSession } from '../../shared/audio'
 
 // 実機調整パネル（右上の⚙）。const ではなく P.xxx を読む＝スライダーでライブ調整
 const P = tune.panel('petri', {
@@ -85,10 +85,7 @@ function ensureAudio() {
     master = actx.createGain()
     master.gain.value = 0.5
     master.connect(actx.destination)
-    // 'ambient'＝他アプリ(Apple Music等)と共存（再生を止めない）。'playback'は排他で止めてしまう
-    try {
-      ;(navigator as any).audioSession && ((navigator as any).audioSession.type = 'ambient')
-    } catch {}
+    configureMixedSession() // 他アプリと共存（ミックス）
   } catch {}
 }
 function unlockAudio() {
