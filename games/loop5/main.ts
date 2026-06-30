@@ -125,7 +125,8 @@ const P = tune.panel(
 )
 
 // ── 型・状態 ──
-type Orb = { x: number; y: number; got: boolean }
+// need=必要タッチ数（硬い養分は2）。by=この周に触れたアクターID集合（同じ人は1回まで）
+type Orb = { x: number; y: number; got: boolean; need: number; hits: number; by: Set<number> }
 type Sample = { t: number; x: number; y: number }
 type Mode = 'title' | 'play' | 'win'
 let mode: Mode = 'title'
@@ -159,7 +160,8 @@ function newLayout() {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2
     const r = Math.sqrt(Math.random()) * dishR * 0.84
-    orbs.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, got: false })
+    const hard = Math.random() < 0.35 // 約1/3は“硬い養分”＝2体の協力が要る
+    orbs.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, got: false, need: hard ? 2 : 1, hits: 0, by: new Set() })
   }
   ghosts = []
   loopNum = 1
@@ -167,7 +169,11 @@ function newLayout() {
 }
 
 function startLoop() {
-  for (const o of orbs) o.got = false
+  for (const o of orbs) {
+    o.got = false
+    o.hits = 0
+    o.by.clear()
+  }
   rec = []
   gcur = ghosts.map(() => 0)
   loopTime = 0
@@ -201,14 +207,22 @@ function clampToDish(p: { x: number; y: number }) {
   }
 }
 
-function tryCollect(x: number, y: number) {
+function tryCollect(x: number, y: number, id: number) {
   for (const o of orbs) {
-    if (o.got) continue
+    if (o.got || o.by.has(id)) continue // 同じアクターは1回まで
     if (Math.hypot(o.x - x, o.y - y) < 20) {
-      o.got = true
-      collected++
-      fx.burst(o.x, o.y, 8, C.amber, 160)
-      SFX.collect()
+      o.by.add(id)
+      o.hits++
+      if (o.hits >= o.need) {
+        o.got = true
+        collected++
+        fx.burst(o.x, o.y, o.need > 1 ? 12 : 8, C.amber, 180)
+        SFX.collect()
+      } else {
+        // 硬い養分にヒビ（あと1人）
+        fx.burst(o.x, o.y, 5, C.amber, 110)
+        blip(420, 0.05, 'square', 0.04, 520)
+      }
     }
   }
 }
@@ -270,10 +284,10 @@ function update(dt: number) {
   for (let k = 0; k < ghosts.length; k++) {
     const g = ghostPosAt(ghosts[k], loopTime, gcur[k])
     gcur[k] = g.ci
-    tryCollect(g.x, g.y)
+    tryCollect(g.x, g.y, k)
   }
-  // 自分の回収
-  tryCollect(you.x, you.y)
+  // 自分の回収（自分のID = -1）
+  tryCollect(you.x, you.y, -1)
 
   // 全部集めた＝クリア
   if (collected >= orbs.length) {
@@ -382,23 +396,72 @@ function cellShape(x: number, y: number, r: number, fill: string, edge: string, 
 function drawOrbs() {
   for (const o of orbs) {
     if (o.got) continue
-    const pr = 5 + Math.sin(time * 5 + o.x) * 0.8
+    const hard = o.need > 1
+    const cracked = o.hits > 0
+    const pr = (hard ? 7 : 5) + Math.sin(time * 5 + o.x) * 0.8
+    // グロー
     ctx.globalAlpha = 0.35
     ctx.fillStyle = C.amber
     ctx.beginPath()
     ctx.arc(o.x, o.y, pr + 3, 0, Math.PI * 2)
     ctx.fill()
     ctx.globalAlpha = 1
-    ctx.beginPath()
-    ctx.arc(o.x, o.y, pr, 0, Math.PI * 2)
-    ctx.fill()
+    // 本体（硬い養分はヒビ前は中空リング、ヒビ後は満ちる）
+    if (hard && !cracked) {
+      ctx.strokeStyle = C.amber
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(o.x, o.y, pr, 0, Math.PI * 2)
+      ctx.stroke()
+      // 「2」＝2体必要のサイン
+      ctx.fillStyle = C.amber
+      ctx.font = `800 10px ${FONT}`
+      ctx.textAlign = 'center'
+      ctx.fillText('2', o.x, o.y + 3.5)
+    } else {
+      ctx.fillStyle = C.amber
+      ctx.beginPath()
+      ctx.arc(o.x, o.y, pr, 0, Math.PI * 2)
+      ctx.fill()
+      if (hard) {
+        // ヒビ済み＝あと1人で取れる合図（白フチ）
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
+    }
   }
 }
 
+// シャーレ中央の大きな残り秒数（5秒テーマを主役に）
+function drawCountdown() {
+  const rem = Math.max(0, P.LOOP - loopTime)
+  const n = Math.ceil(rem - 0.0001) || 0
+  const frac = rem - Math.floor(rem) // 1→0 で各秒が脈打つ
+  const pop = 1 + (1 - frac) * 0.12
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = `800 ${Math.round(Math.min(W, H) * 0.42 * pop)}px ${FONT}`
+  ctx.fillStyle = rem <= 1.5 ? hexA(C.danger, 0.16) : hexA(C.ink, 0.09)
+  ctx.fillText(String(n), cx, cy)
+  ctx.restore()
+  ctx.textBaseline = 'alphabetic'
+}
+
 function drawActors() {
-  // 幽霊（過去の自分）：半透明
+  // 幽霊（過去の自分）：半透明。近い幽霊とは細い線で繋がる＝協力の可視化
   for (let k = 0; k < ghosts.length; k++) {
     const g = ghostPosAt(ghosts[k], loopTime, gcur[k])
+    const d = Math.hypot(g.x - you.x, g.y - you.y)
+    if (d < 64) {
+      ctx.strokeStyle = hexA(C.you, (1 - d / 64) * 0.5)
+      ctx.lineWidth = 1.5
+      ctx.beginPath()
+      ctx.moveTo(you.x, you.y)
+      ctx.lineTo(g.x, g.y)
+      ctx.stroke()
+    }
     ctx.globalAlpha = 0.4
     cellShape(g.x, g.y, 11, hexA(C.ghost, 0.5), hexA(C.ghostDeep, 0.8), time * 1.2 + k)
     ctx.globalAlpha = 1
@@ -449,7 +512,7 @@ function drawBanner() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: '5秒、くりかえし。',
-    lines: ['5秒で養分を集める。指で動く', '5秒たつと“過去の自分”が幽霊で再生', '昔の自分と協力して全部集めろ'],
+    lines: ['5秒で養分を集める（指で動く）', '5秒ごとに“過去の自分”が幽霊で再生', '「2」の養分は2体で。協力で全部集めろ'],
     start: 'タップでスタート',
     footer: bestLoops > 0 ? `best: ${bestLoops}周でクリア` : undefined,
     accent: C.amber,
@@ -508,6 +571,7 @@ function frame(now: number) {
   shake.apply(ctx)
   drawField()
   if (mode !== 'title') {
+    drawCountdown() // 中央の大きな残り秒数（オーブの背面）
     drawOrbs()
     drawActors()
     fx.draw(ctx)
