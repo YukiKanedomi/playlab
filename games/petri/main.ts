@@ -47,6 +47,7 @@ const C = {
   enzyme: '#27604f', // 弾（酵素）
   virus: '#b1492e', // 雑魚ウイルス
   tank: '#6d4b8c', // 厚い細菌
+  split: '#7e8b35', // 分裂体（黄緑）
   boss: '#7a2d2d',
   danger: '#9b2f2f',
 }
@@ -172,25 +173,32 @@ type Enemy = {
   hp: number
   maxhp: number
   spd: number
-  kind: 'virus' | 'tank'
+  kind: 'virus' | 'tank' | 'splitter'
   wob: number
   hit: number // 被弾フラッシュ
+  slow?: number // 減速の残り時間（粘性毒）
+  mini?: boolean // 分裂で生まれた小型（さらに分裂しない）
 }
-type Bullet = { x: number; y: number; vx: number; vy: number; r: number; dmg: number; pierce: number; life: number; hit: Set<any> }
+type Bullet = { x: number; y: number; vx: number; vy: number; r: number; dmg: number; pierce: number; ricochet: number; life: number; hit: Set<any> }
 type Orb = { x: number; y: number; vx: number; vy: number; life: number; value: number }
 type FloatText = { x: number; y: number; text: string; life: number; color: string }
 type Cell = { x: number; y: number; ang: number; cool: number; main: boolean; pop: number }
+// 蛇ボス：頭＋連なる体節（各節に個別HP・撃つと千切れて短くなる）
+type BossSeg = { x: number; y: number; hp: number; maxhp: number; r: number; hit: number }
 type Boss = {
-  x: number
-  y: number
-  ang: number // 周回角
-  hp: number
-  maxhp: number
-  r: number
-  trail: { x: number; y: number }[]
+  hx: number
+  hy: number
+  hr: number
+  hhp: number
+  hmaxhp: number
+  hhit: number
+  dir: number // 進行方向
+  segs: BossSeg[]
+  path: { x: number; y: number }[] // 距離サンプルした頭の軌跡
   minionCool: number
-  hit: number
+  coreCd: number // コア接触のクールダウン
 } | null
+const SEG_GAP = 18 // 体節の間隔(px)
 
 // ── 進化（ローグライト） ──
 type Stats = {
@@ -201,19 +209,38 @@ type Stats = {
   pierce: number
   bulletSpeed: number
   orbitSpeed: number
+  // ビルド分岐
+  ricochet: number // 跳弾回数
+  explode: number // 炸裂Lv（撃破時AoE）
+  slow: number // 粘性毒Lv（被弾で減速）
+  knock: number // 衝角Lv（ノックバック）
+  aura: number // 接触膜Lv（近接持続ダメージ）
+  overdrive: number // 暴走Lv（コンボで連射UP）
+  orbBoost: number // 高栄養Lv（養分の価値・吸着UP）
 }
-type Evo = { id: string; name: string; desc: string; apply: () => void }
+type Evo = { id: string; name: string; desc: string; max?: number; apply: () => void }
+const evoLv: Record<string, number> = {} // 取得Lv（重ねがけ）
 function evoPool(): Evo[] {
   return [
-    { id: 'rate', name: '酵素の活性', desc: '連射が速くなる', apply: () => (S.fireInterval *= 0.82) },
+    // 基本強化（重ねがけ可）
+    { id: 'rate', name: '酵素の活性', desc: '連射が速くなる', apply: () => (S.fireInterval *= 0.84) },
     { id: 'dmg', name: '溶解力', desc: '一発の威力 +1', apply: () => (S.damage += 1) },
-    { id: 'range', name: '走化性', desc: '射程が伸びる', apply: () => (S.range += 55) },
-    { id: 'split', name: '分裂', desc: '仲間が1体増える', apply: () => addColony(1) },
-    { id: 'spread', name: '多核化', desc: '同時に狙う数 +1', apply: () => (S.multishot += 1) },
-    { id: 'pierce', name: '貫通', desc: '弾が1体多く貫く', apply: () => (S.pierce += 1) },
-    { id: 'speed', name: '弾速', desc: '弾が速くなる', apply: () => (S.bulletSpeed += 120) },
-    { id: 'heal', name: '膜の修復', desc: 'コアを2回復', apply: () => (core.hp = Math.min(core.maxhp, core.hp + 2)) },
-    { id: 'fort', name: '細胞壁の強化', desc: 'コア最大HP +2', apply: () => { core.maxhp += 2; core.hp += 2 } },
+    { id: 'range', name: '走化性', desc: '射程が伸びる', apply: () => (S.range += 50) },
+    { id: 'split', name: '分裂', desc: '仲間が1体増える', max: 6, apply: () => addColony(1) },
+    { id: 'spread', name: '多核化', desc: '同時に狙う数 +1', max: 5, apply: () => (S.multishot += 1) },
+    { id: 'pierce', name: '貫通', desc: '弾が敵を1体多く貫く', max: 5, apply: () => (S.pierce += 1) },
+    { id: 'speed', name: '弾速', desc: '弾が速くなる', max: 4, apply: () => (S.bulletSpeed += 110) },
+    // ビルド分岐（個性）
+    { id: 'ricochet', name: '跳弾', desc: '弾が当たると別の敵へ跳ねる', max: 4, apply: () => (S.ricochet += 1) },
+    { id: 'explode', name: '炸裂', desc: '敵を倒すと周囲に飛沫ダメージ', max: 4, apply: () => (S.explode += 1) },
+    { id: 'slow', name: '粘性毒', desc: '当てた敵をしばらく鈍足にする', max: 3, apply: () => (S.slow += 1) },
+    { id: 'knock', name: '衝角', desc: '弾が敵を押し返す', max: 3, apply: () => (S.knock += 1) },
+    { id: 'aura', name: '接触膜', desc: '細胞のすぐ近くの敵を溶かし続ける', max: 4, apply: () => (S.aura += 1) },
+    { id: 'overdrive', name: '暴走', desc: 'コンボが高いほど連射が速くなる', max: 3, apply: () => (S.overdrive += 1) },
+    { id: 'orb', name: '高栄養', desc: '養分の価値と吸着範囲が上がる', max: 4, apply: () => (S.orbBoost += 1) },
+    // 維持系
+    { id: 'heal', name: '膜の修復', desc: 'コアを3回復', apply: () => (core.hp = Math.min(core.maxhp, core.hp + 3)) },
+    { id: 'fort', name: '細胞壁の強化', desc: 'コア最大HP +3', apply: () => { core.maxhp += 3; core.hp += 3 } },
   ]
 }
 
@@ -233,7 +260,7 @@ let floats: FloatText[] = []
 let freezeFrames = 0 // ヒットストップ
 const comboMult = () => clamp(1 + Math.floor(combo / 4) * 0.5, 1, 5) // x1〜x5
 
-const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1 }
+const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1, ricochet: 0, explode: 0, slow: 0, knock: 0, aura: 0, overdrive: 0, orbBoost: 0 }
 const core = { x: 0, y: 0, r: 30, hp: 10, maxhp: 10, pulse: 0, hitFlash: 0 }
 let cells: Cell[] = []
 let enemies: Enemy[] = []
@@ -269,6 +296,14 @@ function reset() {
   S.pierce = 0
   S.bulletSpeed = 430
   S.orbitSpeed = 1.1
+  S.ricochet = 0
+  S.explode = 0
+  S.slow = 0
+  S.knock = 0
+  S.aura = 0
+  S.overdrive = 0
+  S.orbBoost = 0
+  for (const k in evoLv) delete evoLv[k]
   core.x = W / 2
   core.y = H / 2
   core.maxhp = P.coreMaxHp
@@ -319,32 +354,46 @@ function spawnEnemy() {
   const rad = Math.max(W, H) * 0.62
   const x = core.x + Math.cos(a) * rad
   const y = core.y + Math.sin(a) * rad
-  // 敵は1種ずつ導入（マリオ1-1式）：タンクは Wave2 から
-  const tank = wave >= 2 && Math.random() < 0.1 + (wave - 2) * 0.04
+  // 敵は1種ずつ導入（マリオ1-1式）：タンク=Wave2〜、分裂体=Wave3〜
+  const roll = Math.random()
+  const tank = wave >= 2 && roll < 0.1 + (wave - 2) * 0.035
+  const splitter = !tank && wave >= 3 && roll > 0.78
   const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul // w1=1.5(2発)... ×倍率
   const tspd = (24 + wave * 2) * P.enemySpdMul
   const vspd = (34 + (wave - 1) * 6) * P.enemySpdMul
-  const e: Enemy = tank
-    ? { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
-    : { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: vspd, kind: 'virus', wob: Math.random() * 9, hit: 0 }
+  let e: Enemy
+  if (tank) e = { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
+  else if (splitter) e = { x, y, vx: 0, vy: 0, r: 15, hp: hpBase * 1.5, maxhp: hpBase * 1.5, spd: vspd * 0.8, kind: 'splitter', wob: Math.random() * 9, hit: 0 }
+  else e = { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: vspd, kind: 'virus', wob: Math.random() * 9, hit: 0 }
   enemies.push(e)
 }
 
 function spawnBoss() {
   const a = Math.random() * Math.PI * 2
   const rad = Math.max(W, H) * 0.6
-  // コロニー規模で強さをスケール（強すぎ/弱すぎ回避）
-  const hp = Math.round((55 + cells.length * 12) * P.bossHpMul)
+  const hx = core.x + Math.cos(a) * rad
+  const hy = core.y + Math.sin(a) * rad
+  // コロニー規模で長さ・硬さをスケール（毎回ボリュームが変わる）
+  const count = clamp(8 + Math.floor(cells.length * 0.8), 8, 16)
+  const segHp = Math.max(4, Math.round((5 + S.damage * 1.4) * P.bossHpMul))
+  const segs: BossSeg[] = []
+  for (let i = 0; i < count; i++) {
+    const r = Math.max(8, 15 - i * 0.35)
+    segs.push({ x: hx, y: hy, hp: segHp, maxhp: segHp, r, hit: 0 })
+  }
+  const hhp = Math.round((36 + cells.length * 6) * P.bossHpMul)
   boss = {
-    x: core.x + Math.cos(a) * rad,
-    y: core.y + Math.sin(a) * rad,
-    ang: a,
-    hp,
-    maxhp: hp,
-    r: 26,
-    trail: [],
-    minionCool: 2,
-    hit: 0,
+    hx,
+    hy,
+    hr: 20,
+    hhp,
+    hmaxhp: hhp,
+    hhit: 0,
+    dir: Math.atan2(core.y - hy, core.x - hx),
+    segs,
+    path: [{ x: hx, y: hy }],
+    minionCool: 3,
+    coreCd: 0,
   }
 }
 
@@ -368,14 +417,13 @@ canvas.addEventListener('pointerdown', () => {
 function showEvolve() {
   mode = 'evolve'
   evoScale = 0
-  const pool = evoPool()
-  // 3つランダム抽出
+  // 上限に達した進化は除外して3つ抽出
+  const pool = evoPool().filter((e) => !e.max || (evoLv[e.id] || 0) < e.max)
   evoChoices = []
-  const idx = [...pool.keys()]
-  for (let i = 0; i < 3 && idx.length; i++) {
-    const k = (Math.random() * idx.length) | 0
-    evoChoices.push(pool[idx[k]])
-    idx.splice(k, 1)
+  for (let i = 0; i < 3 && pool.length; i++) {
+    const k = (Math.random() * pool.length) | 0
+    evoChoices.push(pool[k])
+    pool.splice(k, 1)
   }
 }
 
@@ -392,6 +440,7 @@ function pickEvolveAt(px: number, py: number) {
   for (const r of evoRects()) {
     if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
       r.e.apply()
+      evoLv[r.e.id] = (evoLv[r.e.id] || 0) + 1 // 重ねがけのLv記録
       fx.burst(core.x, core.y, 22, C.core, 220)
       shake.add(6)
       core.pulse = 1
@@ -487,11 +536,14 @@ function update(dt: number) {
             r: 4.5,
             dmg: S.damage,
             pierce: S.pierce,
+            ricochet: S.ricochet,
             life: 1.6,
             hit: new Set(),
           })
         }
-        c.cool = S.fireInterval
+        // 暴走：コンボが高いほど連射が速くなる
+        const od = S.overdrive > 0 ? clamp(1 - combo * 0.015 * S.overdrive, 0.45, 1) : 1
+        c.cool = S.fireInterval * od
         if (c.main) SFX.shoot() // メインのみ・throttle済み（機関銃ノイズ回避）
       } else {
         c.cool = 0.08 // 的が無ければ素早く再走査
@@ -508,42 +560,83 @@ function update(dt: number) {
     for (const e of enemies) {
       if (b.hit.has(e)) continue
       if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + b.r) {
-        e.hp -= b.dmg
-        e.hit = 1
         b.hit.add(e)
         fx.burst(b.x, b.y, 4, C.enzyme, 90)
-        if (b.pierce-- <= 0) b.life = 0
-        if (e.hp <= 0) killEnemy(e)
+        // 粘性毒（減速）／衝角（ノックバック）
+        if (S.slow > 0) e.slow = 0.6 + S.slow * 0.4
+        if (S.knock > 0) {
+          const d = Math.hypot(b.vx, b.vy) || 1
+          e.x += (b.vx / d) * S.knock * 9
+          e.y += (b.vy / d) * S.knock * 9
+        }
+        damageEnemy(e, b.dmg, true)
+        // 貫通を消費。尽きたら跳弾 or 消滅
+        if (b.pierce-- <= 0) {
+          if (b.ricochet > 0 && redirectBullet(b)) b.ricochet--
+          else b.life = 0
+        }
         if (b.life <= 0) break
       }
     }
-    // ボスとの衝突（頭＋胴のサンプル点）
+    // ボス（蛇）との衝突：頭か最初に当たった体節を処理
     if (boss && b.life > 0 && !b.hit.has(boss)) {
-      const pts = [{ x: boss.x, y: boss.y, r: boss.r }, ...bossSegPoints(boss)]
-      for (const p of pts) {
-        if (Math.hypot(p.x - b.x, p.y - b.y) < p.r + b.r) {
-          boss.hp -= b.dmg
-          boss.hit = 1
-          b.hit.add(boss)
-          fx.burst(b.x, b.y, 5, C.boss, 110)
-          if (b.pierce-- <= 0) b.life = 0
-          if (boss.hp <= 0) defeatBoss()
-          break
+      let part: 'head' | number | null = null
+      if (Math.hypot(boss.hx - b.x, boss.hy - b.y) < boss.hr + b.r) part = 'head'
+      else
+        for (let i = 0; i < boss.segs.length; i++) {
+          const s = boss.segs[i]
+          if (Math.hypot(s.x - b.x, s.y - b.y) < s.r + b.r) {
+            part = i
+            break
+          }
+        }
+      if (part !== null) {
+        b.hit.add(boss)
+        fx.burst(b.x, b.y, 5, C.boss, 110)
+        if (part === 'head') {
+          boss.hhp -= b.dmg
+          boss.hhit = 1
+          if (boss.hhp <= 0) defeatBoss()
+        } else {
+          const s = boss.segs[part]
+          s.hp -= b.dmg
+          s.hit = 1
+          if (s.hp <= 0) killBossSeg(part)
+        }
+        if (b.pierce-- <= 0) {
+          if (b.ricochet > 0 && redirectBullet(b)) b.ricochet--
+          else b.life = 0
         }
       }
     }
   }
   bullets = bullets.filter((b) => b.life > 0 && b.x > -40 && b.x < W + 40 && b.y > -40 && b.y < H + 40)
 
+  // 接触膜（aura）：細胞のすぐ近くの敵を溶かし続ける（近接ビルド）
+  if (S.aura > 0) {
+    const auraR = 26 + S.aura * 7
+    const auraDps = 2 + S.aura * 2.5
+    for (const c of cells) {
+      for (const e of enemies) {
+        if (e.hp > 0 && Math.hypot(e.x - c.x, e.y - c.y) < auraR + e.r) {
+          if (time % 0.1 < dt) fx.burst(e.x, e.y, 1, C.cell, 40)
+          damageEnemy(e, auraDps * dt, true)
+        }
+      }
+    }
+  }
+
   // 敵の移動＋コア接触
   for (const e of enemies) {
     e.hit = Math.max(0, e.hit - dt * 4)
     e.wob += dt * 6
+    if (e.slow && e.slow > 0) e.slow -= dt
+    const spd = e.spd * (e.slow && e.slow > 0 ? 0.45 : 1) // 粘性毒で鈍足
     const dx = core.x - e.x
     const dy = core.y - e.y
     const d = Math.hypot(dx, dy) || 1
-    e.x += (dx / d) * e.spd * dt
-    e.y += (dy / d) * e.spd * dt
+    e.x += (dx / d) * spd * dt
+    e.y += (dy / d) * spd * dt
     if (d < core.r + e.r) {
       damageCore(e.kind === 'tank' ? 2 : 1)
       fx.burst(e.x, e.y, 10, C.danger, 160)
@@ -570,7 +663,7 @@ function update(dt: number) {
       const dx = mainCell.x - o.x
       const dy = mainCell.y - o.y
       const d = Math.hypot(dx, dy) || 1
-      if (d < P.magnetR) {
+      if (d < P.magnetR * (1 + S.orbBoost * 0.4)) {
         const pull = 300 * dt
         o.x += (dx / d) * pull
         o.y += (dy / d) * pull
@@ -618,71 +711,144 @@ function nearestTargets(x: number, y: number, range: number, n: number) {
     if (d <= range) cand.push({ x: e.x, y: e.y, d })
   }
   if (boss) {
-    const d = Math.hypot(boss.x - x, boss.y - y)
-    if (d <= range) cand.push({ x: boss.x, y: boss.y, d })
+    const dh = Math.hypot(boss.hx - x, boss.hy - y)
+    if (dh <= range) cand.push({ x: boss.hx, y: boss.hy, d: dh })
+    for (const s of boss.segs) {
+      const d = Math.hypot(s.x - x, s.y - y)
+      if (d <= range) cand.push({ x: s.x, y: s.y, d })
+    }
   }
   cand.sort((a, b) => a.d - b.d)
   return cand.slice(0, n)
 }
 
-function bossSegPoints(b: NonNullable<Boss>) {
-  const pts: { x: number; y: number; r: number }[] = []
-  const segs = Math.max(2, Math.ceil((b.hp / b.maxhp) * 6))
-  for (let i = 1; i <= segs; i++) {
-    const idx = Math.min(b.trail.length - 1, i * 7)
-    const p = b.trail[idx]
-    if (p) pts.push({ x: p.x, y: p.y, r: b.r * (1 - i * 0.07) })
-  }
-  return pts
-}
-
 function updateBoss(dt: number) {
   const b = boss!
-  b.hit = Math.max(0, b.hit - dt * 4)
-  // コアの周りを目指して周回しつつ、たまにミニオンを放つ
-  const targetR = 130
-  const dx = core.x - b.x
-  const dy = core.y - b.y
-  const d = Math.hypot(dx, dy) || 1
-  if (d > targetR + 8) {
-    b.x += (dx / d) * 34 * dt
-    b.y += (dy / d) * 34 * dt
-  } else {
-    b.ang += 0.5 * dt
-    const tx = core.x + Math.cos(b.ang) * targetR
-    const ty = core.y + Math.sin(b.ang) * targetR
-    b.x = approach(b.x, tx, dt, 2)
-    b.y = approach(b.y, ty, dt, 2)
+  b.hhit = Math.max(0, b.hhit - dt * 4)
+  b.coreCd = Math.max(0, b.coreCd - dt)
+  for (const s of b.segs) s.hit = Math.max(0, s.hit - dt * 4)
+  // 蛇の頭：コアへ向かいつつ蛇行（旋回はゆるやかに制限）
+  const desired = Math.atan2(core.y - b.hy, core.x - b.hx)
+  let target = desired + Math.sin(time * 3.2) * 0.55
+  let da = target - b.dir
+  while (da > Math.PI) da -= Math.PI * 2
+  while (da < -Math.PI) da += Math.PI * 2
+  b.dir += clamp(da, -2.4 * dt, 2.4 * dt)
+  const spd = 72 + wave * 2
+  b.hx += Math.cos(b.dir) * spd * dt
+  b.hy += Math.sin(b.dir) * spd * dt
+  // 画面内に保つ（ゆるく反射）
+  const m = 18
+  if (b.hx < m) { b.hx = m; b.dir = Math.PI - b.dir }
+  else if (b.hx > W - m) { b.hx = W - m; b.dir = Math.PI - b.dir }
+  if (b.hy < m) { b.hy = m; b.dir = -b.dir }
+  else if (b.hy > H - m) { b.hy = H - m; b.dir = -b.dir }
+  // 距離サンプルでパスを記録 → 体節をそれに沿わせる（follow-the-leader）
+  const last = b.path[0]
+  if (!last || Math.hypot(b.hx - last.x, b.hy - last.y) >= SEG_GAP) {
+    b.path.unshift({ x: b.hx, y: b.hy })
+    if (b.path.length > b.segs.length + 3) b.path.length = b.segs.length + 3
   }
-  b.trail.unshift({ x: b.x, y: b.y })
-  if (b.trail.length > 60) b.trail.pop()
+  for (let i = 0; i < b.segs.length; i++) {
+    const p = b.path[Math.min(i + 1, b.path.length - 1)]
+    if (p) {
+      b.segs[i].x = approach(b.segs[i].x, p.x, dt, 18)
+      b.segs[i].y = approach(b.segs[i].y, p.y, dt, 18)
+    }
+  }
+  // 頭がコアに接触＝大ダメージ＋弾かれる（即死しない＝蛇らしさ）
+  if (Math.hypot(core.x - b.hx, core.y - b.hy) < core.r + b.hr && b.coreCd <= 0) {
+    damageCore(3)
+    b.coreCd = 0.8
+    b.dir += Math.PI * (0.6 + Math.random() * 0.3)
+    fx.burst(b.hx, b.hy, 12, C.danger, 180)
+  }
+  // ミニオン
   b.minionCool -= dt
   if (b.minionCool <= 0) {
-    b.minionCool = 2.4
-    // ボスからミニオン放出
-    for (let i = 0; i < 2; i++) {
-      const a = Math.random() * Math.PI * 2
-      enemies.push({ x: b.x + Math.cos(a) * 10, y: b.y + Math.sin(a) * 10, vx: 0, vy: 0, r: 11, hp: 3, maxhp: 3, spd: 60, kind: 'virus', wob: Math.random() * 9, hit: 0 })
-    }
+    b.minionCool = 3.4
+    const a = Math.random() * Math.PI * 2
+    enemies.push({ x: b.hx + Math.cos(a) * 10, y: b.hy + Math.sin(a) * 10, vx: 0, vy: 0, r: 11, hp: 3, maxhp: 3, spd: 60, kind: 'virus', wob: Math.random() * 9, hit: 0 })
   }
 }
 
-function killEnemy(e: Enemy) {
-  fx.burst(e.x, e.y, e.kind === 'tank' ? 18 : 10, e.kind === 'tank' ? C.tank : C.virus, 200)
-  shake.add(e.kind === 'tank' ? 4 : 1.5)
-  // コンボ加算（連続撃破で倍率UP）
+function killBossSeg(i: number) {
+  const b = boss!
+  const s = b.segs[i]
+  fx.burst(s.x, s.y, 12, C.boss, 200)
+  for (let k = 0; k < 2; k++) {
+    const a = Math.random() * Math.PI * 2
+    const sp = 40 + Math.random() * 60
+    orbs.push({ x: s.x, y: s.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 7, value: 1 })
+  }
+  shake.add(3)
+  SFX.kill()
   combo++
   comboTimer = P.COMBO_HOLD
-  // 養分オーブを落とす（拾うとスコア＝動いて回収する＝コアを離れるリスク）
-  const n = e.kind === 'tank' ? 3 : 1
+  b.segs.splice(i, 1)
+}
+
+// 弾を最寄りの未命中の敵（無ければボス）へ向け直す＝跳弾
+function redirectBullet(b: Bullet): boolean {
+  let best: { x: number; y: number } | null = null
+  let bd = 260 * 260
+  for (const e of enemies) {
+    if (b.hit.has(e)) continue
+    const dd = (e.x - b.x) ** 2 + (e.y - b.y) ** 2
+    if (dd < bd) { bd = dd; best = e }
+  }
+  if (!best) return false
+  const d = Math.hypot(best.x - b.x, best.y - b.y) || 1
+  const sp = Math.hypot(b.vx, b.vy) || S.bulletSpeed
+  b.vx = ((best.x - b.x) / d) * sp
+  b.vy = ((best.y - b.y) / d) * sp
+  b.pierce = 0
+  b.life = Math.max(b.life, 0.6)
+  return true
+}
+
+// 敵にダメージ（撃破時のコンボ/オーブ/炸裂を集約）。allowExplode=false で連鎖の暴走を防ぐ
+function damageEnemy(e: Enemy, dmg: number, allowExplode: boolean) {
+  if (e.hp <= 0) return
+  e.hp -= dmg
+  e.hit = 1
+  if (e.hp <= 0) killEnemy(e, allowExplode)
+}
+
+function killEnemy(e: Enemy, allowExplode = true) {
+  if (e.hp > 0) e.hp = 0
+  const col = e.kind === 'tank' ? C.tank : e.kind === 'splitter' ? C.split : C.virus
+  fx.burst(e.x, e.y, e.kind === 'tank' ? 18 : 10, col, 200)
+  shake.add(e.kind === 'tank' ? 4 : 1.5)
+  combo++
+  comboTimer = P.COMBO_HOLD
+  // 養分オーブ
+  const n = e.kind === 'tank' ? 3 : e.kind === 'splitter' ? 2 : 1
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2
     const s = 40 + Math.random() * 60
     orbs.push({ x: e.x, y: e.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 7, value: e.kind === 'tank' ? 2 : 1 })
   }
+  // 分裂体：倒すと小型2体に割れる（創発的な事故）
+  if (e.kind === 'splitter' && !e.mini) {
+    for (let i = 0; i < 2; i++) {
+      const a = Math.random() * Math.PI * 2
+      enemies.push({ x: e.x + Math.cos(a) * 10, y: e.y + Math.sin(a) * 10, vx: 0, vy: 0, r: 9, hp: Math.max(1, e.maxhp * 0.3), maxhp: Math.max(1, e.maxhp * 0.3), spd: e.spd * 1.3, kind: 'virus', wob: Math.random() * 9, hit: 0, mini: true })
+    }
+  }
+  // 炸裂：撃破時に周囲へ飛沫ダメージ（連鎖防止に allowExplode を渡す）
+  if (allowExplode && S.explode > 0) {
+    const rad = 34 + S.explode * 16
+    const adm = 1 + S.explode
+    fx.burst(e.x, e.y, 8, C.core, 140)
+    for (const o of enemies) {
+      if (o === e || o.hp <= 0) continue
+      if (Math.hypot(o.x - e.x, o.y - e.y) < rad) damageEnemy(o, adm, false)
+    }
+  }
   if (e.kind === 'tank') {
     SFX.killTank()
-    freezeFrames = 3 // ヒットストップ（重い敵だけ。雑魚は群れるので無し）
+    freezeFrames = 3 // ヒットストップ（重い敵だけ）
   } else {
     SFX.kill()
   }
@@ -690,12 +856,12 @@ function killEnemy(e: Enemy) {
 
 function defeatBoss() {
   const b = boss!
-  for (let i = 0; i < 5; i++) fx.burst(b.x + (Math.random() * 60 - 30), b.y + (Math.random() * 60 - 30), 26, C.boss, 260)
+  for (let i = 0; i < 5; i++) fx.burst(b.hx + (Math.random() * 60 - 30), b.hy + (Math.random() * 60 - 30), 26, C.boss, 260)
   // 養分を大量にばらまく（ごほうび）
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 16; i++) {
     const a = Math.random() * Math.PI * 2
     const s = 60 + Math.random() * 120
-    orbs.push({ x: b.x, y: b.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 9, value: 3 })
+    orbs.push({ x: b.hx, y: b.hy, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 9, value: 3 })
   }
   shake.add(18)
   freezeFrames = 8
@@ -713,7 +879,7 @@ function damageCore(n: number) {
 }
 
 function pickupOrb(o: Orb) {
-  const gain = o.value * comboMult()
+  const gain = Math.round(o.value * comboMult() * (1 + S.orbBoost * 0.5))
   score += gain
   floats.push({ x: o.x, y: o.y - 6, text: '+' + gain, life: 0.8, color: C.core })
   SFX.pickup()
@@ -858,7 +1024,24 @@ function drawCell(c: Cell) {
 
 function drawEnemy(e: Enemy) {
   if (e.kind === 'tank') organism(e.x, e.y, e.r, hexA(C.tank, 0.22), darken(C.tank, 0.7), 0, e.wob, e.hit)
-  else organism(e.x, e.y, e.r, hexA(C.virus, 0.22), darken(C.virus, 0.7), 6, e.wob, e.hit)
+  else if (e.kind === 'splitter') {
+    organism(e.x, e.y, e.r, hexA(C.split, 0.24), darken(C.split, 0.7), 0, e.wob, e.hit)
+    // 分裂を示す割れ目（縦線）
+    ctx.strokeStyle = darken(C.split, 0.7)
+    ctx.lineWidth = 1.6
+    ctx.beginPath()
+    ctx.moveTo(e.x, e.y - e.r * 0.8)
+    ctx.lineTo(e.x, e.y + e.r * 0.8)
+    ctx.stroke()
+  } else organism(e.x, e.y, e.r, hexA(C.virus, 0.22), darken(C.virus, 0.7), 6, e.wob, e.hit)
+  // 減速中はうっすら青いリング
+  if (e.slow && e.slow > 0) {
+    ctx.strokeStyle = 'rgba(80,140,200,0.5)'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r + 3, 0, Math.PI * 2)
+    ctx.stroke()
+  }
   // HPバー（小）
   if (e.hp < e.maxhp) {
     const w = e.r * 2
@@ -871,30 +1054,48 @@ function drawEnemy(e: Enemy) {
 
 function drawBoss() {
   const b = boss!
-  // 胴（trail に沿って）
-  const pts = bossSegPoints(b)
-  for (let i = pts.length - 1; i >= 0; i--) {
-    const p = pts[i]
-    organism(p.x, p.y, p.r, hexA(C.boss, 0.2), darken(C.boss, 0.7), 0, time + i, 0)
+  // 胴を尾→頭の順に重ねて描く（節と節を太い線で繋いで蛇らしく）
+  ctx.strokeStyle = hexA(C.boss, 0.5)
+  for (let i = b.segs.length - 1; i >= 0; i--) {
+    const s = b.segs[i]
+    const prev = i === 0 ? { x: b.hx, y: b.hy } : b.segs[i - 1]
+    ctx.lineWidth = s.r * 1.5
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(s.x, s.y)
+    ctx.lineTo(prev.x, prev.y)
+    ctx.stroke()
   }
-  // 頭
-  organism(b.x, b.y, b.r, hexA(C.boss, 0.28), darken(C.boss, 0.6), 8, time * 1.5, b.hit)
-  ctx.fillStyle = darken(C.boss, 0.6)
-  ctx.beginPath()
-  ctx.arc(b.x, b.y, b.r * 0.3, 0, Math.PI * 2)
-  ctx.fill()
-  // ボスHPバー（スコアの下に置く）
+  for (let i = b.segs.length - 1; i >= 0; i--) {
+    const s = b.segs[i]
+    // ダメージで塗りが薄く（割れそう）
+    const f = 0.12 + 0.16 * (s.hp / s.maxhp)
+    organism(s.x, s.y, s.r, hexA(C.boss, f), darken(C.boss, 0.7), 0, time + i * 0.5, s.hit)
+  }
+  // 頭（棘＋目）
+  organism(b.hx, b.hy, b.hr, hexA(C.boss, 0.32), darken(C.boss, 0.55), 8, time * 1.5, b.hhit)
+  const ex = Math.cos(b.dir) * b.hr * 0.4
+  const ey = Math.sin(b.dir) * b.hr * 0.4
+  const px = Math.cos(b.dir + Math.PI / 2) * b.hr * 0.45
+  const py = Math.sin(b.dir + Math.PI / 2) * b.hr * 0.45
+  ctx.fillStyle = '#fff'
+  for (const sgn of [1, -1]) {
+    ctx.beginPath()
+    ctx.arc(b.hx + ex + px * sgn, b.hy + ey + py * sgn, 2.6, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  // ボスHP（頭）＋残り節数（スコア/コンボ表示の下へ）
   const bw = Math.min(W - 40, 320)
   const bx = W / 2 - bw / 2
-  const by = 60
+  const by = 78
   ctx.fillStyle = hexA(C.ink, 0.12)
   ctx.fillRect(bx, by, bw, 7)
   ctx.fillStyle = C.boss
-  ctx.fillRect(bx, by, bw * clamp(b.hp / b.maxhp, 0, 1), 7)
+  ctx.fillRect(bx, by, bw * clamp(b.hhp / b.hmaxhp, 0, 1), 7)
   ctx.fillStyle = C.muted
   ctx.font = `700 11px ${FONT}`
   ctx.textAlign = 'center'
-  ctx.fillText('変異ボス', W / 2, by - 5)
+  ctx.fillText(`変異ボス  ／  残り節 ${b.segs.length}`, W / 2, by - 5)
 }
 
 function drawBullets() {
@@ -1036,6 +1237,13 @@ function drawEvolve() {
     ctx.fillStyle = C.ink
     ctx.font = `800 17px ${FONT}`
     ctx.fillText(r.e.name, r.x + 18, r.y + 32)
+    // 重ねがけのLv表示（右上）
+    const lv = evoLv[r.e.id] || 0
+    ctx.textAlign = 'right'
+    ctx.fillStyle = lv > 0 ? C.core : hexA(C.muted, 0.8)
+    ctx.font = `800 12px ${FONT}`
+    ctx.fillText(lv > 0 ? `Lv${lv}→${lv + 1}` : 'NEW', r.x + r.w - 16, r.y + 30)
+    ctx.textAlign = 'left'
     ctx.fillStyle = C.muted
     ctx.font = `500 13px ${FONT}`
     ctx.fillText(r.e.desc, r.x + 18, r.y + 56)
@@ -1162,7 +1370,7 @@ function setupShot() {
     const dx = e.x - cells[0].x
     const dy = e.y - cells[0].y
     const d = Math.hypot(dx, dy) || 1
-    bullets.push({ x: lerp(cells[0].x, e.x, 0.4), y: lerp(cells[0].y, e.y, 0.4), vx: (dx / d) * 430, vy: (dy / d) * 430, r: 4.5, dmg: 1, pierce: 0, life: 1, hit: new Set() })
+    bullets.push({ x: lerp(cells[0].x, e.x, 0.4), y: lerp(cells[0].y, e.y, 0.4), vx: (dx / d) * 430, vy: (dy / d) * 430, r: 4.5, dmg: 1, pierce: 0, ricochet: 0, life: 1, hit: new Set() })
   }
   for (let i = 0; i < 30; i++) fx.burst(core.x + (Math.random() * 200 - 100), core.y + (Math.random() * 200 - 100), 1, i % 2 ? C.virus : C.core, 60)
   // 養分オーブをいくつか（新メカを映えフレームでも見せる）
@@ -1181,7 +1389,27 @@ if (SHOT) {
   const wait = () => {
     if (W === 0) return requestAnimationFrame(wait)
     if (SHOT === '1') setupShot()
-    else if (SHOT === 'title') {
+    else if (SHOT === 'boss') {
+      reset()
+      mode = 'play'
+      wave = TOTAL_WAVES
+      addColony(4)
+      cells.forEach((c, i) => {
+        if (c.main) { c.x = core.x; c.y = core.y + 120 }
+        else { c.ang = (i / cells.length) * Math.PI * 2; c.x = core.x + Math.cos(c.ang) * 70; c.y = core.y + Math.sin(c.ang) * 70 }
+        c.pop = 1
+      })
+      spawnBoss()
+      // 蛇を伸ばす：頭をずらして体節を並べる
+      const b = boss!
+      b.hx = core.x - 120; b.hy = core.y - 150; b.dir = 0.5
+      b.path = []
+      for (let i = 0; i < b.segs.length + 3; i++) b.path.push({ x: b.hx - Math.cos(0.5) * i * SEG_GAP, y: b.hy - Math.sin(0.5) * i * SEG_GAP })
+      b.segs.forEach((s, i) => { const p = b.path[i + 1]; s.x = p.x; s.y = p.y })
+      score = 980
+      combo = 6
+      comboTimer = P.COMBO_HOLD
+    } else if (SHOT === 'title') {
       titleScale = 1
       time = 1
     }

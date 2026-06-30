@@ -168,9 +168,7 @@ function mountUI(
   }
 
   // 操作
-  let open = false
   const setOpen = (o: boolean) => {
-    open = o
     drawer.style.transform = o ? 'translateX(0)' : 'translateX(102%)'
     btn.style.opacity = o ? '0' : '1'
   }
