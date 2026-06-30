@@ -193,6 +193,8 @@ type Boss = {
   hmaxhp: number
   hhit: number
   dir: number // 進行方向
+  theta: number // 螺旋の角度
+  rad: number // 螺旋の半径（少しずつ縮む）
   segs: BossSeg[]
   path: { x: number; y: number }[] // 距離サンプルした頭の軌跡
   minionCool: number
@@ -370,15 +372,16 @@ function spawnEnemy() {
 
 function spawnBoss() {
   const a = Math.random() * Math.PI * 2
-  const rad = Math.max(W, H) * 0.6
+  // シャーレの外周付近から螺旋スタート
+  const rad = Math.min(W, H) * 0.42
   const hx = core.x + Math.cos(a) * rad
   const hy = core.y + Math.sin(a) * rad
-  // コロニー規模で長さ・硬さをスケール（毎回ボリュームが変わる）
-  const count = clamp(8 + Math.floor(cells.length * 0.8), 8, 16)
-  const segHp = Math.max(4, Math.round((5 + S.damage * 1.4) * P.bossHpMul))
+  // コロニー規模で長さ・硬さをスケール（節を多めに＝長い蛇）
+  const count = clamp(16 + Math.floor(cells.length * 1.0), 16, 28)
+  const segHp = Math.max(3, Math.round((4 + S.damage * 1.2) * P.bossHpMul))
   const segs: BossSeg[] = []
   for (let i = 0; i < count; i++) {
-    const r = Math.max(8, 15 - i * 0.35)
+    const r = Math.max(7, 16 - i * 0.28)
     segs.push({ x: hx, y: hy, hp: segHp, maxhp: segHp, r, hit: 0 })
   }
   const hhp = Math.round((36 + cells.length * 6) * P.bossHpMul)
@@ -389,7 +392,9 @@ function spawnBoss() {
     hhp,
     hmaxhp: hhp,
     hhit: 0,
-    dir: Math.atan2(core.y - hy, core.x - hx),
+    dir: a + Math.PI / 2,
+    theta: a,
+    rad,
     segs,
     path: [{ x: hx, y: hy }],
     minionCool: 3,
@@ -727,22 +732,17 @@ function updateBoss(dt: number) {
   b.hhit = Math.max(0, b.hhit - dt * 4)
   b.coreCd = Math.max(0, b.coreCd - dt)
   for (const s of b.segs) s.hit = Math.max(0, s.hit - dt * 4)
-  // 蛇の頭：コアへ向かいつつ蛇行（旋回はゆるやかに制限）
-  const desired = Math.atan2(core.y - b.hy, core.x - b.hx)
-  let target = desired + Math.sin(time * 3.2) * 0.55
-  let da = target - b.dir
-  while (da > Math.PI) da -= Math.PI * 2
-  while (da < -Math.PI) da += Math.PI * 2
-  b.dir += clamp(da, -2.4 * dt, 2.4 * dt)
-  const spd = 72 + wave * 2
-  b.hx += Math.cos(b.dir) * spd * dt
-  b.hy += Math.sin(b.dir) * spd * dt
-  // 画面内に保つ（ゆるく反射）
-  const m = 18
-  if (b.hx < m) { b.hx = m; b.dir = Math.PI - b.dir }
-  else if (b.hx > W - m) { b.hx = W - m; b.dir = Math.PI - b.dir }
-  if (b.hy < m) { b.hy = m; b.dir = -b.dir }
-  else if (b.hy > H - m) { b.hy = H - m; b.dir = -b.dir }
+  // 螺旋：コアの周りを回りながら半径を少しずつ縮め、じわじわ包囲して詰める
+  const angSpeed = 0.55 + wave * 0.01 // 周回の速さ
+  const shrink = 6.5 // 半径の縮み(px/s)＝接近の遅さ＝"じわじわ"
+  b.theta += angSpeed * dt
+  b.rad = Math.max(core.r + 18, b.rad - shrink * dt)
+  const rr = b.rad + Math.sin(time * 1.8) * 7 // 呼吸するように半径を微揺らし
+  const tx = core.x + Math.cos(b.theta) * rr
+  const ty = core.y + Math.sin(b.theta) * rr
+  b.hx = approach(b.hx, tx, dt, 6)
+  b.hy = approach(b.hy, ty, dt, 6)
+  b.dir = b.theta + Math.PI / 2 // 進行方向（接線）＝目の向き
   // 距離サンプルでパスを記録 → 体節をそれに沿わせる（follow-the-leader）
   const last = b.path[0]
   if (!last || Math.hypot(b.hx - last.x, b.hy - last.y) >= SEG_GAP) {
@@ -756,11 +756,11 @@ function updateBoss(dt: number) {
       b.segs[i].y = approach(b.segs[i].y, p.y, dt, 18)
     }
   }
-  // 頭がコアに接触＝大ダメージ＋弾かれる（即死しない＝蛇らしさ）
+  // 頭がコアに接触＝大ダメージ＋螺旋を外側へ弾く（即死しない＝蛇らしさ）
   if (Math.hypot(core.x - b.hx, core.y - b.hy) < core.r + b.hr && b.coreCd <= 0) {
     damageCore(3)
-    b.coreCd = 0.8
-    b.dir += Math.PI * (0.6 + Math.random() * 0.3)
+    b.coreCd = 0.9
+    b.rad = Math.min(Math.min(W, H) * 0.4, b.rad + 80) // 反動で外周へ戻る
     fx.burst(b.hx, b.hy, 12, C.danger, 180)
   }
   // ミニオン
