@@ -31,7 +31,7 @@ const P = tune.panel('petri', {
   spawnCountMul: { v: 1, min: 0.3, max: 2.5, step: 0.1, group: '敵(再開で反映)', label: '出現数倍率', desc: '1.0が基準。各ウェーブの敵の数を増減。' },
   coreMaxHp: { v: 10, min: 4, max: 30, step: 1, group: '敵(再開で反映)', label: 'コア最大HP', desc: '守るコアの耐久。敵が触れると減り、0で負け。' },
   bossHpMul: { v: 1, min: 0.3, max: 3, step: 0.1, group: '敵(再開で反映)', label: 'ボスHP倍率', desc: '1.0が基準。ボスの硬さ＝戦いの長さ。' },
-})
+}, { version: 2 }) // v2：最高速の意味を変更（200基準→100基準＋進化）。旧保存を破棄
 mountMuteButton()
 
 // ── 顕微鏡スライドの配色（ラボ・スキンの寒天タイント版） ──
@@ -399,7 +399,7 @@ function spawnEnemy() {
   const elite = wave >= 4 && Math.random() < 0.06
   const tank = !elite && wave >= 2 && roll < 0.1 + (wave - 2) * 0.03
   const darter = !elite && !tank && wave >= 4 && roll > 0.58 && roll < 0.72
-  const spitter = !elite && !tank && !darter && wave >= 5 && roll > 0.72 && roll < 0.82
+  const spitter = !elite && !tank && !darter && wave >= 6 && roll > 0.74 && roll < 0.8 // 少なめ
   const splitter = !elite && !tank && !darter && !spitter && wave >= 3 && roll > 0.82
   const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul
   const tspd = (24 + wave * 2) * P.enemySpdMul
@@ -407,10 +407,10 @@ function spawnEnemy() {
   let e: Enemy
   if (elite) {
     const hp = hpBase * 5.5
-    e = { x, y, vx: 0, vy: 0, r: 25, hp, maxhp: hp, spd: vspd * 0.6, kind: 'tank', wob: Math.random() * 9, hit: 0, elite: true }
+    e = { x, y, vx: 0, vy: 0, r: 25, hp, maxhp: hp, spd: vspd * 0.55, kind: 'tank', wob: Math.random() * 9, hit: 0, elite: true, fire: 2.4 }
   } else if (tank) e = { x, y, vx: 0, vy: 0, r: 19, hp: hpBase * 2.4, maxhp: hpBase * 2.4, spd: tspd, kind: 'tank', wob: Math.random() * 9, hit: 0 }
   else if (darter) e = { x, y, vx: 0, vy: 0, r: 10, hp: hpBase * 0.8, maxhp: hpBase * 0.8, spd: vspd * 1.7, kind: 'darter', wob: Math.random() * 9, hit: 0 }
-  else if (spitter) e = { x, y, vx: 0, vy: 0, r: 14, hp: hpBase * 1.3, maxhp: hpBase * 1.3, spd: vspd * 0.7, kind: 'spitter', wob: Math.random() * 9, hit: 0, fire: 1.5 }
+  else if (spitter) e = { x, y, vx: 0, vy: 0, r: 14, hp: hpBase * 1.3, maxhp: hpBase * 1.3, spd: vspd * 0.7, kind: 'spitter', wob: Math.random() * 9, hit: 0, fire: 2.0 }
   else if (splitter) e = { x, y, vx: 0, vy: 0, r: 15, hp: hpBase * 1.5, maxhp: hpBase * 1.5, spd: vspd * 0.8, kind: 'splitter', wob: Math.random() * 9, hit: 0 }
   else e = { x, y, vx: 0, vy: 0, r: 12, hp: hpBase, maxhp: hpBase, spd: vspd, kind: 'virus', wob: Math.random() * 9, hit: 0 }
   enemies.push(e)
@@ -707,6 +707,20 @@ function update(dt: number) {
     const d = Math.hypot(dx, dy) || 1
     const ux = dx / d
     const uy = dy / d
+    // エリート＝母体：定期的にミニオンを産む（役割を持たせる）
+    if (e.elite) {
+      e.fire = (e.fire ?? 2.4) - dt
+      if (e.fire <= 0) {
+        e.fire = 3.0
+        fx.burst(e.x, e.y, 10, C.danger, 120) // 産卵の予兆
+        const mhp = Math.max(1, (1.0 + (wave - 1) * 0.6) * P.enemyHpMul)
+        const msp = (40 + (wave - 1) * 5) * P.enemySpdMul
+        for (let i = 0; i < 2; i++) {
+          const a = Math.random() * Math.PI * 2
+          enemies.push({ x: e.x + Math.cos(a) * (e.r + 6), y: e.y + Math.sin(a) * (e.r + 6), vx: 0, vy: 0, r: 9, hp: mhp, maxhp: mhp, spd: msp, kind: 'virus', wob: Math.random() * 9, hit: 0, mini: true })
+        }
+      }
+    }
     if (e.kind === 'darter') {
       // ジグザグに蛇行しながら接近
       const px = -uy
@@ -720,11 +734,11 @@ function update(dt: number) {
         e.x += ux * spd * dt
         e.y += uy * spd * dt
       }
-      e.fire = (e.fire ?? 1.5) - dt
+      e.fire = (e.fire ?? 2.0) - dt
       if (e.fire <= 0) {
-        e.fire = 2.2
-        const ss = 150
-        eshots.push({ x: e.x, y: e.y, vx: ux * ss, vy: uy * ss, life: 4 })
+        e.fire = 3.4 // 連射を控えめに（弱体化）
+        const ss = 110 // 遅い弾＝避けやすい
+        eshots.push({ x: e.x, y: e.y, vx: ux * ss, vy: uy * ss, life: 5 })
         SFX.spit()
       }
     } else {
@@ -942,6 +956,13 @@ function killEnemy(e: Enemy, allowExplode = true) {
     for (let k = 0; k < 5; k++) fx.burst(e.x, e.y, 8, C.amber, 220)
     shake.add(8)
     freezeFrames = 5
+    // 死亡時バースト：幼体を撒く（倒し切る判断＝リスク&リターン）
+    const mhp = Math.max(1, (1.0 + (wave - 1) * 0.6) * P.enemyHpMul)
+    const msp = (40 + (wave - 1) * 5) * P.enemySpdMul
+    for (let k = 0; k < 4; k++) {
+      const a = Math.random() * Math.PI * 2
+      enemies.push({ x: e.x + Math.cos(a) * 14, y: e.y + Math.sin(a) * 14, vx: 0, vy: 0, r: 9, hp: mhp, maxhp: mhp, spd: msp, kind: 'virus', wob: Math.random() * 9, hit: 0, mini: true })
+    }
   }
   // 分裂体：倒すと小型2体に割れる（創発的な事故）
   if (e.kind === 'splitter' && !e.mini) {

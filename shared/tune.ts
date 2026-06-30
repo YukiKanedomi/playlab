@@ -24,8 +24,10 @@ export function onPanelToggle(cb: (o: boolean) => void): void {
   openCbs.push(cb)
 }
 
-export function panel<T extends Schema>(gameId: string, schema: T): { [K in keyof T]: T[K]['v'] } {
+// opts.version：スキーマの意味を変えた時に上げると、古い保存値を破棄して既定に戻す
+export function panel<T extends Schema>(gameId: string, schema: T, opts?: { version?: number }): { [K in keyof T]: T[K]['v'] } {
   const KEY = `playlab.tune.${gameId}`
+  const version = opts?.version ?? 0
   const shot = new URLSearchParams(location.search).get('shot')
 
   // 保存済みの上書き（変更分のみ）を読む。shot（サムネ撮影）時は既定のまま＝UIも出さない
@@ -33,6 +35,7 @@ export function panel<T extends Schema>(gameId: string, schema: T): { [K in keyo
   if (!shot) {
     try {
       saved = JSON.parse(localStorage.getItem(KEY) || '{}')
+      if ((saved as any).__v !== version) saved = {} // バージョン不一致＝旧設定を破棄
     } catch {}
   }
 
@@ -50,7 +53,7 @@ export function panel<T extends Schema>(gameId: string, schema: T): { [K in keyo
   }
   const persist = () => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(diff()))
+      localStorage.setItem(KEY, JSON.stringify({ ...diff(), __v: version }))
     } catch {}
   }
 
