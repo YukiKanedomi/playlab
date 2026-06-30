@@ -64,6 +64,30 @@ body {
 .tagline { margin: 16px 0 4px; font-size: clamp(15px, 4vw, 19px); font-weight: 600; overflow-wrap: anywhere; }
 .sub { margin: 0; max-width: 56ch; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 
+/* Codex への導線（ノートのタブのような佇まい） */
+.codex-link {
+  display: inline-flex; align-items: center; gap: 10px; margin-top: 18px;
+  text-decoration: none; color: var(--ink);
+  background: rgba(255, 255, 255, 0.6); border: 1px solid var(--line); border-left: 3px solid var(--amber);
+  padding: 9px 14px; transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.codex-link:hover, .codex-link:focus-visible {
+  transform: translateY(-2px); background: rgba(255, 255, 255, 0.9);
+  box-shadow: 4px 6px 0 rgba(24, 23, 19, 0.08); outline: none;
+}
+.codex-link .cl-tx { font-size: 13.5px; }
+.codex-link .cl-tx b { color: var(--amber); letter-spacing: 0.02em; }
+.codex-link .cl-arrow { color: var(--muted); font-weight: 700; }
+.codex-link .cl-ico {
+  width: 16px; height: 16px; flex: none; border: 2px solid var(--amber); border-radius: 50%;
+  position: relative;
+}
+.codex-link .cl-ico::after {
+  content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--amber);
+  animation: cl-pulse 2s ease-in-out infinite;
+}
+@keyframes cl-pulse { 0%, 100% { transform: scale(0.5); opacity: 0.5; } 50% { transform: scale(1); opacity: 1; } }
+
 /* ── 棚（作品一覧） ── */
 .shelf {
   display: grid;

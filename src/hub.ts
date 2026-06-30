@@ -6,6 +6,10 @@ const countEl = document.getElementById('count')!
 
 enterTransition()
 
+// Codex への導線（ページめくり遷移）
+const codexLink = document.getElementById('codexLink') as HTMLAnchorElement | null
+if (codexLink) wireLink(codexLink)
+
 function card(g: GameEntry): HTMLAnchorElement {
   const a = document.createElement('a')
   a.className = 'card' + (g.status === 'featured' ? ' is-featured' : '')

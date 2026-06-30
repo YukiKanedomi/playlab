@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         // ハブ + 各ゲームをマルチページで一括ビルド。新作はここに1行足す。
         hub: resolve(__dirname, 'index.html'),
+        codex: resolve(__dirname, 'codex/index.html'),
         trail: resolve(__dirname, 'games/trail/index.html'),
         dj: resolve(__dirname, 'games/dj/index.html'),
         petri: resolve(__dirname, 'games/petri/index.html'),
