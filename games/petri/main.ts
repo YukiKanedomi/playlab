@@ -198,7 +198,7 @@ type Bullet = { x: number; y: number; vx: number; vy: number; r: number; dmg: nu
 type EShot = { x: number; y: number; vx: number; vy: number; life: number } // 敵の弾（spitter）
 type Orb = { x: number; y: number; vx: number; vy: number; life: number; value: number; chest?: boolean }
 type FloatText = { x: number; y: number; text: string; life: number; color: string; small?: boolean }
-type Cell = { x: number; y: number; ang: number; cool: number; main: boolean; pop: number }
+type Cell = { x: number; y: number; ang: number; cool: number; main: boolean; pop: number; turret?: boolean }
 // 蛇ボス：頭＋連なる体節（各節に個別HP・撃つと千切れて短くなる）
 type BossSeg = { x: number; y: number; hp: number; maxhp: number; r: number; hit: number }
 type Boss = {
@@ -236,9 +236,29 @@ type Stats = {
   overdrive: number // 暴走Lv（コンボで連射UP）
   orbBoost: number // 高栄養Lv（養分の価値・吸着UP）
   moveBonus: number // 運動性（移動速度+）
+  // 進化合成（エボリューション）で立つフラグ
+  radial: number // 全方位放射
+  heavy: number // 重砲（特大貫通＋ノックバック）
+  meltfield: number // 溶解フィールド（接触膜の進化）
+  hive: number // 群体砲（仲間の増し撃ち）
 }
-type Evo = { id: string; name: string; desc: string; max?: number; apply: () => void }
+type Evo = { id: string; name: string; desc: string; max?: number; apply: () => void; evo?: boolean }
 const evoLv: Record<string, number> = {} // 取得Lv（重ねがけ）
+
+// 進化合成（VS式エボリューション）：前提の進化Lvを満たすと“上位形態”が選べる
+function availableEvolutions(): Evo[] {
+  const lv = (id: string) => evoLv[id] || 0
+  const out: Evo[] = []
+  if (!evolved.has('radial') && lv('rate') >= 3 && lv('spread') >= 2)
+    out.push({ id: 'radial', evo: true, name: '★全方位放射', desc: '全方向へ撃ち続ける（連射×多核化の融合）', apply: () => (S.radial = 1) })
+  if (!evolved.has('heavy') && lv('dmg') >= 3 && lv('speed') >= 2)
+    out.push({ id: 'heavy', evo: true, name: '★重砲', desc: '特大の貫通弾＋強ノックバック（威力×弾速の融合）', apply: () => (S.heavy = 1) })
+  if (!evolved.has('hive') && lv('split') >= 3)
+    out.push({ id: 'hive', evo: true, name: '★群体砲', desc: '仲間が増し撃ち＆高速化（分裂の極み）', apply: () => (S.hive = 1) })
+  if (!evolved.has('melt') && lv('aura') >= 3)
+    out.push({ id: 'melt', evo: true, name: '★溶解フィールド', desc: '接触膜が拡大し敵を鈍足化（接触膜の極み）', apply: () => (S.meltfield = 1) })
+  return out
+}
 function evoPool(): Evo[] {
   return [
     // 基本強化（重ねがけ可）
@@ -246,6 +266,7 @@ function evoPool(): Evo[] {
     { id: 'dmg', name: '溶解力', desc: '一発の威力 +1', apply: () => (S.damage += 1) },
     { id: 'range', name: '走化性', desc: '射程が伸びる', apply: () => (S.range += 50) },
     { id: 'split', name: '分裂', desc: '仲間が1体増える', max: 6, apply: () => addColony(1) },
+    { id: 'turret', name: '定着（タレット）', desc: '今いる位置に動かない砲台を設置', max: 6, apply: () => placeTurret() },
     { id: 'move', name: '運動性', desc: '移動速度 +50', max: 6, apply: () => (S.moveBonus += 50) },
     { id: 'spread', name: '多核化', desc: '同時に狙う数 +1', max: 5, apply: () => (S.multishot += 1) },
     { id: 'pierce', name: '貫通', desc: '弾が敵を1体多く貫く', max: 5, apply: () => (S.pierce += 1) },
@@ -288,7 +309,8 @@ let banner = ''
 let bannerT = 0
 function showBanner(t: string) { banner = t; bannerT = 1.9 }
 
-const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1, ricochet: 0, explode: 0, slow: 0, knock: 0, aura: 0, overdrive: 0, orbBoost: 0, moveBonus: 0 }
+const S: Stats = { fireInterval: 0.62, damage: 1, range: 200, multishot: 1, pierce: 0, bulletSpeed: 430, orbitSpeed: 1.1, ricochet: 0, explode: 0, slow: 0, knock: 0, aura: 0, overdrive: 0, orbBoost: 0, moveBonus: 0, radial: 0, heavy: 0, meltfield: 0, hive: 0 }
+const evolved = new Set<string>() // 取得済みのエボリューション
 let eshots: EShot[] = [] // 敵の弾
 let levelFlash = 0 // レベルアップ演出
 const core = { x: 0, y: 0, r: 30, hp: 10, maxhp: 10, pulse: 0, hitFlash: 0 }
@@ -334,6 +356,11 @@ function reset() {
   S.overdrive = 0
   S.orbBoost = 0
   S.moveBonus = 0
+  S.radial = 0
+  S.heavy = 0
+  S.meltfield = 0
+  S.hive = 0
+  evolved.clear()
   eshots = []
   levelFlash = 0
   for (const k in evoLv) delete evoLv[k]
@@ -373,6 +400,15 @@ function addColony(n: number) {
   }
 }
 
+// タレット設置：自機の今いる位置に動かない砲台を置く（タワー要素）
+function placeTurret() {
+  const m = cells.find((c) => c.main)
+  const x = m ? m.x : core.x
+  const y = m ? m.y : core.y + 40
+  cells.push({ x, y, ang: 0, cool: Math.random() * 0.2, main: false, pop: 0, turret: true })
+  fx.burst(x, y, 14, C.amber, 200)
+}
+
 // ── ウェーブ ──
 function startWave(n: number) {
   wave = n
@@ -382,9 +418,9 @@ function startWave(n: number) {
     return
   }
   showBanner('WAVE ' + n)
-  // のこぎり波：Wave1 は少なく・ゆっくり（チュートリアル）→ 徐々に増やす
-  spawnQueue = Math.round((3 + n * 2) * P.spawnCountMul) // w1=5, w2=7, w3=9...（×倍率）
-  spawnGap = Math.max(0.32, 1.05 - (n - 1) * 0.07) // 後半ほど詰まる
+  // のこぎり波：序盤ゆるく→後半は数も加速度的に増やす（インフレ）
+  spawnQueue = Math.round((3 + n * 2 + Math.max(0, n - 6) * 1.5) * P.spawnCountMul)
+  spawnGap = Math.max(0.22, 1.05 - (n - 1) * 0.07)
   spawnTimer = 0.5
 }
 
@@ -396,14 +432,15 @@ function spawnEnemy() {
   const y = core.y + Math.sin(a) * rad
   // 敵を多彩に・1種ずつ導入：タンク2〜/分裂3〜/ダーター4〜/エリート4〜/射撃5〜
   const roll = Math.random()
-  const elite = wave >= 4 && Math.random() < 0.06
+  const elite = wave >= 4 && Math.random() < Math.min(0.18, 0.06 + (wave - 4) * 0.008) // 後半ほど増える
   const tank = !elite && wave >= 2 && roll < 0.1 + (wave - 2) * 0.03
   const darter = !elite && !tank && wave >= 4 && roll > 0.58 && roll < 0.72
   const spitter = !elite && !tank && !darter && wave >= 6 && roll > 0.74 && roll < 0.8 // 少なめ
   const splitter = !elite && !tank && !darter && !spitter && wave >= 3 && roll > 0.82
-  const hpBase = (1.5 + (wave - 1) * 1.0) * P.enemyHpMul
-  const tspd = (24 + wave * 2) * P.enemySpdMul
-  const vspd = (34 + (wave - 1) * 6) * P.enemySpdMul
+  // HPは後半に二次関数で加速（インフレ）。速度は上限を設けて理不尽回避
+  const hpBase = (1.5 + (wave - 1) * 1.0 + wave * wave * 0.05) * P.enemyHpMul
+  const tspd = Math.min(150, 24 + wave * 2) * P.enemySpdMul
+  const vspd = Math.min(170, 34 + (wave - 1) * 6) * P.enemySpdMul
   let e: Enemy
   if (elite) {
     const hp = hpBase * 5.5
@@ -423,14 +460,14 @@ function spawnBoss() {
   const hx = core.x + Math.cos(a) * rad
   const hy = core.y + Math.sin(a) * rad
   // コロニー規模で長さ・硬さをスケール（節を多めに＝長い蛇）
-  const count = clamp(16 + Math.floor(cells.length * 1.0), 16, 28)
-  const segHp = Math.max(3, Math.round((4 + S.damage * 1.2) * P.bossHpMul))
+  const count = clamp(16 + Math.floor(cells.length * 1.0) + Math.floor(wave / 3), 16, 34)
+  const segHp = Math.max(3, Math.round((4 + S.damage * 1.2 + wave * 0.7) * P.bossHpMul))
   const segs: BossSeg[] = []
   for (let i = 0; i < count; i++) {
     const r = Math.max(7, 16 - i * 0.28)
     segs.push({ x: hx, y: hy, hp: segHp, maxhp: segHp, r, hit: 0 })
   }
-  const hhp = Math.round((36 + cells.length * 6) * P.bossHpMul)
+  const hhp = Math.round((36 + cells.length * 6 + wave * 5) * P.bossHpMul)
   boss = {
     hx,
     hy,
@@ -468,10 +505,13 @@ canvas.addEventListener('pointerdown', () => {
 function showEvolve() {
   mode = 'evolve'
   evoScale = 0
-  // 上限に達した進化は除外して3つ抽出
-  const pool = evoPool().filter((e) => !e.max || (evoLv[e.id] || 0) < e.max)
   evoChoices = []
-  for (let i = 0; i < 3 && pool.length; i++) {
+  // 進化合成が可能なら、最優先で1枠（金色カード）に出す
+  const evos = availableEvolutions()
+  if (evos.length) evoChoices.push(evos[(Math.random() * evos.length) | 0])
+  // 残り枠を通常進化で（上限到達は除外）
+  const pool = evoPool().filter((e) => !e.max || (evoLv[e.id] || 0) < e.max)
+  while (evoChoices.length < 3 && pool.length) {
     const k = (Math.random() * pool.length) | 0
     evoChoices.push(pool[k])
     pool.splice(k, 1)
@@ -491,12 +531,19 @@ function pickEvolveAt(px: number, py: number) {
   for (const r of evoRects()) {
     if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) {
       r.e.apply()
-      evoLv[r.e.id] = (evoLv[r.e.id] || 0) + 1 // 重ねがけのLv記録
-      fx.burst(core.x, core.y, 22, C.core, 220)
-      shake.add(6)
+      if (r.e.evo) {
+        evolved.add(r.e.id) // エボリューションは一度きり
+        fx.burst(core.x, core.y, 40, C.amber, 320)
+        shake.add(12)
+        levelFlash = 1
+      } else {
+        evoLv[r.e.id] = (evoLv[r.e.id] || 0) + 1 // 重ねがけのLv記録
+        fx.burst(core.x, core.y, 22, C.core, 220)
+        shake.add(6)
+      }
       core.pulse = 1
       SFX.evolve()
-      if (r.e.id === 'split') SFX.split()
+      if (r.e.id === 'split' || r.e.id === 'turret') SFX.split()
       pendingLevels = Math.max(0, pendingLevels - 1)
       if (pendingLevels > 0) showEvolve() // まだ昇格分が残っていれば続けて選ぶ
       else mode = 'play'
@@ -578,7 +625,9 @@ function update(dt: number) {
   // 撃ち手の移動
   cells.forEach((c, i) => {
     c.pop = approach(c.pop, 1, dt, 6)
-    if (c.main) {
+    if (c.turret) {
+      // タレット＝設置物。動かない
+    } else if (c.main) {
       c.x = clamp(c.x + velX * dt, 12, W - 12)
       c.y = clamp(c.y + velY * dt, 12, H - 12)
     } else {
@@ -591,29 +640,34 @@ function update(dt: number) {
     // 自動射撃
     c.cool -= dt
     if (c.cool <= 0) {
-      const targets = nearestTargets(c.x, c.y, S.range, S.multishot)
-      if (targets.length) {
-        for (const t of targets) {
-          const dx = t.x - c.x
-          const dy = t.y - c.y
-          const d = Math.hypot(dx, dy) || 1
-          bullets.push({
-            x: c.x,
-            y: c.y,
-            vx: (dx / d) * S.bulletSpeed,
-            vy: (dy / d) * S.bulletSpeed,
-            r: 4.5,
-            dmg: S.damage,
-            pierce: S.pierce,
-            ricochet: S.ricochet,
-            life: 1.6,
-            hit: new Set(),
-          })
+      const hasTarget = enemies.length > 0 || !!boss
+      let fired = false
+      if (S.radial && hasTarget) {
+        // 全方位放射：ターゲット不要で全方向へ
+        const n = 5 + S.multishot
+        for (let k = 0; k < n; k++) {
+          const a = (k / n) * Math.PI * 2 + time * 0.6
+          mkBullet(c.x, c.y, Math.cos(a) * S.bulletSpeed, Math.sin(a) * S.bulletSpeed)
         }
-        // 暴走：コンボが高いほど連射が速くなる
+        fired = true
+      } else {
+        const ms = S.multishot + (S.hive && !c.main ? 1 : 0) // 群体砲：仲間は増し撃ち
+        const targets = nearestTargets(c.x, c.y, S.range, ms)
+        if (targets.length) {
+          for (const t of targets) {
+            const dx = t.x - c.x
+            const dy = t.y - c.y
+            const d = Math.hypot(dx, dy) || 1
+            mkBullet(c.x, c.y, (dx / d) * S.bulletSpeed, (dy / d) * S.bulletSpeed)
+          }
+          fired = true
+        }
+      }
+      if (fired) {
         const od = S.overdrive > 0 ? clamp(1 - combo * 0.015 * S.overdrive, 0.45, 1) : 1
-        c.cool = S.fireInterval * od
-        if (c.main) SFX.shoot() // メインのみ・throttle済み（機関銃ノイズ回避）
+        const hive = S.hive && !c.main ? 0.8 : 1 // 群体砲：仲間は高速化
+        c.cool = S.fireInterval * od * hive
+        if (c.main) SFX.shoot()
       } else {
         c.cool = 0.08 // 的が無ければ素早く再走査
       }
@@ -631,12 +685,13 @@ function update(dt: number) {
       if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + b.r) {
         b.hit.add(e)
         fx.burst(b.x, b.y, 4, C.enzyme, 90)
-        // 粘性毒（減速）／衝角（ノックバック）
+        // 粘性毒（減速）／衝角（ノックバック）。重砲は標準でノックバック
         if (S.slow > 0) e.slow = 0.6 + S.slow * 0.4
-        if (S.knock > 0) {
+        if (S.knock > 0 || S.heavy) {
           const d = Math.hypot(b.vx, b.vy) || 1
-          e.x += (b.vx / d) * S.knock * 9
-          e.y += (b.vy / d) * S.knock * 9
+          const kb = S.knock * 9 + (S.heavy ? 16 : 0)
+          e.x += (b.vx / d) * kb
+          e.y += (b.vy / d) * kb
         }
         damageEnemy(e, b.dmg, true, true)
         // 貫通を消費。尽きたら跳弾 or 消滅
@@ -681,14 +736,15 @@ function update(dt: number) {
   }
   bullets = bullets.filter((b) => b.life > 0 && b.x > -40 && b.x < W + 40 && b.y > -40 && b.y < H + 40)
 
-  // 接触膜（aura）：細胞のすぐ近くの敵を溶かし続ける（近接ビルド）
+  // 接触膜（aura）：細胞のすぐ近くの敵を溶かし続ける（近接ビルド）。溶解フィールドで拡大＋鈍足
   if (S.aura > 0) {
-    const auraR = 26 + S.aura * 7
-    const auraDps = 2 + S.aura * 2.5
+    const auraR = (26 + S.aura * 7) * (S.meltfield ? 1.8 : 1)
+    const auraDps = (2 + S.aura * 2.5) * (S.meltfield ? 1.8 : 1)
     for (const c of cells) {
       for (const e of enemies) {
         if (e.hp > 0 && Math.hypot(e.x - c.x, e.y - c.y) < auraR + e.r) {
           if (time % 0.1 < dt) fx.burst(e.x, e.y, 1, C.cell, 40)
+          if (S.meltfield) e.slow = 0.4
           damageEnemy(e, auraDps * dt, true)
         }
       }
@@ -825,6 +881,22 @@ function update(dt: number) {
   if (bannerT > 0) bannerT -= dt
 
   if (core.hp <= 0) endRun()
+}
+
+// 弾を生成（重砲エボリューションで特大・貫通・高威力に）
+function mkBullet(x: number, y: number, vx: number, vy: number) {
+  bullets.push({
+    x,
+    y,
+    vx,
+    vy,
+    r: S.heavy ? 7.5 : 4.5,
+    dmg: S.heavy ? S.damage * 2 : S.damage,
+    pierce: S.pierce + (S.heavy ? 3 : 0),
+    ricochet: S.ricochet,
+    life: 1.6,
+    hit: new Set(),
+  })
 }
 
 function nearestTargets(x: number, y: number, range: number, n: number) {
@@ -1149,6 +1221,32 @@ function drawCore() {
 
 function drawCell(c: Cell) {
   const s = easeOutBack(clamp(c.pop, 0, 1))
+  if (c.turret) {
+    // タレット＝設置砲台。六角の台座＋琥珀で“構造物”らしく
+    const rr = 13 * s
+    ctx.save()
+    ctx.translate(c.x, c.y)
+    ctx.rotate(time * 0.4)
+    ctx.fillStyle = hexA(C.amber, 0.18)
+    ctx.strokeStyle = darken(C.amber, 0.7)
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    for (let i = 0; i <= 6; i++) {
+      const a = (i / 6) * Math.PI * 2
+      const px = Math.cos(a) * rr
+      const py = Math.sin(a) * rr
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)
+    }
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+    ctx.fillStyle = C.amber
+    ctx.beginPath()
+    ctx.arc(c.x, c.y, rr * 0.36, 0, Math.PI * 2)
+    ctx.fill()
+    return
+  }
   const r = (c.main ? 16 : 11) * s
   const fill = c.main ? C.player : C.cell
   const edge = c.main ? C.playerDeep : C.cellDeep
@@ -1484,26 +1582,41 @@ function drawEvolve() {
   ctx.fillText('進化を選ぶ', W / 2, headY)
   rects.forEach((r) => {
     const s = easeOutBack(clamp(evoScale, 0, 1))
+    const isEvo = !!r.e.evo
     ctx.save()
     ctx.translate(r.x + r.w / 2, r.y + r.h / 2)
     ctx.scale(s, s)
     ctx.translate(-(r.x + r.w / 2), -(r.y + r.h / 2))
     roundRect(r.x, r.y, r.w, r.h, 14)
-    ctx.fillStyle = '#ffffff'
-    ctx.fill()
-    ctx.strokeStyle = hexA(C.core, 0.55)
-    ctx.lineWidth = 1.5
+    // エボリューションは金色で強調（脈打つ）
+    if (isEvo) {
+      const g = 0.12 + 0.1 * Math.sin(time * 5)
+      ctx.fillStyle = hexA(C.amber, g)
+      ctx.fill()
+      ctx.strokeStyle = C.amber
+      ctx.lineWidth = 2.5
+    } else {
+      ctx.fillStyle = '#ffffff'
+      ctx.fill()
+      ctx.strokeStyle = hexA(C.core, 0.55)
+      ctx.lineWidth = 1.5
+    }
     ctx.stroke()
     ctx.textAlign = 'left'
-    ctx.fillStyle = C.ink
+    ctx.fillStyle = isEvo ? darken(C.amber, 0.75) : C.ink
     ctx.font = `800 17px ${FONT}`
     ctx.fillText(r.e.name, r.x + 18, r.y + 32)
-    // 重ねがけのLv表示（右上）
-    const lv = evoLv[r.e.id] || 0
+    // 右上ラベル：エボリューションは「合成」、通常はLv
     ctx.textAlign = 'right'
-    ctx.fillStyle = lv > 0 ? C.core : hexA(C.muted, 0.8)
     ctx.font = `800 12px ${FONT}`
-    ctx.fillText(lv > 0 ? `Lv${lv}→${lv + 1}` : 'NEW', r.x + r.w - 16, r.y + 30)
+    if (isEvo) {
+      ctx.fillStyle = C.amber
+      ctx.fillText('合成', r.x + r.w - 16, r.y + 30)
+    } else {
+      const lv = evoLv[r.e.id] || 0
+      ctx.fillStyle = lv > 0 ? C.core : hexA(C.muted, 0.8)
+      ctx.fillText(lv > 0 ? `Lv${lv}→${lv + 1}` : 'NEW', r.x + r.w - 16, r.y + 30)
+    }
     ctx.textAlign = 'left'
     ctx.fillStyle = C.muted
     ctx.font = `500 13px ${FONT}`
