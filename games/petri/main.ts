@@ -8,6 +8,7 @@ import { clamp, lerp, makeShake, Particles, easeOutBack, approach } from '../../
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 import * as tune from '../../shared/tune'
+import { isPanelOpen } from '../../shared/tune'
 import { isMuted, onMuteChange, mountMuteButton, configureMixedSession } from '../../shared/audio'
 
 // 実機調整パネル（右上の⚙）。const ではなく P.xxx を読む＝スライダーでライブ調整
@@ -1307,8 +1308,12 @@ function frame(now: number) {
     requestAnimationFrame(frame)
     return
   }
+  // 調整パネル(⚙)を開いている間はゲームを一時停止＝落ち着いて数値をいじれる
+  const paused = mode === 'play' && isPanelOpen()
   // ヒットストップ：数フレーム更新を止める（描画は続ける＝打撃の重み）
-  if (freezeFrames > 0 && mode === 'play') freezeFrames--
+  if (paused) {
+    /* 停止：update を呼ばない */
+  } else if (freezeFrames > 0 && mode === 'play') freezeFrames--
   else update(dt)
 
   ctx.save()
@@ -1334,6 +1339,24 @@ function frame(now: number) {
   if (mode === 'title') drawTitle()
   else if (mode === 'evolve') drawEvolve()
   else if (mode === 'over') drawOver()
+
+  // 一時停止バッジ（左上の見える位置に）
+  if (paused) {
+    const bx = 14
+    const by = 50
+    ctx.save()
+    ctx.fillStyle = hexA(C.ink, 0.72)
+    roundRect(bx, by, 126, 26, 13)
+    ctx.fill()
+    // 一時停止アイコン（二本線）
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(bx + 12, by + 8, 3.5, 10)
+    ctx.fillRect(bx + 18, by + 8, 3.5, 10)
+    ctx.font = `800 12px ${FONT}`
+    ctx.textAlign = 'left'
+    ctx.fillText('調整中（停止）', bx + 28, by + 17)
+    ctx.restore()
+  }
 
   ptrh.endFrame()
   requestAnimationFrame(frame)

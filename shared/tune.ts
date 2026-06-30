@@ -14,6 +14,16 @@ type Schema = Record<string, Def>
 
 const isBool = (d: Def): d is BoolDef => typeof d.v === 'boolean'
 
+// 調整パネルの開閉状態（ゲーム側はこれを見て一時停止できる）
+let panelOpen = false
+const openCbs: ((o: boolean) => void)[] = []
+export function isPanelOpen(): boolean {
+  return panelOpen
+}
+export function onPanelToggle(cb: (o: boolean) => void): void {
+  openCbs.push(cb)
+}
+
 export function panel<T extends Schema>(gameId: string, schema: T): { [K in keyof T]: T[K]['v'] } {
   const KEY = `playlab.tune.${gameId}`
   const shot = new URLSearchParams(location.search).get('shot')
@@ -169,6 +179,8 @@ function mountUI(
 
   // 操作
   const setOpen = (o: boolean) => {
+    panelOpen = o
+    openCbs.forEach((c) => c(o)) // ゲーム側へ通知（一時停止用）
     drawer.style.transform = o ? 'translateX(0)' : 'translateX(102%)'
     btn.style.opacity = o ? '0' : '1'
   }
