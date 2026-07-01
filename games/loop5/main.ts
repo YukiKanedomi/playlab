@@ -96,7 +96,13 @@ function blip(freq: number, dur: number, type: OscillatorType, gain: number, sli
   o.stop(t + dur + 0.02)
 }
 let lastCollect = 0
+let lastShoot = 0
 const SFX = {
+  shoot() {
+    if (!actx || actx.currentTime - lastShoot < 0.05) return
+    lastShoot = actx.currentTime
+    blip(700, 0.04, 'square', 0.02, 560)
+  },
   collect() {
     // ピッチを少し上げながら（拾うほど上がると気持ちいい）
     const p = 660 + clamp(collected, 0, 20) * 18
@@ -122,20 +128,20 @@ const P = tune.panel(
   'loop5',
   {
     LOOP: { v: 5, min: 3, max: 8, step: 0.5, group: 'ルール', label: 'ループ秒数', desc: '1周の長さ（秒）。' },
-    BALLS: { v: 2, min: 1, max: 5, step: 1, group: 'ルール', label: '重い球の数', desc: '中央ゴールへ押し込む球の数。多いほど周回が必要。' },
-    WEIGHT: { v: 2, min: 2, max: 4, step: 1, group: 'ルール', label: '球の重さ', desc: '同時に押すのに必要な身体の数。' },
+    ENEMIES: { v: 22, min: 8, max: 40, step: 1, group: 'ルール', label: '敵の数', desc: '殲滅する敵の総数。多いほど周回が必要。' },
     SPEED: { v: 235, min: 120, max: 360, step: 5, group: '操作', label: '移動速度', desc: '細胞の移動スピード。' },
     DRAG_MAXR: { v: 70, min: 40, max: 120, step: 2, group: '操作', label: '反応距離', desc: '指をこの距離引くと最高速。' },
   },
-  { version: 2 },
+  { version: 3 },
 )
 
 // ── 型・状態 ──
-// 重い球：weight 人の身体で同時に押すと動く。ゴール（中央）へ入れる。sx,sy=初期位置
-type Ball = { x: number; y: number; vx: number; vy: number; r: number; weight: number; inGoal: boolean; sx: number; sy: number; push: number }
-const GOAL_R = 46 // 中央ゴールの半径
-const PUSH_ACCEL = 1500 // 押す加速度
-const BALL_FRICTION = 0.87
+// 敵（固定編成・ゆっくり回転しながら中心へ）。弾で倒す。ang/rad0 は初期配置
+type Enemy = { x: number; y: number; ang: number; rad: number; rad0: number; ang0: number; r: number; hp: number; maxhp: number; alive: boolean; wob: number }
+type Bullet = { x: number; y: number; vx: number; vy: number; life: number }
+const FIRE_INT = 0.3 // 射撃間隔（全シューター共通）
+const BULLET_SPD = 360
+const ENEMY_HP = 2
 type Sample = { t: number; x: number; y: number }
 type Mode = 'title' | 'play' | 'win' | 'rewind'
 let mode: Mode = 'title'
@@ -145,7 +151,10 @@ let winScale = 0
 const REWIND_DUR = 0.75 // 巻き戻し演出の長さ（秒）
 let rewindT = 0
 
-let balls: Ball[] = []
+let enemies: Enemy[] = []
+let bullets: Bullet[] = []
+let youCool = 0
+let gCool: number[] = [] // 各幽霊の射撃クールダウン
 let ghosts: Sample[][] = [] // 過去ループの記録
 let gcur: number[] = [] // 各幽霊の再生カーソル
 let rec: Sample[] = [] // 今ループの記録
@@ -165,15 +174,15 @@ let anchorY = 0
 const DRAG_DEAD = 5
 
 function newLayout() {
-  // 重い球を外周寄りにランダム配置（ゴールから離す）
-  balls = []
-  const n = Math.round(P.BALLS)
+  // 敵を2重のリング状に固定配置（回転しながらゆっくり中心へ）
+  enemies = []
+  const n = Math.round(P.ENEMIES)
+  const rings = n > 14 ? 2 : 1
   for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + Math.random() * 0.6
-    const r = dishR * (0.55 + Math.random() * 0.28)
-    const x = cx + Math.cos(a) * r
-    const y = cy + Math.sin(a) * r
-    balls.push({ x, y, vx: 0, vy: 0, r: 16, weight: Math.round(P.WEIGHT), inGoal: false, sx: x, sy: y, push: 0 })
+    const ring = i % rings
+    const rad0 = dishR * (rings === 1 ? 0.7 : ring === 0 ? 0.55 : 0.85)
+    const ang0 = (i / n) * Math.PI * 2 * rings + ring * 0.4
+    enemies.push({ x: 0, y: 0, ang: ang0, rad: rad0, rad0, ang0, r: 11, hp: ENEMY_HP, maxhp: ENEMY_HP, alive: true, wob: Math.random() * 9 })
   }
   ghosts = []
   loopNum = 1
@@ -181,14 +190,17 @@ function newLayout() {
 }
 
 function startLoop() {
-  for (const b of balls) {
-    b.x = b.sx
-    b.y = b.sy
-    b.vx = 0
-    b.vy = 0
-    b.inGoal = false
-    b.push = 0
+  for (const e of enemies) {
+    e.alive = true
+    e.hp = e.maxhp
+    e.ang = e.ang0
+    e.rad = e.rad0
+    e.x = cx + Math.cos(e.ang) * e.rad
+    e.y = cy + Math.sin(e.ang) * e.rad
   }
+  bullets = []
+  youCool = 0
+  gCool = ghosts.map(() => Math.random() * 0.15)
   rec = []
   gcur = ghosts.map(() => 0)
   loopTime = 0
@@ -198,6 +210,26 @@ function startLoop() {
   velX = velY = 0
   banner = 'LOOP ' + loopNum
   bannerT = 1.2
+}
+
+// 指定位置から最寄りの生存敵へ弾を撃つ（撃てたら true）
+function fireFrom(x: number, y: number): boolean {
+  let best: Enemy | null = null
+  let bd = 1e9
+  for (const e of enemies) {
+    if (!e.alive) continue
+    const d = (e.x - x) ** 2 + (e.y - y) ** 2
+    if (d < bd) {
+      bd = d
+      best = e
+    }
+  }
+  if (!best) return false
+  const dx = best.x - x
+  const dy = best.y - y
+  const d = Math.hypot(dx, dy) || 1
+  bullets.push({ x, y, vx: (dx / d) * BULLET_SPD, vy: (dy / d) * BULLET_SPD, life: 1.5 })
+  return true
 }
 
 function ghostPosAt(path: Sample[], t: number, ci: number): { x: number; y: number; ci: number } {
@@ -222,49 +254,11 @@ function clampToDish(p: { x: number; y: number }) {
   }
 }
 
-// 重い球を押す：接触アクターが weight 人以上なら、合力の向きへ動く
-function pushBalls(actors: { x: number; y: number }[]) {
-  let inGoal = 0
-  for (const b of balls) {
-    if (b.inGoal) {
-      inGoal++
-      b.push = 0
-      continue
-    }
-    let px = 0
-    let py = 0
-    let np = 0
-    for (const a of actors) {
-      const dx = b.x - a.x
-      const dy = b.y - a.y
-      const d = Math.hypot(dx, dy)
-      if (d < b.r + 13 && d > 0.1) {
-        np++
-        px += dx / d
-        py += dy / d
-      }
-    }
-    b.push = np
-    if (np >= b.weight) {
-      const pd = Math.hypot(px, py) || 1
-      b.vx += (px / pd) * PUSH_ACCEL * (1 / 60)
-      b.vy += (py / pd) * PUSH_ACCEL * (1 / 60)
-    }
-    b.vx *= BALL_FRICTION
-    b.vy *= BALL_FRICTION
-    b.x += b.vx * (1 / 60)
-    b.y += b.vy * (1 / 60)
-    clampToDish(b)
-    if (Math.hypot(cx - b.x, cy - b.y) < GOAL_R - 4) {
-      b.inGoal = true
-      inGoal++
-      b.vx = b.vy = 0
-      fx.burst(b.x, b.y, 16, C.amber, 220)
-      shake.add(6)
-      SFX.collect()
-    }
-  }
-  collected = inGoal
+function killEnemy(e: Enemy) {
+  e.alive = false
+  collected++
+  fx.burst(e.x, e.y, 9, C.amber, 180)
+  SFX.collect()
 }
 
 function update(dt: number) {
@@ -328,18 +322,54 @@ function update(dt: number) {
   // 記録（今ループの自分の軌跡）
   rec.push({ t: loopTime, x: you.x, y: you.y })
 
-  // 全アクター（幽霊＝過去の自分＋今の自分）を集めて、重い球を押す
-  const actors: { x: number; y: number }[] = []
+  // 敵：ゆっくり回転しながら中心へ寄る（毎ループ同じ動き）
+  for (const e of enemies) {
+    if (!e.alive) continue
+    e.wob += dt * 5
+    e.ang += 0.35 * dt
+    e.rad = Math.max(34, e.rad - 7 * dt)
+    e.x = cx + Math.cos(e.ang) * e.rad
+    e.y = cy + Math.sin(e.ang) * e.rad
+  }
+
+  // 射撃：今の自分＋過去の自分（幽霊）が最寄りの敵へ撃つ＝周回で自軍が育つ
+  youCool -= dt
+  if (youCool <= 0) {
+    if (fireFrom(you.x, you.y)) {
+      youCool = FIRE_INT
+      SFX.shoot()
+    } else youCool = 0.06
+  }
   for (let k = 0; k < ghosts.length; k++) {
     const g = ghostPosAt(ghosts[k], loopTime, gcur[k])
     gcur[k] = g.ci
-    actors.push({ x: g.x, y: g.y })
+    gCool[k] -= dt
+    if (gCool[k] <= 0) {
+      if (fireFrom(g.x, g.y)) gCool[k] = FIRE_INT
+      else gCool[k] = 0.06
+    }
   }
-  actors.push({ x: you.x, y: you.y })
-  pushBalls(actors)
 
-  // 全部ゴール＝クリア
-  if (collected >= balls.length) {
+  // 弾：移動＋敵に命中
+  for (const b of bullets) {
+    b.x += b.vx * dt
+    b.y += b.vy * dt
+    b.life -= dt
+    for (const e of enemies) {
+      if (!e.alive) continue
+      if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + 4) {
+        e.hp--
+        b.life = 0
+        fx.burst(b.x, b.y, 3, C.ghost, 90)
+        if (e.hp <= 0) killEnemy(e)
+        break
+      }
+    }
+  }
+  bullets = bullets.filter((b) => b.life > 0 && b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20)
+
+  // 全滅＝クリア
+  if (collected >= enemies.length) {
     mode = 'win'
     winScale = 0
     shake.add(10)
@@ -443,58 +473,41 @@ function cellShape(x: number, y: number, r: number, fill: string, edge: string, 
   }
 }
 
-function drawGoal() {
-  // 中央ゴール（ここへ球を押し込む）
-  ctx.save()
-  ctx.setLineDash([6, 6])
-  ctx.strokeStyle = hexA(C.ghost, 0.55)
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.arc(cx, cy, GOAL_R, 0, Math.PI * 2)
-  ctx.stroke()
-  ctx.setLineDash([])
-  ctx.fillStyle = hexA(C.ghost, 0.08)
-  ctx.beginPath()
-  ctx.arc(cx, cy, GOAL_R, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.restore()
+function drawEnemies() {
+  for (const e of enemies) {
+    if (!e.alive) continue
+    const edge = darken(C.danger, 0.7)
+    // トゲ付きの菌
+    ctx.strokeStyle = edge
+    ctx.lineWidth = 1.6
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + e.wob * 0.2
+      ctx.beginPath()
+      ctx.moveTo(e.x + Math.cos(a) * e.r * 0.95, e.y + Math.sin(a) * e.r * 0.95)
+      ctx.lineTo(e.x + Math.cos(a) * e.r * 1.35, e.y + Math.sin(a) * e.r * 1.35)
+      ctx.stroke()
+    }
+    ctx.fillStyle = hexA(C.danger, 0.22)
+    ctx.beginPath()
+    ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = edge
+    ctx.stroke()
+    if (e.hp < e.maxhp) {
+      ctx.fillStyle = edge
+      ctx.beginPath()
+      ctx.arc(e.x, e.y, e.r * 0.3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
 }
 
-function drawBalls() {
-  for (const b of balls) {
-    const pushing = b.push >= b.weight && !b.inGoal
-    // グロー（押せている時は強く）
-    ctx.globalAlpha = b.inGoal ? 0.2 : pushing ? 0.5 : 0.28
-    ctx.fillStyle = C.amber
+function drawBullets() {
+  ctx.fillStyle = C.ghostDeep
+  for (const b of bullets) {
     ctx.beginPath()
-    ctx.arc(b.x, b.y, b.r + (pushing ? 6 : 3), 0, Math.PI * 2)
+    ctx.arc(b.x, b.y, 3, 0, Math.PI * 2)
     ctx.fill()
-    ctx.globalAlpha = 1
-    // 本体
-    ctx.fillStyle = b.inGoal ? hexA(C.amber, 0.4) : hexA(C.amber, 0.85)
-    ctx.beginPath()
-    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.strokeStyle = darken(C.amber, 0.6)
-    ctx.lineWidth = 2
-    ctx.stroke()
-    // 必要人数「×W」
-    ctx.fillStyle = '#fff'
-    ctx.font = `800 13px ${FONT}`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(b.inGoal ? '✓' : '×' + b.weight, b.x, b.y)
-    ctx.textBaseline = 'alphabetic'
-    // 押している人数のドット
-    if (!b.inGoal && b.push > 0) {
-      for (let i = 0; i < b.push; i++) {
-        const a = -Math.PI / 2 + (i - (b.push - 1) / 2) * 0.4
-        ctx.fillStyle = pushing ? C.ghost : C.muted
-        ctx.beginPath()
-        ctx.arc(b.x + Math.cos(a) * (b.r + 10), b.y + Math.sin(a) * (b.r + 10), 2.5, 0, Math.PI * 2)
-        ctx.fill()
-      }
-    }
   }
 }
 
@@ -502,19 +515,20 @@ function drawBalls() {
 function drawRewindScene() {
   const rt = clamp(rewindT / REWIND_DUR, 0, 1) // 1→0
   const revT = P.LOOP * rt // 時刻を LOOP→0 へ
-  drawGoal()
-  // 球が初期位置へ戻る（rt: 1→0 でスタートへ補間）
-  for (const b of balls) {
-    const bx = lerp(b.sx, b.x, rt)
-    const by = lerp(b.sy, b.y, rt)
-    ctx.fillStyle = hexA(C.amber, 0.85)
+  // 敵が初期配置へ戻る（倒された敵も蘇る＝逆再生）
+  for (const e of enemies) {
+    const bx = lerp(cx + Math.cos(e.ang0) * e.rad0, e.x, rt)
+    const by = lerp(cy + Math.sin(e.ang0) * e.rad0, e.y, rt)
+    ctx.globalAlpha = 0.4 + (1 - rt) * 0.6
+    ctx.fillStyle = hexA(C.danger, 0.3)
     ctx.beginPath()
-    ctx.arc(bx, by, b.r, 0, Math.PI * 2)
+    ctx.arc(bx, by, e.r, 0, Math.PI * 2)
     ctx.fill()
-    ctx.strokeStyle = darken(C.amber, 0.6)
-    ctx.lineWidth = 2
+    ctx.strokeStyle = darken(C.danger, 0.7)
+    ctx.lineWidth = 1.6
     ctx.stroke()
   }
+  ctx.globalAlpha = 1
   // 全アクター（今終えた自分＝最後の幽霊 も含む）を逆時刻で描く＝スタートへ収束
   for (let k = 0; k < ghosts.length; k++) {
     const g = ghostPosAt(ghosts[k], revT, 0)
@@ -596,7 +610,7 @@ function drawHUD() {
   ctx.textAlign = 'right'
   ctx.fillStyle = C.amber
   ctx.font = `800 16px ${FONT}`
-  ctx.fillText(`ゴール ${collected} / ${balls.length}`, W - 14, 36)
+  ctx.fillText(`撃破 ${collected} / ${enemies.length}`, W - 14, 36)
   // 幽霊の数
   ctx.textAlign = 'left'
   ctx.fillStyle = C.muted
@@ -623,7 +637,7 @@ function drawBanner() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: '5秒、くりかえし。',
-    lines: ['重い球を中央ゴールへ押し込む（指で動く）', '「×2」は2体で同時に押さないと動かない', '5秒ごとに“過去の自分”が幽霊で再生。協力せよ'],
+    lines: ['敵を全滅させる。指で動くと自動で撃つ', '5秒ごとに“過去の自分”が幽霊で再生し一緒に撃つ', '自軍を積み上げ、何周で殲滅できる？'],
     start: 'タップでスタート',
     footer: bestLoops > 0 ? `best: ${bestLoops}周でクリア` : undefined,
     accent: C.amber,
@@ -687,8 +701,8 @@ function frame(now: number) {
     drawRewindScene()
   } else if (mode !== 'title') {
     drawCountdown() // 中央の大きな残り秒数（背面）
-    drawGoal()
-    drawBalls()
+    drawBullets()
+    drawEnemies()
     drawActors()
     fx.draw(ctx)
     drawHUD()
@@ -723,36 +737,35 @@ function setupShot() {
   layoutField()
   mode = 'play'
   newLayout()
-  loopNum = 3
-  loopTime = P.LOOP * 0.4
-  // 1球はゴール済み（中央）、もう1球を今まさに“みんなで押している”構図
-  if (balls[0]) {
-    balls[0].inGoal = true
-    balls[0].x = cx
-    balls[0].y = cy
-  }
-  const b = balls[1] || balls[0]
-  if (b) {
-    b.inGoal = false
-    b.x = cx + 90
-    b.y = cy - 40
-    b.push = b.weight
-  }
-  // 押している幽霊＋自分を球の外側に配置
+  loopNum = 4
+  loopTime = P.LOOP * 0.5
+  // 半分ほど撃破済み
+  enemies.forEach((e, i) => {
+    if (i % 2 === 0) e.alive = false
+  })
+  collected = enemies.filter((e) => !e.alive).length
+  // 数体の幽霊が各所から撃っている構図＋飛んでいる弾
   ghosts = []
-  gcur = []
-  if (b) {
-    for (let k = 0; k < 2; k++) {
-      const a = Math.PI * 0.15 + k * 0.5
-      const px = b.x + Math.cos(a) * (b.r + 12)
-      const py = b.y + Math.sin(a) * (b.r + 12)
-      ghosts.push([{ t: 0, x: px, y: py }, { t: P.LOOP, x: px, y: py }])
-    }
-    gcur = ghosts.map(() => 0)
-    you.x = b.x + Math.cos(Math.PI * 0.15 + 1.0) * (b.r + 12)
-    you.y = b.y + Math.sin(Math.PI * 0.15 + 1.0) * (b.r + 12)
+  for (let k = 0; k < 3; k++) {
+    const a = (k / 3) * Math.PI * 2
+    const px = cx + Math.cos(a) * dishR * 0.6
+    const py = cy + Math.sin(a) * dishR * 0.6
+    ghosts.push([{ t: 0, x: px, y: py }, { t: P.LOOP, x: px, y: py }])
   }
-  collected = balls.filter((x) => x.inGoal).length
+  gcur = ghosts.map(() => 0)
+  you.x = cx - 30
+  you.y = cy + dishR * 0.5
+  // 飛翔中の弾
+  const alive = enemies.filter((e) => e.alive)
+  const shooters = [{ x: you.x, y: you.y }, ...ghosts.map((g) => g[0])]
+  for (const s of shooters) {
+    const t = alive[(Math.random() * alive.length) | 0]
+    if (!t) continue
+    const dx = t.x - s.x
+    const dy = t.y - s.y
+    const d = Math.hypot(dx, dy) || 1
+    bullets.push({ x: lerp(s.x, t.x, 0.4), y: lerp(s.y, t.y, 0.4), vx: (dx / d) * BULLET_SPD, vy: (dy / d) * BULLET_SPD, life: 1 })
+  }
 }
 
 if (SHOT) {
