@@ -110,6 +110,11 @@ const SFX = {
   win() {
     ;[523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.2, 'triangle', 0.12), i * 110))
   },
+  rewind() {
+    // 下降するワブル＝巻き戻し
+    blip(620, REWIND_DUR, 'sawtooth', 0.09, 130)
+    blip(930, REWIND_DUR, 'square', 0.03, 180)
+  },
 }
 
 // ── 調整パネル ──
@@ -128,11 +133,13 @@ const P = tune.panel(
 // need=必要タッチ数（硬い養分は2）。by=この周に触れたアクターID集合（同じ人は1回まで）
 type Orb = { x: number; y: number; got: boolean; need: number; hits: number; by: Set<number> }
 type Sample = { t: number; x: number; y: number }
-type Mode = 'title' | 'play' | 'win'
+type Mode = 'title' | 'play' | 'win' | 'rewind'
 let mode: Mode = 'title'
 let time = 0
 let titleScale = 0
 let winScale = 0
+const REWIND_DUR = 0.75 // 巻き戻し演出の長さ（秒）
+let rewindT = 0
 
 let orbs: Orb[] = []
 let ghosts: Sample[][] = [] // 過去ループの記録
@@ -240,6 +247,14 @@ function update(dt: number) {
     winScale = approach(winScale, 1, dt, 9)
     return
   }
+  if (mode === 'rewind') {
+    rewindT -= dt
+    if (rewindT <= 0) {
+      startLoop()
+      mode = 'play'
+    }
+    return
+  }
   if (mode !== 'play') return
 
   loopTime += dt
@@ -302,12 +317,13 @@ function update(dt: number) {
     return
   }
 
-  // 5秒経過＝この周を記録して次の周へ（幽霊が1体増える）
+  // 5秒経過＝この周を記録→巻き戻し演出→次の周（幽霊が1体増える）
   if (loopTime >= P.LOOP) {
     ghosts.push(rec)
     loopNum++
-    SFX.loop()
-    startLoop()
+    mode = 'rewind'
+    rewindT = REWIND_DUR
+    SFX.rewind()
   }
 }
 
@@ -431,6 +447,48 @@ function drawOrbs() {
       }
     }
   }
+}
+
+// 巻き戻し演出：時間が逆再生され、全員がスタート地点へ吸い戻される
+function drawRewindScene() {
+  const rt = clamp(rewindT / REWIND_DUR, 0, 1) // 1→0
+  const revT = P.LOOP * rt // 時刻を LOOP→0 へ
+  // 養分が戻ってくる（だんだん実体化）
+  ctx.globalAlpha = 0.4 + (1 - rt) * 0.6
+  for (const o of orbs) {
+    ctx.fillStyle = C.amber
+    ctx.beginPath()
+    ctx.arc(o.x, o.y, o.need > 1 ? 6 : 5, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.globalAlpha = 1
+  // 全アクター（今終えた自分＝最後の幽霊 も含む）を逆時刻で描く＝スタートへ収束
+  for (let k = 0; k < ghosts.length; k++) {
+    const g = ghostPosAt(ghosts[k], revT, 0)
+    ctx.globalAlpha = 0.5
+    cellShape(g.x, g.y, 11, hexA(C.ghost, 0.5), hexA(C.ghostDeep, 0.8), time * 4 + k)
+    ctx.globalAlpha = 1
+  }
+  // VHS 風の走査線＋ジッター
+  ctx.save()
+  ctx.globalAlpha = 0.5
+  ctx.strokeStyle = hexA(C.ink, 0.18)
+  ctx.lineWidth = 1
+  for (let y = ((time * 900) % 14) - 14; y < H; y += 14) {
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(W, y)
+    ctx.stroke()
+  }
+  ctx.restore()
+  // ◀◀ まきもどし＋周回数
+  ctx.textAlign = 'center'
+  ctx.fillStyle = hexA(C.ink, 0.8)
+  ctx.font = `800 26px ${FONT}`
+  ctx.fillText('◀◀  まきもどし', cx, cy - dishR - 14 < 40 ? 70 : cy - dishR - 14)
+  ctx.fillStyle = hexA(C.ghost, 0.9)
+  ctx.font = `800 46px ${FONT}`
+  ctx.fillText('LOOP ' + loopNum, cx, cy)
 }
 
 // シャーレ中央の大きな残り秒数（5秒テーマを主役に）
@@ -568,9 +626,13 @@ function frame(now: number) {
   if (!paused) update(dt)
 
   ctx.save()
+  // 巻き戻し中は小刻みに揺らす（テープ感）
+  if (mode === 'rewind') ctx.translate((Math.random() * 2 - 1) * 2, (Math.random() * 2 - 1) * 2)
   shake.apply(ctx)
   drawField()
-  if (mode !== 'title') {
+  if (mode === 'rewind') {
+    drawRewindScene()
+  } else if (mode !== 'title') {
     drawCountdown() // 中央の大きな残り秒数（オーブの背面）
     drawOrbs()
     drawActors()
