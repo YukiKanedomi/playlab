@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>霧雨館の一夜 — Playlab</title>
+    <link rel="icon" type="image/svg+xml" href="/playlab/icon.svg" />
+    <link rel="apple-touch-icon" href="/playlab/apple-touch-icon.png" />
+    <link rel="manifest" href="/playlab/manifest.webmanifest" />
+    <meta name="theme-color" content="#14161d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; overflow: hidden; background: #14161d; }
+      body {
+        font-family: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", serif;
+        color: #e8e2d4; touch-action: manipulation;
+        -webkit-user-select: none; user-select: none; overscroll-behavior: none;
+      }
+      #stage { position: fixed; inset: 0; overflow: hidden; }
+
+      /* ── 背景（場所ごと） ── */
+      #bg { position: absolute; inset: 0; transition: background 0.6s ease; }
+      .loc-title  { background: linear-gradient(180deg, #0d0f16 0%, #171b26 55%, #10121a 100%); }
+      .loc-kura   { background: linear-gradient(180deg, #17130e 0%, #241d14 60%, #131009 100%); }
+      .loc-roka   { background: linear-gradient(180deg, #10141f 0%, #1a2130 55%, #0e1119 100%); }
+      .loc-choba  { background: linear-gradient(180deg, #1d150d 0%, #2c2113 55%, #171009 100%); }
+      .loc-kitchen{ background: linear-gradient(180deg, #131a1a 0%, #1d2926 55%, #0e1414 100%); }
+      .loc-hagi   { background: linear-gradient(180deg, #12170f 0%, #1e281a 55%, #0d120b 100%); }
+      .loc-hanare { background: linear-gradient(180deg, #16121b 0%, #221c28 55%, #100d14 100%); }
+      /* 障子の桟（うっすら） */
+      #bg::after {
+        content: ""; position: absolute; inset: 0; opacity: 0.08;
+        background:
+          repeating-linear-gradient(90deg, transparent 0 118px, #e8e2d4 118px 120px),
+          repeating-linear-gradient(0deg, transparent 0 88px, #e8e2d4 88px 90px);
+      }
+
+      /* ── 雨・雷 ── */
+      #rain { position: absolute; inset: -60px 0; pointer-events: none; opacity: 0; transition: opacity 0.8s; }
+      #rain.on { opacity: 0.5; }
+      #rain::before, #rain::after {
+        content: ""; position: absolute; inset: 0;
+        background: repeating-linear-gradient(78deg, transparent 0 27px, rgba(200, 214, 235, 0.28) 27px 28px);
+        animation: rainfall 0.5s linear infinite;
+      }
+      #rain::after {
+        background: repeating-linear-gradient(80deg, transparent 0 41px, rgba(200, 214, 235, 0.16) 41px 42px);
+        animation-duration: 0.34s;
+      }
+      @keyframes rainfall { to { transform: translateY(56px); } }
+      #flash { position: absolute; inset: 0; background: #dfe8ff; opacity: 0; pointer-events: none; }
+      #flash.hit { animation: lightning 0.55s ease-out; }
+      @keyframes lightning { 0% {opacity:.75;} 12% {opacity:.06;} 22% {opacity:.5;} 100% {opacity:0;} }
+
+      /* ── 立ち絵（墨の影絵） ── */
+      #portrait {
+        position: absolute; left: 50%; bottom: 205px; transform: translateX(-50%);
+        width: min(46vw, 230px); opacity: 0; transition: opacity 0.35s;
+        filter: drop-shadow(0 6px 18px rgba(0,0,0,0.5));
+      }
+      #portrait.on { opacity: 1; }
+      #portrait.dim { opacity: 0.35; }
+
+      /* ── 白玉（ライフ） ── */
+      #life { position: absolute; top: max(14px, env(safe-area-inset-top)); right: 74px; display: flex; gap: 7px; }
+      #life i { width: 13px; height: 13px; border-radius: 50%; background: #efe9db;
+        box-shadow: inset -2px -2px 3px rgba(0,0,0,.25); transition: opacity .3s, transform .3s; }
+      #life i.off { opacity: 0.15; transform: scale(0.6); }
+
+      /* ── 証拠ボタン ── */
+      #evbtn {
+        position: absolute; top: max(10px, env(safe-area-inset-top)); right: 12px; z-index: 30;
+        font-family: inherit; font-size: 13px; letter-spacing: 0.1em;
+        color: #e8e2d4; background: rgba(20, 22, 29, 0.7); border: 1px solid rgba(232, 226, 212, 0.4);
+        border-radius: 4px; padding: 7px 11px;
+      }
+      #evbtn.pulse { animation: evpulse 0.9s ease-in-out 2; }
+      @keyframes evpulse { 50% { background: rgba(199, 62, 58, 0.55); } }
+
+      .back {
+        position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px; z-index: 30;
+        color: #bfb8a6; text-decoration: none; font-size: 12px; letter-spacing: 0.04em;
+        padding: 7px 11px; border: 1px solid rgba(232, 226, 212, 0.25); border-radius: 4px;
+        background: rgba(20, 22, 29, 0.55);
+      }
+
+      /* ── テキストまわり ── */
+      #ui { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 10px calc(max(12px, env(safe-area-inset-bottom))); z-index: 20; }
+      #teshead {
+        display: none; margin: 0 4px 8px; text-align: center; font-size: 13px; letter-spacing: 0.14em;
+        color: #d9cfae; text-shadow: 0 1px 4px #000;
+      }
+      #teshead.on { display: block; }
+      #teshead b { color: #e8b04b; }
+      #btnrow { display: flex; gap: 8px; margin: 0 2px 8px; flex-wrap: wrap; justify-content: center; }
+      #btnrow button {
+        font-family: inherit; font-size: 14px; letter-spacing: 0.08em; color: #1d1a14;
+        background: #efe7d3; border: 1px solid #b7ab8d; border-radius: 4px;
+        padding: 11px 14px; min-width: 52px; box-shadow: 0 2px 0 #8f846a;
+      }
+      #btnrow button:active { transform: translateY(2px); box-shadow: none; }
+      #btnrow button.wide { flex: 1 1 100%; }
+      #btnrow button.aka { background: #c73e3a; color: #f5efe2; border-color: #8e2724; box-shadow: 0 2px 0 #7a1f1c; }
+      #btnrow button.sumi { background: #2a2d36; color: #e8e2d4; border-color: #101218; box-shadow: 0 2px 0 #0c0e13; }
+
+      #box {
+        position: relative; background: #f2ead8; color: #24262e; border-radius: 6px;
+        border: 1px solid #c9bda0; box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+        padding: 30px 16px 16px; min-height: 118px;
+      }
+      #nameplate {
+        position: absolute; top: -13px; left: 12px; font-size: 13px; letter-spacing: 0.16em;
+        background: #24262e; color: #f2ead8; padding: 4px 12px; border-radius: 3px;
+        border-left: 4px solid var(--acc, #8a8f98);
+      }
+      #nameplate.hide { display: none; }
+      #text { font-size: 15.5px; line-height: 1.85; min-height: 3.7em; letter-spacing: 0.02em; }
+      #text.mono { color: #565b66; }
+      #cursor {
+        position: absolute; right: 13px; bottom: 8px; font-size: 12px; color: #8d3a37;
+        animation: bob 0.9s ease-in-out infinite; opacity: 0;
+      }
+      #cursor.on { opacity: 1; }
+      @keyframes bob { 50% { transform: translateY(3px); } }
+
+      /* ── 証拠モーダル ── */
+      #evmodal {
+        position: absolute; inset: 0; z-index: 40; display: none;
+        background: rgba(10, 11, 16, 0.82); padding: max(56px, env(safe-area-inset-top)) 14px 20px;
+        overflow-y: auto;
+      }
+      #evmodal.on { display: block; }
+      #evmodal h2 { font-size: 15px; letter-spacing: 0.2em; color: #d9cfae; text-align: center; margin-bottom: 14px; }
+      #evgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 430px; margin: 0 auto; }
+      .evitem {
+        background: #f2ead8; color: #24262e; border: 1px solid #c9bda0; border-radius: 5px;
+        padding: 10px 6px; text-align: center; font-family: inherit;
+      }
+      .evitem .mk {
+        display: block; width: 34px; height: 34px; line-height: 34px; margin: 0 auto 6px;
+        background: #24262e; color: #f2ead8; font-size: 17px; border-radius: 4px;
+      }
+      .evitem .nm { font-size: 11.5px; letter-spacing: 0.04em; }
+      #evdetail {
+        max-width: 430px; margin: 12px auto 0; background: #f2ead8; color: #24262e;
+        border-radius: 5px; border: 1px solid #c9bda0; padding: 12px 14px; font-size: 13.5px; line-height: 1.8;
+        display: none;
+      }
+      #evdetail.on { display: block; }
+      #evactions { max-width: 430px; margin: 14px auto 0; display: flex; gap: 10px; }
+      #evactions button {
+        flex: 1; font-family: inherit; font-size: 14px; letter-spacing: 0.1em; padding: 12px;
+        border-radius: 4px; border: 1px solid #b7ab8d; background: #efe7d3; color: #1d1a14;
+      }
+      #evactions #evpresent { background: #c73e3a; color: #f5efe2; border-color: #8e2724; display: none; }
+      #evactions #evpresent.on { display: block; }
+
+      /* ── トースト ── */
+      #toast {
+        position: absolute; left: 50%; top: 18%; transform: translate(-50%, -8px); z-index: 35;
+        background: #24262e; color: #f2ead8; border-left: 4px solid #e8b04b;
+        padding: 10px 16px; font-size: 13.5px; letter-spacing: 0.06em; border-radius: 3px;
+        opacity: 0; transition: opacity 0.3s, transform 0.3s; pointer-events: none;
+        box-shadow: 0 6px 20px rgba(0,0,0,0.5); max-width: 86vw;
+      }
+      #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+      /* ── 「待った」演出 ── */
+      #matta {
+        position: absolute; inset: 0; z-index: 38; display: none; pointer-events: none;
+        align-items: center; justify-content: center;
+      }
+      #matta.on { display: flex; }
+      #matta span {
+        font-size: clamp(44px, 15vw, 88px); font-weight: 800; color: #f2ead8;
+        background: #c73e3a; padding: 6px 30px 10px; border-radius: 4px; letter-spacing: 0.1em;
+        transform: rotate(-4deg); box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+        animation: mattain 0.5s cubic-bezier(0.2, 1.6, 0.4, 1);
+      }
+      @keyframes mattain { 0% { transform: rotate(-4deg) scale(2.6); opacity: 0; } 100% { transform: rotate(-4deg) scale(1); opacity: 1; } }
+
+      /* ── タイトル ── */
+      #title { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 10px; }
+      #title.hide { display: none; }
+      #title .tate {
+        writing-mode: vertical-rl; font-size: clamp(38px, 11vw, 64px); letter-spacing: 0.22em;
+        color: #f2ead8; text-shadow: 0 0 30px rgba(120, 150, 210, 0.25), 0 3px 8px #000;
+        border-right: 1px solid rgba(232, 226, 212, 0.35); padding-right: 18px; height: 5.6em;
+      }
+      #title .sub { font-size: 13px; letter-spacing: 0.34em; color: #b9b09b; margin-top: 6px; }
+      #title .cap { font-size: 11.5px; letter-spacing: 0.12em; color: #7d7869; margin-top: 12px; }
+      #title .menu { display: flex; flex-direction: column; gap: 10px; margin-top: 26px; width: min(70vw, 240px); }
+      #title .menu button {
+        font-family: inherit; font-size: 15px; letter-spacing: 0.24em; padding: 13px;
+        background: rgba(242, 234, 216, 0.06); color: #e8e2d4;
+        border: 1px solid rgba(232, 226, 212, 0.4); border-radius: 3px;
+      }
+      #title .menu button:active { background: rgba(242, 234, 216, 0.18); }
+
+      #fin { position: absolute; inset: 0; z-index: 45; display: none; flex-direction: column;
+        align-items: center; justify-content: center; gap: 18px; background: rgba(10, 11, 14, 0.9); }
+      #fin.on { display: flex; }
+      #fin .kan { font-size: 64px; letter-spacing: 0.1em; color: #f2ead8; }
+      #fin p { font-size: 13px; color: #b9b09b; letter-spacing: 0.1em; }
+      #fin button { font-family: inherit; font-size: 14px; letter-spacing: 0.2em; padding: 12px 30px;
+        background: none; color: #e8e2d4; border: 1px solid rgba(232,226,212,.4); border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="bg" class="loc-title"></div>
+      <div id="rain" class="on"></div>
+      <div id="flash"></div>
+      <svg id="portrait" viewBox="0 0 100 120"></svg>
+      <div id="life"></div>
+      <button id="evbtn">証拠</button>
+      <div id="matta"><span>待った！</span></div>
+      <div id="toast"></div>
+      <div id="ui">
+        <div id="teshead"></div>
+        <div id="btnrow"></div>
+        <div id="box">
+          <div id="nameplate" class="hide"></div>
+          <div id="text"></div>
+          <div id="cursor">▼</div>
+        </div>
+      </div>
+      <div id="evmodal">
+        <h2>— 証拠品 —</h2>
+        <div id="evgrid"></div>
+        <div id="evdetail"></div>
+        <div id="evactions">
+          <button id="evpresent">これを、つきつける</button>
+          <button id="evclose">とじる</button>
+        </div>
+      </div>
+      <div id="title">
+        <div class="tate">霧雨館の一夜</div>
+        <div class="sub">あつめて、あばく。</div>
+        <div class="cap">書き下ろし推理劇 ・ 読了 20 分</div>
+        <div class="menu"></div>
+      </div>
+      <div id="fin">
+        <div class="kan">完</div>
+        <p id="finstat"></p>
+        <button id="finback">タイトルへ</button>
+      </div>
+    </div>
+    <a class="back" href="../../">← lab</a>
+    <script type="module" src="./main.ts"></script>
+    <script>
+      if ('serviceWorker' in navigator)
+        navigator.serviceWorker.register('/playlab/sw.js').catch(() => {})
+    </script>
+  </body>
+</html>

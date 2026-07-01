@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "kirisame",
+      "no": 7,
+      "title": "あつめて、あばく。",
+      "desc": "山あいの湯宿で起きた、停電の夜の殺人。証拠をあつめ、証言の矛盾をつきつけろ。脚本・トリック・人物、ぜんぶAIの書き下ろし推理劇。",
+      "tags": ["ミステリー", "ADV", "書き下ろし", "尋問"],
+      "date": "2026-07-02",
+      "status": "experiment",
+      "path": "games/kirisame/",
+      "thumb": "thumbs/kirisame.png"
+    },
+    {
       "slug": "racer",
       "no": 6,
       "title": "はしって、よけて。",

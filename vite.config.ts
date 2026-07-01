@@ -19,6 +19,7 @@ export default defineConfig({
         loop5: resolve(__dirname, 'games/loop5/index.html'),
         spacelab: resolve(__dirname, 'games/spacelab/index.html'),
         racer: resolve(__dirname, 'games/racer/index.html'),
+        kirisame: resolve(__dirname, 'games/kirisame/index.html'),
       },
     },
   },
