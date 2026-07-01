@@ -5,7 +5,7 @@
 // Cursor*10 系の時間ループに学ぶ。絵・名前は自作。
 import { attachPointer, fitCanvas, safeBottom } from '../../shared/input'
 import { Particles, makeShake, clamp, lerp, easeOutBack, approach } from '../../shared/juice'
-import { LAB, hexA } from '../../shared/theme'
+import { LAB, hexA, darken } from '../../shared/theme'
 import { drawHowToCard } from '../../shared/shell'
 import { enterTransition, wireLink } from '../../shared/transition'
 import { isMuted, mountMuteButton, configureMixedSession, onMuteChange } from '../../shared/audio'
@@ -121,17 +121,21 @@ const SFX = {
 const P = tune.panel(
   'loop5',
   {
-    LOOP: { v: 5, min: 3, max: 8, step: 0.5, group: 'ルール', label: 'ループ秒数', desc: '1周の長さ（秒）。長いほど一人で多く集められる。' },
-    ORBS: { v: 16, min: 6, max: 30, step: 1, group: 'ルール', label: '養分の数', desc: '集める養分の総数。多いほど周回が必要。' },
+    LOOP: { v: 5, min: 3, max: 8, step: 0.5, group: 'ルール', label: 'ループ秒数', desc: '1周の長さ（秒）。' },
+    BALLS: { v: 2, min: 1, max: 5, step: 1, group: 'ルール', label: '重い球の数', desc: '中央ゴールへ押し込む球の数。多いほど周回が必要。' },
+    WEIGHT: { v: 2, min: 2, max: 4, step: 1, group: 'ルール', label: '球の重さ', desc: '同時に押すのに必要な身体の数。' },
     SPEED: { v: 235, min: 120, max: 360, step: 5, group: '操作', label: '移動速度', desc: '細胞の移動スピード。' },
     DRAG_MAXR: { v: 70, min: 40, max: 120, step: 2, group: '操作', label: '反応距離', desc: '指をこの距離引くと最高速。' },
   },
-  { version: 1 },
+  { version: 2 },
 )
 
 // ── 型・状態 ──
-// need=必要タッチ数（硬い養分は2）。by=この周に触れたアクターID集合（同じ人は1回まで）
-type Orb = { x: number; y: number; got: boolean; need: number; hits: number; by: Set<number> }
+// 重い球：weight 人の身体で同時に押すと動く。ゴール（中央）へ入れる。sx,sy=初期位置
+type Ball = { x: number; y: number; vx: number; vy: number; r: number; weight: number; inGoal: boolean; sx: number; sy: number; push: number }
+const GOAL_R = 46 // 中央ゴールの半径
+const PUSH_ACCEL = 1500 // 押す加速度
+const BALL_FRICTION = 0.87
 type Sample = { t: number; x: number; y: number }
 type Mode = 'title' | 'play' | 'win' | 'rewind'
 let mode: Mode = 'title'
@@ -141,7 +145,7 @@ let winScale = 0
 const REWIND_DUR = 0.75 // 巻き戻し演出の長さ（秒）
 let rewindT = 0
 
-let orbs: Orb[] = []
+let balls: Ball[] = []
 let ghosts: Sample[][] = [] // 過去ループの記録
 let gcur: number[] = [] // 各幽霊の再生カーソル
 let rec: Sample[] = [] // 今ループの記録
@@ -161,14 +165,15 @@ let anchorY = 0
 const DRAG_DEAD = 5
 
 function newLayout() {
-  // 養分をシャーレ内にランダム配置
-  orbs = []
-  const n = Math.round(P.ORBS)
+  // 重い球を外周寄りにランダム配置（ゴールから離す）
+  balls = []
+  const n = Math.round(P.BALLS)
   for (let i = 0; i < n; i++) {
-    const a = Math.random() * Math.PI * 2
-    const r = Math.sqrt(Math.random()) * dishR * 0.84
-    const hard = Math.random() < 0.35 // 約1/3は“硬い養分”＝2体の協力が要る
-    orbs.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, got: false, need: hard ? 2 : 1, hits: 0, by: new Set() })
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.6
+    const r = dishR * (0.55 + Math.random() * 0.28)
+    const x = cx + Math.cos(a) * r
+    const y = cy + Math.sin(a) * r
+    balls.push({ x, y, vx: 0, vy: 0, r: 16, weight: Math.round(P.WEIGHT), inGoal: false, sx: x, sy: y, push: 0 })
   }
   ghosts = []
   loopNum = 1
@@ -176,10 +181,13 @@ function newLayout() {
 }
 
 function startLoop() {
-  for (const o of orbs) {
-    o.got = false
-    o.hits = 0
-    o.by.clear()
+  for (const b of balls) {
+    b.x = b.sx
+    b.y = b.sy
+    b.vx = 0
+    b.vy = 0
+    b.inGoal = false
+    b.push = 0
   }
   rec = []
   gcur = ghosts.map(() => 0)
@@ -214,24 +222,49 @@ function clampToDish(p: { x: number; y: number }) {
   }
 }
 
-function tryCollect(x: number, y: number, id: number) {
-  for (const o of orbs) {
-    if (o.got || o.by.has(id)) continue // 同じアクターは1回まで
-    if (Math.hypot(o.x - x, o.y - y) < 20) {
-      o.by.add(id)
-      o.hits++
-      if (o.hits >= o.need) {
-        o.got = true
-        collected++
-        fx.burst(o.x, o.y, o.need > 1 ? 12 : 8, C.amber, 180)
-        SFX.collect()
-      } else {
-        // 硬い養分にヒビ（あと1人）
-        fx.burst(o.x, o.y, 5, C.amber, 110)
-        blip(420, 0.05, 'square', 0.04, 520)
+// 重い球を押す：接触アクターが weight 人以上なら、合力の向きへ動く
+function pushBalls(actors: { x: number; y: number }[]) {
+  let inGoal = 0
+  for (const b of balls) {
+    if (b.inGoal) {
+      inGoal++
+      b.push = 0
+      continue
+    }
+    let px = 0
+    let py = 0
+    let np = 0
+    for (const a of actors) {
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const d = Math.hypot(dx, dy)
+      if (d < b.r + 13 && d > 0.1) {
+        np++
+        px += dx / d
+        py += dy / d
       }
     }
+    b.push = np
+    if (np >= b.weight) {
+      const pd = Math.hypot(px, py) || 1
+      b.vx += (px / pd) * PUSH_ACCEL * (1 / 60)
+      b.vy += (py / pd) * PUSH_ACCEL * (1 / 60)
+    }
+    b.vx *= BALL_FRICTION
+    b.vy *= BALL_FRICTION
+    b.x += b.vx * (1 / 60)
+    b.y += b.vy * (1 / 60)
+    clampToDish(b)
+    if (Math.hypot(cx - b.x, cy - b.y) < GOAL_R - 4) {
+      b.inGoal = true
+      inGoal++
+      b.vx = b.vy = 0
+      fx.burst(b.x, b.y, 16, C.amber, 220)
+      shake.add(6)
+      SFX.collect()
+    }
   }
+  collected = inGoal
 }
 
 function update(dt: number) {
@@ -295,17 +328,18 @@ function update(dt: number) {
   // 記録（今ループの自分の軌跡）
   rec.push({ t: loopTime, x: you.x, y: you.y })
 
-  // 幽霊（過去の自分）を同時再生＋回収
+  // 全アクター（幽霊＝過去の自分＋今の自分）を集めて、重い球を押す
+  const actors: { x: number; y: number }[] = []
   for (let k = 0; k < ghosts.length; k++) {
     const g = ghostPosAt(ghosts[k], loopTime, gcur[k])
     gcur[k] = g.ci
-    tryCollect(g.x, g.y, k)
+    actors.push({ x: g.x, y: g.y })
   }
-  // 自分の回収（自分のID = -1）
-  tryCollect(you.x, you.y, -1)
+  actors.push({ x: you.x, y: you.y })
+  pushBalls(actors)
 
-  // 全部集めた＝クリア
-  if (collected >= orbs.length) {
+  // 全部ゴール＝クリア
+  if (collected >= balls.length) {
     mode = 'win'
     winScale = 0
     shake.add(10)
@@ -409,41 +443,56 @@ function cellShape(x: number, y: number, r: number, fill: string, edge: string, 
   }
 }
 
-function drawOrbs() {
-  for (const o of orbs) {
-    if (o.got) continue
-    const hard = o.need > 1
-    const cracked = o.hits > 0
-    const pr = (hard ? 7 : 5) + Math.sin(time * 5 + o.x) * 0.8
-    // グロー
-    ctx.globalAlpha = 0.35
+function drawGoal() {
+  // 中央ゴール（ここへ球を押し込む）
+  ctx.save()
+  ctx.setLineDash([6, 6])
+  ctx.strokeStyle = hexA(C.ghost, 0.55)
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.arc(cx, cy, GOAL_R, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.fillStyle = hexA(C.ghost, 0.08)
+  ctx.beginPath()
+  ctx.arc(cx, cy, GOAL_R, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+}
+
+function drawBalls() {
+  for (const b of balls) {
+    const pushing = b.push >= b.weight && !b.inGoal
+    // グロー（押せている時は強く）
+    ctx.globalAlpha = b.inGoal ? 0.2 : pushing ? 0.5 : 0.28
     ctx.fillStyle = C.amber
     ctx.beginPath()
-    ctx.arc(o.x, o.y, pr + 3, 0, Math.PI * 2)
+    ctx.arc(b.x, b.y, b.r + (pushing ? 6 : 3), 0, Math.PI * 2)
     ctx.fill()
     ctx.globalAlpha = 1
-    // 本体（硬い養分はヒビ前は中空リング、ヒビ後は満ちる）
-    if (hard && !cracked) {
-      ctx.strokeStyle = C.amber
-      ctx.lineWidth = 3
-      ctx.beginPath()
-      ctx.arc(o.x, o.y, pr, 0, Math.PI * 2)
-      ctx.stroke()
-      // 「2」＝2体必要のサイン
-      ctx.fillStyle = C.amber
-      ctx.font = `800 10px ${FONT}`
-      ctx.textAlign = 'center'
-      ctx.fillText('2', o.x, o.y + 3.5)
-    } else {
-      ctx.fillStyle = C.amber
-      ctx.beginPath()
-      ctx.arc(o.x, o.y, pr, 0, Math.PI * 2)
-      ctx.fill()
-      if (hard) {
-        // ヒビ済み＝あと1人で取れる合図（白フチ）
-        ctx.strokeStyle = '#fff'
-        ctx.lineWidth = 1.5
-        ctx.stroke()
+    // 本体
+    ctx.fillStyle = b.inGoal ? hexA(C.amber, 0.4) : hexA(C.amber, 0.85)
+    ctx.beginPath()
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = darken(C.amber, 0.6)
+    ctx.lineWidth = 2
+    ctx.stroke()
+    // 必要人数「×W」
+    ctx.fillStyle = '#fff'
+    ctx.font = `800 13px ${FONT}`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(b.inGoal ? '✓' : '×' + b.weight, b.x, b.y)
+    ctx.textBaseline = 'alphabetic'
+    // 押している人数のドット
+    if (!b.inGoal && b.push > 0) {
+      for (let i = 0; i < b.push; i++) {
+        const a = -Math.PI / 2 + (i - (b.push - 1) / 2) * 0.4
+        ctx.fillStyle = pushing ? C.ghost : C.muted
+        ctx.beginPath()
+        ctx.arc(b.x + Math.cos(a) * (b.r + 10), b.y + Math.sin(a) * (b.r + 10), 2.5, 0, Math.PI * 2)
+        ctx.fill()
       }
     }
   }
@@ -453,15 +502,19 @@ function drawOrbs() {
 function drawRewindScene() {
   const rt = clamp(rewindT / REWIND_DUR, 0, 1) // 1→0
   const revT = P.LOOP * rt // 時刻を LOOP→0 へ
-  // 養分が戻ってくる（だんだん実体化）
-  ctx.globalAlpha = 0.4 + (1 - rt) * 0.6
-  for (const o of orbs) {
-    ctx.fillStyle = C.amber
+  drawGoal()
+  // 球が初期位置へ戻る（rt: 1→0 でスタートへ補間）
+  for (const b of balls) {
+    const bx = lerp(b.sx, b.x, rt)
+    const by = lerp(b.sy, b.y, rt)
+    ctx.fillStyle = hexA(C.amber, 0.85)
     ctx.beginPath()
-    ctx.arc(o.x, o.y, o.need > 1 ? 6 : 5, 0, Math.PI * 2)
+    ctx.arc(bx, by, b.r, 0, Math.PI * 2)
     ctx.fill()
+    ctx.strokeStyle = darken(C.amber, 0.6)
+    ctx.lineWidth = 2
+    ctx.stroke()
   }
-  ctx.globalAlpha = 1
   // 全アクター（今終えた自分＝最後の幽霊 も含む）を逆時刻で描く＝スタートへ収束
   for (let k = 0; k < ghosts.length; k++) {
     const g = ghostPosAt(ghosts[k], revT, 0)
@@ -543,7 +596,7 @@ function drawHUD() {
   ctx.textAlign = 'right'
   ctx.fillStyle = C.amber
   ctx.font = `800 16px ${FONT}`
-  ctx.fillText(`${collected} / ${orbs.length}`, W - 14, 36)
+  ctx.fillText(`ゴール ${collected} / ${balls.length}`, W - 14, 36)
   // 幽霊の数
   ctx.textAlign = 'left'
   ctx.fillStyle = C.muted
@@ -570,7 +623,7 @@ function drawBanner() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: '5秒、くりかえし。',
-    lines: ['5秒で養分を集める（指で動く）', '5秒ごとに“過去の自分”が幽霊で再生', '「2」の養分は2体で。協力で全部集めろ'],
+    lines: ['重い球を中央ゴールへ押し込む（指で動く）', '「×2」は2体で同時に押さないと動かない', '5秒ごとに“過去の自分”が幽霊で再生。協力せよ'],
     start: 'タップでスタート',
     footer: bestLoops > 0 ? `best: ${bestLoops}周でクリア` : undefined,
     accent: C.amber,
@@ -633,8 +686,9 @@ function frame(now: number) {
   if (mode === 'rewind') {
     drawRewindScene()
   } else if (mode !== 'title') {
-    drawCountdown() // 中央の大きな残り秒数（オーブの背面）
-    drawOrbs()
+    drawCountdown() // 中央の大きな残り秒数（背面）
+    drawGoal()
+    drawBalls()
     drawActors()
     fx.draw(ctx)
     drawHUD()
@@ -669,26 +723,36 @@ function setupShot() {
   layoutField()
   mode = 'play'
   newLayout()
-  loopNum = 4
-  // 幽霊を数体それっぽく配置（静止軌跡）
-  ghosts = []
-  for (let k = 0; k < 3; k++) {
-    const path: Sample[] = []
-    const a0 = Math.random() * Math.PI * 2
-    for (let i = 0; i <= 10; i++) {
-      const a = a0 + i * 0.4
-      const r = dishR * 0.5 * (i / 10)
-      path.push({ t: (i / 10) * P.LOOP, x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r })
-    }
-    ghosts.push(path)
+  loopNum = 3
+  loopTime = P.LOOP * 0.4
+  // 1球はゴール済み（中央）、もう1球を今まさに“みんなで押している”構図
+  if (balls[0]) {
+    balls[0].inGoal = true
+    balls[0].x = cx
+    balls[0].y = cy
   }
-  gcur = ghosts.map(() => 0)
-  loopTime = P.LOOP * 0.5
-  // 半分くらい集めた状態に
-  orbs.forEach((o, i) => (o.got = i % 2 === 0))
-  collected = orbs.filter((o) => o.got).length
-  you.x = cx - 40
-  you.y = cy - 30
+  const b = balls[1] || balls[0]
+  if (b) {
+    b.inGoal = false
+    b.x = cx + 90
+    b.y = cy - 40
+    b.push = b.weight
+  }
+  // 押している幽霊＋自分を球の外側に配置
+  ghosts = []
+  gcur = []
+  if (b) {
+    for (let k = 0; k < 2; k++) {
+      const a = Math.PI * 0.15 + k * 0.5
+      const px = b.x + Math.cos(a) * (b.r + 12)
+      const py = b.y + Math.sin(a) * (b.r + 12)
+      ghosts.push([{ t: 0, x: px, y: py }, { t: P.LOOP, x: px, y: py }])
+    }
+    gcur = ghosts.map(() => 0)
+    you.x = b.x + Math.cos(Math.PI * 0.15 + 1.0) * (b.r + 12)
+    you.y = b.y + Math.sin(Math.PI * 0.15 + 1.0) * (b.r + 12)
+  }
+  collected = balls.filter((x) => x.inGoal).length
 }
 
 if (SHOT) {
