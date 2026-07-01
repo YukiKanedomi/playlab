@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "racer",
+      "no": 6,
+      "title": "はしって、よけて。",
+      "desc": "three.js＋Kenney(CC0)の低ポリ3Dで作ったエンドレス・ドライバー。指でハンドル、迫る車や木をよけて距離をのばす。3D初挑戦。",
+      "tags": ["3D", "three.js", "アセット", "Kenney/CC0"],
+      "date": "2026-07-01",
+      "status": "experiment",
+      "path": "games/racer/",
+      "thumb": "thumbs/racer.png"
+    },
+    {
       "slug": "spacelab",
       "no": 5,
       "title": "うって、よけて。",

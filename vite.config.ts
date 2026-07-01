@@ -5,6 +5,8 @@ import { resolve } from 'node:path'
 // データ取得は import.meta.env.BASE_URL 起点（絶対パス '/...' は404になる）。
 export default defineConfig({
   base: '/playlab/',
+  // GLBモデルをアセット(URL)として扱う（3Dゲーム用）
+  assetsInclude: ['**/*.glb'],
   build: {
     rollupOptions: {
       input: {
@@ -16,6 +18,7 @@ export default defineConfig({
         petri: resolve(__dirname, 'games/petri/index.html'),
         loop5: resolve(__dirname, 'games/loop5/index.html'),
         spacelab: resolve(__dirname, 'games/spacelab/index.html'),
+        racer: resolve(__dirname, 'games/racer/index.html'),
       },
     },
   },
