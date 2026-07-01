@@ -15,6 +15,7 @@ export default defineConfig({
         dj: resolve(__dirname, 'games/dj/index.html'),
         petri: resolve(__dirname, 'games/petri/index.html'),
         loop5: resolve(__dirname, 'games/loop5/index.html'),
+        spacelab: resolve(__dirname, 'games/spacelab/index.html'),
       },
     },
   },

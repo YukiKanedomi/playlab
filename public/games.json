@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "spacelab",
+      "no": 5,
+      "title": "うって、よけて。",
+      "desc": "フリー素材（Kenney/CC0）で作ったトップダウン・シューター。指で動かし自動で撃つ。アセット利用の実験。",
+      "tags": ["シューター", "アセット", "Kenney/CC0", "Canvas2D"],
+      "date": "2026-07-01",
+      "status": "experiment",
+      "path": "games/spacelab/",
+      "thumb": "thumbs/spacelab.png"
+    },
+    {
       "slug": "loop5",
       "no": 4,
       "title": "5秒、くりかえし。",
