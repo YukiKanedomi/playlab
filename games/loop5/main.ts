@@ -137,11 +137,12 @@ const P = tune.panel(
 
 // ── 型・状態 ──
 // 敵（固定編成・ゆっくり回転しながら中心へ）。弾で倒す。ang/rad0 は初期配置
-type Enemy = { x: number; y: number; ang: number; rad: number; rad0: number; ang0: number; r: number; hp: number; maxhp: number; alive: boolean; wob: number }
+// shield=盾持ち：一番近い撃ち手(sdir方向)からの弾を防ぐ→挟み撃ちが必要
+type Enemy = { x: number; y: number; ang: number; rad: number; rad0: number; ang0: number; r: number; hp: number; maxhp: number; alive: boolean; wob: number; shield: boolean; sdir: number }
 type Bullet = { x: number; y: number; vx: number; vy: number; life: number }
 const FIRE_INT = 0.3 // 射撃間隔（全シューター共通）
 const BULLET_SPD = 360
-const ENEMY_HP = 2
+const SHIELD_ARC = 2.5 // 盾が守る角度（ラジアン・約140°）
 type Sample = { t: number; x: number; y: number }
 type Mode = 'title' | 'play' | 'win' | 'rewind'
 let mode: Mode = 'title'
@@ -182,7 +183,9 @@ function newLayout() {
     const ring = i % rings
     const rad0 = dishR * (rings === 1 ? 0.7 : ring === 0 ? 0.55 : 0.85)
     const ang0 = (i / n) * Math.PI * 2 * rings + ring * 0.4
-    enemies.push({ x: 0, y: 0, ang: ang0, rad: rad0, rad0, ang0, r: 11, hp: ENEMY_HP, maxhp: ENEMY_HP, alive: true, wob: Math.random() * 9 })
+    const shield = Math.random() < 0.4 // 約4割は盾持ち＝挟み撃ちが必要
+    const hp = shield ? 2 : 2
+    enemies.push({ x: 0, y: 0, ang: ang0, rad: rad0, rad0, ang0, r: shield ? 13 : 11, hp, maxhp: hp, alive: true, wob: Math.random() * 9, shield, sdir: 0 })
   }
   ghosts = []
   loopNum = 1
@@ -322,7 +325,15 @@ function update(dt: number) {
   // 記録（今ループの自分の軌跡）
   rec.push({ t: loopTime, x: you.x, y: you.y })
 
-  // 敵：ゆっくり回転しながら中心へ寄る（毎ループ同じ動き）
+  // 全撃ち手の位置（今の自分＋過去の自分）。盾の向きと射撃に使う
+  const shooters: { x: number; y: number }[] = [{ x: you.x, y: you.y }]
+  for (let k = 0; k < ghosts.length; k++) {
+    const g = ghostPosAt(ghosts[k], loopTime, gcur[k])
+    gcur[k] = g.ci
+    shooters.push({ x: g.x, y: g.y })
+  }
+
+  // 敵：ゆっくり回転しながら中心へ。盾は“一番近い撃ち手”へ向く
   for (const e of enemies) {
     if (!e.alive) continue
     e.wob += dt * 5
@@ -330,9 +341,23 @@ function update(dt: number) {
     e.rad = Math.max(34, e.rad - 7 * dt)
     e.x = cx + Math.cos(e.ang) * e.rad
     e.y = cy + Math.sin(e.ang) * e.rad
+    if (e.shield) {
+      let nd = 1e9
+      let nx = 0
+      let ny = 0
+      for (const s of shooters) {
+        const d = (s.x - e.x) ** 2 + (s.y - e.y) ** 2
+        if (d < nd) {
+          nd = d
+          nx = s.x
+          ny = s.y
+        }
+      }
+      e.sdir = Math.atan2(ny - e.y, nx - e.x)
+    }
   }
 
-  // 射撃：今の自分＋過去の自分（幽霊）が最寄りの敵へ撃つ＝周回で自軍が育つ
+  // 射撃：各撃ち手が最寄りの敵へ（周回で自軍が育つ）
   youCool -= dt
   if (youCool <= 0) {
     if (fireFrom(you.x, you.y)) {
@@ -341,16 +366,15 @@ function update(dt: number) {
     } else youCool = 0.06
   }
   for (let k = 0; k < ghosts.length; k++) {
-    const g = ghostPosAt(ghosts[k], loopTime, gcur[k])
-    gcur[k] = g.ci
+    const s = shooters[k + 1]
     gCool[k] -= dt
     if (gCool[k] <= 0) {
-      if (fireFrom(g.x, g.y)) gCool[k] = FIRE_INT
+      if (fireFrom(s.x, s.y)) gCool[k] = FIRE_INT
       else gCool[k] = 0.06
     }
   }
 
-  // 弾：移動＋敵に命中
+  // 弾：移動＋敵に命中（盾は正面からの弾を防ぐ＝挟み撃ちで背後を撃つ）
   for (const b of bullets) {
     b.x += b.vx * dt
     b.y += b.vy * dt
@@ -358,6 +382,18 @@ function update(dt: number) {
     for (const e of enemies) {
       if (!e.alive) continue
       if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + 4) {
+        if (e.shield) {
+          const ba = Math.atan2(b.y - e.y, b.x - e.x) // 弾が来た方向
+          let diff = ba - e.sdir
+          while (diff > Math.PI) diff -= Math.PI * 2
+          while (diff < -Math.PI) diff += Math.PI * 2
+          if (Math.abs(diff) < SHIELD_ARC / 2) {
+            // 盾で防御＝ダメージ無し
+            b.life = 0
+            fx.burst(b.x, b.y, 3, C.muted, 70)
+            break
+          }
+        }
         e.hp--
         b.life = 0
         fx.burst(b.x, b.y, 3, C.ghost, 90)
@@ -477,27 +513,39 @@ function drawEnemies() {
   for (const e of enemies) {
     if (!e.alive) continue
     const edge = darken(C.danger, 0.7)
-    // トゲ付きの菌
-    ctx.strokeStyle = edge
-    ctx.lineWidth = 1.6
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + e.wob * 0.2
-      ctx.beginPath()
-      ctx.moveTo(e.x + Math.cos(a) * e.r * 0.95, e.y + Math.sin(a) * e.r * 0.95)
-      ctx.lineTo(e.x + Math.cos(a) * e.r * 1.35, e.y + Math.sin(a) * e.r * 1.35)
-      ctx.stroke()
+    if (!e.shield) {
+      // 普通の菌：トゲ付き
+      ctx.strokeStyle = edge
+      ctx.lineWidth = 1.6
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + e.wob * 0.2
+        ctx.beginPath()
+        ctx.moveTo(e.x + Math.cos(a) * e.r * 0.95, e.y + Math.sin(a) * e.r * 0.95)
+        ctx.lineTo(e.x + Math.cos(a) * e.r * 1.35, e.y + Math.sin(a) * e.r * 1.35)
+        ctx.stroke()
+      }
     }
+    // 本体
     ctx.fillStyle = hexA(C.danger, 0.22)
     ctx.beginPath()
     ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2)
     ctx.fill()
     ctx.strokeStyle = edge
+    ctx.lineWidth = 2
     ctx.stroke()
     if (e.hp < e.maxhp) {
       ctx.fillStyle = edge
       ctx.beginPath()
       ctx.arc(e.x, e.y, e.r * 0.3, 0, Math.PI * 2)
       ctx.fill()
+    }
+    // 盾（sdir 方向の厚い弧）＝この向きからは防がれる
+    if (e.shield) {
+      ctx.strokeStyle = darken('#3f7fa8', 0.5)
+      ctx.lineWidth = 4
+      ctx.beginPath()
+      ctx.arc(e.x, e.y, e.r + 4, e.sdir - SHIELD_ARC / 2, e.sdir + SHIELD_ARC / 2)
+      ctx.stroke()
     }
   }
 }
@@ -637,7 +685,7 @@ function drawBanner() {
 function drawTitle() {
   drawHowToCard(ctx, W, H, {
     title: '5秒、くりかえし。',
-    lines: ['敵を全滅させる。指で動くと自動で撃つ', '5秒ごとに“過去の自分”が幽霊で再生し一緒に撃つ', '自軍を積み上げ、何周で殲滅できる？'],
+    lines: ['敵を全滅（動くと自動で撃つ）', '盾つきは正面を防ぐ→過去の自分と挟み撃ち', 'おとりと仕留め役を計画。何周で殲滅？'],
     start: 'タップでスタート',
     footer: bestLoops > 0 ? `best: ${bestLoops}周でクリア` : undefined,
     accent: C.amber,
