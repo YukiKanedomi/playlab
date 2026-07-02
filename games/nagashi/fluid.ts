@@ -26,13 +26,16 @@ const FRAG_ADVECT = HEAD + `
 uniform sampler2D uVelocity;
 uniform sampler2D uSource;
 uniform sampler2D uMask;
+uniform sampler2D uDecay;
+uniform float uDecayK;
 uniform float uDt;
 uniform float uDissipation;
 void main() {
   vec2 vel = texture2D(uVelocity, vUv).xy;
   vec2 coord = vUv - uDt * vel * uTexel;
   vec4 result = texture2D(uSource, coord);
-  float decay = 1.0 + uDissipation * uDt;
+  float zone = texture2D(uDecay, vUv).r * uDecayK; // 減衰ゾーン（月光の帯など）
+  float decay = 1.0 + (uDissipation + zone) * uDt;
   float m = texture2D(uMask, vUv).r;
   gl_FragColor = (result / decay) * m;
 }`
@@ -149,6 +152,15 @@ void main() {
   gl_FragColor = vec4(clamp(dye, 0.0, 1.0), 1.0);
 }`
 
+// 速度プローブ用：速度を ±uVelRange で 0..1 に正規化して出す（水脈パーティクルの移流用）
+const FRAG_VPROBE = HEAD + `
+uniform sampler2D uVelocity;
+uniform float uVelRange;
+void main() {
+  vec2 v = texture2D(uVelocity, vUv).xy;
+  gl_FragColor = vec4(v / (2.0 * uVelRange) + 0.5, 0.0, 1.0);
+}`
+
 function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
   const s = gl.createShader(type)!
   gl.shaderSource(s, src)
@@ -203,14 +215,19 @@ export class FluidSim {
   private pGrad!: Program
   private pDisplay!: Program
   private pProbe!: Program
+  private pVProbe!: Program
   private velocity!: DoubleFBO
   private dye!: DoubleFBO
   private pressure!: DoubleFBO
   private divergence!: FBO
   private curlFbo!: FBO
   private maskTex!: WebGLTexture
+  private decayTex!: WebGLTexture
   private probeFbo!: FBO
   private probeBuf!: Uint8Array
+  private vprobeFbo!: FBO
+  private vprobeBuf!: Uint8Array
+  private readonly VEL_RANGE = 400 // 速度プローブの正規化レンジ（texel/秒）
   simW = 0
   simH = 0
   dyeW = 0
@@ -273,6 +290,7 @@ export class FluidSim {
     this.pGrad = new Program(gl, this.vs, FRAG_GRADIENT)
     this.pDisplay = new Program(gl, this.vs, FRAG_DISPLAY)
     this.pProbe = new Program(gl, this.vs, FRAG_PROBE)
+    this.pVProbe = new Program(gl, this.vs, FRAG_VPROBE)
     this.allocate()
   }
 
@@ -302,9 +320,14 @@ export class FluidSim {
     this.curlFbo = this.fbo(this.simW, this.simH, r, rFmt, this.halfFloat, false)
     this.probeFbo = this.fbo(this.probeW, this.probeH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, false)
     this.probeBuf = new Uint8Array(this.probeW * this.probeH * 4)
+    this.vprobeFbo = this.fbo(this.probeW, this.probeH, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, false)
+    this.vprobeBuf = new Uint8Array(this.probeW * this.probeH * 4)
     // 障害物マスク（1=水, 0=岩）。既定は全面水。
     this.maskTex = gl.createTexture()!
     this.setObstacleMask(null)
+    // 減衰ゾーン（0=通常, 1=強く蒸発）。既定はなし。
+    this.decayTex = gl.createTexture()!
+    this.setDecayZones(null)
   }
 
   private tex(w: number, h: number, ifmt: number, fmt: number, type: number, linear: boolean): WebGLTexture {
@@ -365,6 +388,42 @@ export class FluidSim {
       }
     }
     gl.bindTexture(gl.TEXTURE_2D, this.maskTex)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    const ifmt = this.isGL2 ? (gl as WebGL2RenderingContext).R8 : gl.LUMINANCE
+    const fmt = this.isGL2 ? (gl as WebGL2RenderingContext).RED : gl.LUMINANCE
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, gl.UNSIGNED_BYTE, data)
+  }
+
+  /** 減衰ゾーン（月光の帯など）。rects は正規化座標(0..1, y下向き)。null で無効化 */
+  setDecayZones(shapes: { rects?: { x: number; y: number; w: number; h: number }[]; circles?: { x: number; y: number; r: number }[] } | null) {
+    const gl = this.gl
+    const w = this.simW
+    const h = this.simH
+    const data = new Uint8Array(w * h) // 0=通常
+    if (shapes) {
+      const aspect = w / h
+      for (let j = 0; j < h; j++) {
+        for (let i = 0; i < w; i++) {
+          const x = (i + 0.5) / w
+          const y = 1 - (j + 0.5) / h
+          let v = 0
+          for (const rc of shapes.rects || []) {
+            if (x >= rc.x && x <= rc.x + rc.w && y >= rc.y && y <= rc.y + rc.h) { v = 255; break }
+          }
+          if (!v) for (const c of shapes.circles || []) {
+            const dx = (x - c.x) * aspect
+            const dy = y - c.y
+            if (dx * dx + dy * dy < c.r * c.r * aspect * aspect) { v = 255; break }
+          }
+          data[j * w + i] = v
+        }
+      }
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.decayTex)
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
     const ifmt = this.isGL2 ? (gl as WebGL2RenderingContext).R8 : gl.LUMINANCE
     const fmt = this.isGL2 ? (gl as WebGL2RenderingContext).RED : gl.LUMINANCE
@@ -438,13 +497,15 @@ export class FluidSim {
     gl.disable(gl.BLEND)
     const texel: [number, number] = [1 / this.simW, 1 / this.simH]
 
-    // 速度の移流
+    // 速度の移流（減衰ゾーンは染料のみに効かせる＝K0）
     let u = this.use(this.pAdvect)
     this.bind(this.velocity.write)
     gl.uniform2f(u.uTexel, texel[0], texel[1])
     this.setTex(u.uVelocity, this.velocity.read.tex, 0)
     this.setTex(u.uSource, this.velocity.read.tex, 0)
     this.setTex(u.uMask, this.maskTex, 1)
+    this.setTex(u.uDecay, this.decayTex, 2)
+    gl.uniform1f(u.uDecayK, 0)
     gl.uniform1f(u.uDt, dt)
     gl.uniform1f(u.uDissipation, this.opts.velDissipation)
     this.drawQuad()
@@ -494,13 +555,15 @@ export class FluidSim {
     this.drawQuad()
     this.velocity.swap()
 
-    // 染料の移流
+    // 染料の移流（減衰ゾーン有効）
     u = this.use(this.pAdvect)
     this.bind(this.dye.write)
     gl.uniform2f(u.uTexel, texel[0], texel[1]) // 速度サンプル基準（速度場texel）
     this.setTex(u.uVelocity, this.velocity.read.tex, 0)
     this.setTex(u.uSource, this.dye.read.tex, 1)
     this.setTex(u.uMask, this.maskTex, 2)
+    this.setTex(u.uDecay, this.decayTex, 3)
+    gl.uniform1f(u.uDecayK, 3.5)
     gl.uniform1f(u.uDt, dt)
     gl.uniform1f(u.uDissipation, this.opts.dyeDissipation)
     this.drawQuad()
@@ -518,6 +581,31 @@ export class FluidSim {
     gl.readPixels(0, 0, this.probeW, this.probeH, gl.RGBA, gl.UNSIGNED_BYTE, this.probeBuf)
     return this.probeBuf
   }
+  /** 速度場を低解像度で読み戻す（水脈パーティクルの移流用）。毎フレームでなく数フレームに1回でよい */
+  readVelProbe(): void {
+    const gl = this.gl
+    const u = this.use(this.pVProbe)
+    this.bind(this.vprobeFbo)
+    gl.uniform2f(u.uTexel, 1 / this.simW, 1 / this.simH)
+    this.setTex(u.uVelocity, this.velocity.read.tex, 0)
+    gl.uniform1f(u.uVelRange, this.VEL_RANGE)
+    this.drawQuad()
+    gl.readPixels(0, 0, this.probeW, this.probeH, gl.RGBA, gl.UNSIGNED_BYTE, this.vprobeBuf)
+  }
+  /**
+   * 画面座標(0..1, y下向き)の流速を返す（直近の readVelProbe の結果から）。
+   * 戻り値は「画面全体を1とした割合/秒」相当：pos += vel * dt でそのまま移流できる。
+   */
+  velAt(x: number, y: number): [number, number] {
+    const px = Math.max(0, Math.min(this.probeW - 1, Math.floor(x * this.probeW)))
+    const py = Math.max(0, Math.min(this.probeH - 1, Math.floor((1 - y) * this.probeH)))
+    const i = (py * this.probeW + px) * 4
+    const vx = (this.vprobeBuf[i] / 255 - 0.5) * 2 * this.VEL_RANGE
+    const vy = (this.vprobeBuf[i + 1] / 255 - 0.5) * 2 * this.VEL_RANGE
+    // 速度は texel/秒 単位 → 画面割合/秒 へ（y は画面座標に合わせ反転）
+    return [vx / this.simW, -vy / this.simH]
+  }
+
   /** 画面座標(0..1, y下向き)の染料RGBを 0..1 で返す（直近の readProbe の結果から） */
   probeAt(x: number, y: number): [number, number, number] {
     const px = Math.max(0, Math.min(this.probeW - 1, Math.floor(x * this.probeW)))
