@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>ばけ札 — Playlab</title>
+    <link rel="icon" type="image/svg+xml" href="/playlab/icon.svg" />
+    <link rel="apple-touch-icon" href="/playlab/apple-touch-icon.png" />
+    <link rel="manifest" href="/playlab/manifest.webmanifest" />
+    <meta name="theme-color" content="#16233a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; overflow: hidden; background: #16233a; }
+      body {
+        font-family: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", serif;
+        color: #efe8dc;
+        touch-action: manipulation;
+        -webkit-user-select: none; user-select: none;
+        overscroll-behavior: none;
+      }
+
+      #stage {
+        position: fixed; inset: 0; overflow: hidden;
+        background: #16233a;
+      }
+
+      /* Double copper border frame */
+      #stage::before {
+        content: ""; position: absolute; inset: 12px; z-index: 90;
+        border: 1px solid rgba(184,115,51,.5); pointer-events: none;
+      }
+      #stage::after {
+        content: ""; position: absolute; inset: 16px; z-index: 90;
+        border: 1px solid rgba(184,115,51,.22); pointer-events: none;
+      }
+
+      /* ── Screen containers ────────────────────────────────── */
+      .screen {
+        position: absolute; inset: 0; display: none;
+        flex-direction: column; overflow: hidden;
+      }
+      .screen.active { display: flex; }
+
+      /* ── Title screen ─────────────────────────────────────── */
+      #scr-title {
+        align-items: center; justify-content: center; gap: 0;
+        padding: max(28px, env(safe-area-inset-top)) 28px max(24px, env(safe-area-inset-bottom));
+      }
+      .title-main {
+        writing-mode: vertical-rl;
+        font-size: clamp(44px, 12vw, 72px);
+        letter-spacing: 0.28em;
+        color: #efe8dc;
+        border-right: 1px solid rgba(184,115,51,.5);
+        padding-right: 18px;
+        height: 4.2em;
+        text-shadow: 0 0 40px rgba(184,115,51,.12);
+      }
+      .title-sub {
+        font-size: 13px; letter-spacing: 0.38em; color: #b87333;
+        margin-top: 14px; text-align: center;
+      }
+      .title-sep {
+        width: 80px; height: 1px; background: rgba(184,115,51,.4);
+        margin: 18px auto;
+      }
+      .title-stats {
+        text-align: center; font-size: 12px; color: #7f8a9d; letter-spacing: 0.18em;
+        margin-bottom: 6px;
+      }
+      .title-stats b { color: #e0a35e; font-family: Georgia, serif; }
+      .title-unlock {
+        font-size: 11px; color: #7f8a9d; letter-spacing: 0.1em;
+        text-align: center; margin-bottom: 20px; min-height: 1.4em;
+      }
+      .title-menu { display: flex; flex-direction: column; gap: 10px; width: min(72vw, 260px); }
+      .title-menu button {
+        font-family: inherit; font-size: 14px; letter-spacing: 0.3em; padding: 14px;
+        background: rgba(239,232,220,.04); color: #efe8dc;
+        border: 1px solid rgba(184,115,51,.55); border-radius: 2px;
+      }
+      .title-menu button:active { background: rgba(224,163,94,.15); }
+      .title-menu .btn-primary {
+        background: #e0a35e; color: #16233a; border-color: #b87333;
+        font-weight: 700;
+      }
+      .title-menu .btn-primary:active { background: #c88a42; }
+
+      /* ── Night screen ─────────────────────────────────────── */
+      #scr-night {
+        padding: max(8px, env(safe-area-inset-top)) 0
+                 max(8px, env(safe-area-inset-bottom));
+      }
+
+      .night-header {
+        display: flex; justify-content: space-between; align-items: baseline;
+        /* Extra left padding keeps the night label clear of the fixed ← lab button */
+        padding: 20px 28px 6px 64px;
+      }
+      .night-round {
+        font-size: 12px; letter-spacing: 0.36em; color: #b87333;
+      }
+      .night-target b {
+        font-size: 26px; font-family: Georgia, serif; color: #e0a35e; font-weight: 600;
+      }
+      .night-target span {
+        font-size: 10px; color: #7f8a9d; letter-spacing: 0.18em; margin-left: 4px;
+      }
+
+      /* Copper gauge */
+      .gauge-wrap { margin: 0 28px 4px; }
+      .gauge-bar {
+        height: 6px; border: 1px solid rgba(184,115,51,.6);
+        position: relative; overflow: hidden;
+      }
+      .gauge-fill {
+        position: absolute; inset: 1px; right: auto;
+        background: linear-gradient(90deg, #b87333, #e0a35e);
+        width: 0%; transition: width 0.4s cubic-bezier(.2,1,.4,1);
+        min-width: 0;
+      }
+      .gauge-text {
+        position: absolute; right: 0; top: 8px;
+        font-size: 9.5px; color: #7f8a9d; letter-spacing: 0.12em;
+        font-family: Georgia, serif;
+      }
+
+      /* Boss announcement */
+      .boss-bar {
+        margin: 10px 28px 0;
+        padding: 6px 10px;
+        border: 1px solid rgba(224,163,94,.3);
+        font-size: 11px; letter-spacing: 0.12em; color: #c8b898;
+        text-align: center; min-height: 30px;
+      }
+      .boss-bar.has-boss { border-color: rgba(184,69,46,.5); color: #e0a35e; }
+      .boss-bar.next-boss { border-color: rgba(184,115,51,.25); }
+
+      /* Score/play area */
+      .play-area {
+        flex: 1; display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        padding: 4px 20px; min-height: 0;
+        position: relative;
+      }
+      .play-cards-row {
+        display: flex; gap: 6px; justify-content: center;
+        margin-bottom: 8px; min-height: 72px;
+        align-items: flex-end;
+      }
+      .play-card-mini {
+        width: 44px; height: 66px;
+        background: linear-gradient(170deg, #f4efe4, #ded5c2);
+        border: 1px solid #b87333; border-radius: 2px;
+        position: relative; overflow: hidden;
+        animation: cardFlip 0.18s ease-out;
+      }
+      @keyframes cardFlip {
+        0% { opacity: 0; transform: scale(0.7) translateY(10px); }
+        100% { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      .play-card-mini.lit {
+        outline: 2px solid #e0a35e; outline-offset: 1px;
+        box-shadow: 0 0 12px rgba(224,163,94,.4);
+      }
+
+      .score-display { text-align: center; }
+      .role-stamp {
+        font-size: 20px; letter-spacing: 0.5em; color: #efe8dc;
+        padding-left: 0.5em;
+        opacity: 0;
+      }
+      .role-stamp.show {
+        animation: stampIn 0.15s cubic-bezier(.2,1.6,.4,1) forwards;
+      }
+      @keyframes stampIn {
+        0% { opacity: 0; transform: scale(1.8); }
+        100% { opacity: 1; transform: scale(1); }
+      }
+      .role-stamp::before, .role-stamp::after {
+        content: "—"; color: #b87333; margin: 0 8px;
+      }
+      .score-calc {
+        font-size: 13px; color: #7f8a9d; font-family: Georgia, serif; margin-top: 6px;
+      }
+      .score-total {
+        font-size: 42px; color: #e0a35e; font-family: Georgia, serif;
+        font-weight: 500; opacity: 0;
+        display: inline-block;
+      }
+      .score-total.show {
+        animation: scorePop 0.35s cubic-bezier(.2,1.4,.4,1) forwards;
+      }
+      @keyframes scorePop {
+        0% { opacity: 0; transform: scale(0.5) translateY(12px); }
+        70% { transform: scale(1.08) translateY(-4px); }
+        100% { opacity: 1; transform: scale(1) translateY(0); }
+      }
+      .multi-flash {
+        position: absolute; inset: 0; background: rgba(239,232,220,0.05);
+        pointer-events: none; opacity: 0;
+      }
+      .multi-flash.flash { animation: screenFlash 0.4s ease-out; }
+      @keyframes screenFlash {
+        0% { opacity: 1; } 100% { opacity: 0; }
+      }
+      .gauge-shake { animation: gaugeShake 0.25s ease-in-out; }
+      @keyframes gaugeShake {
+        0%,100% { transform: translateX(0); }
+        25% { transform: translateX(-3px); }
+        75% { transform: translateX(3px); }
+      }
+
+      /* Hand */
+      .hand-wrap {
+        padding: 0 14px 8px;
+        display: flex; justify-content: center;
+      }
+      .hand-row {
+        display: flex; gap: 5px; justify-content: center;
+      }
+      .card-btn {
+        width: 42px; height: 63px;
+        background: linear-gradient(170deg, #f4efe4, #ded5c2);
+        border: 1px solid #b87333; border-radius: 2px;
+        position: relative; overflow: hidden;
+        padding: 0; cursor: pointer;
+        transition: transform 0.12s ease, outline 0.08s;
+        touch-action: manipulation;
+      }
+      .card-btn:active { transform: scale(0.94); }
+      .card-btn.selected {
+        transform: translateY(-10px);
+        outline: 2px solid #e0a35e; outline-offset: 2px;
+        box-shadow: 0 8px 16px rgba(0,0,0,.4);
+      }
+      .card-btn.dimmed { opacity: 0.45; }
+
+      /* Bake-fuda chips */
+      .bake-row {
+        display: flex; gap: 8px; justify-content: center;
+        padding: 6px 20px 8px;
+      }
+      .bake-chip {
+        width: 56px; height: 56px; border-radius: 50%;
+        border: 1px solid rgba(184,115,51,.65);
+        background: rgba(239,232,220,.04);
+        display: flex; flex-direction: column;
+        align-items: center; justify-content: center;
+        position: relative; cursor: pointer;
+        touch-action: manipulation;
+      }
+      .bake-chip::before {
+        content: ""; position: absolute; inset: 4px;
+        border-radius: 50%; border: 1px dotted rgba(184,115,51,.35);
+      }
+      .bake-chip.empty {
+        border-color: rgba(184,115,51,.2); opacity: 0.4;
+      }
+      .bake-chip b { font-size: 16px; color: #e0a35e; font-weight: 600; line-height: 1; }
+      .bake-chip span { font-size: 7.5px; color: #9aa5b5; letter-spacing: 0.04em; margin-top: 2px; }
+      .bake-chip.bounce { animation: chipBounce 0.3s cubic-bezier(.2,1.6,.4,1); }
+      @keyframes chipBounce {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.32) translateY(-4px); }
+        100% { transform: scale(1); }
+      }
+      .bake-chip .bake-pop {
+        position: absolute; top: -20px; left: 50%;
+        transform: translateX(-50%);
+        font-size: 10px; color: #e0a35e; font-family: Georgia, serif;
+        white-space: nowrap; pointer-events: none;
+        animation: popUp 0.6s ease-out forwards;
+      }
+      @keyframes popUp {
+        0% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        100% { opacity: 0; transform: translateX(-50%) translateY(-16px); }
+      }
+
+      /* Footer buttons */
+      .night-footer {
+        display: flex; gap: 12px; padding: 0 28px 6px;
+        justify-content: center;
+      }
+      .btn-play {
+        font-family: inherit; font-size: 14px; letter-spacing: 0.36em;
+        padding: 13px 32px;
+        background: #e0a35e; color: #16233a;
+        border: none; font-weight: 700; border-radius: 2px;
+      }
+      .btn-play:active { background: #c88a42; }
+      .btn-play:disabled { background: rgba(224,163,94,.3); color: rgba(22,35,58,.6); pointer-events: none; }
+      .btn-disc {
+        font-family: inherit; font-size: 14px; letter-spacing: 0.36em;
+        padding: 13px 28px;
+        color: #c9bfae; border: 1px solid rgba(184,115,51,.6);
+        background: none; border-radius: 2px;
+      }
+      .btn-disc:active { background: rgba(184,115,51,.12); }
+      .btn-disc:disabled { opacity: 0.35; pointer-events: none; }
+
+      /* Status bar */
+      .night-status {
+        text-align: center; font-size: 9.5px; color: #7f8a9d;
+        letter-spacing: 0.28em; font-family: Georgia, serif;
+        padding-bottom: 4px;
+      }
+
+      /* ── Shop screen ──────────────────────────────────────── */
+      #scr-shop {
+        padding: max(20px, env(safe-area-inset-top)) 0
+                 max(20px, env(safe-area-inset-bottom));
+        overflow-y: auto;
+      }
+      .shop-header {
+        text-align: center; padding: 0 28px 12px;
+        border-bottom: 1px solid rgba(184,115,51,.3);
+        margin-bottom: 16px;
+      }
+      .shop-title {
+        font-size: 13px; letter-spacing: 0.44em; color: #b87333; margin-bottom: 6px;
+      }
+      .shop-wallet {
+        font-size: 22px; font-family: Georgia, serif; color: #e0a35e;
+        font-weight: 600;
+      }
+      .shop-wallet span { font-size: 11px; color: #7f8a9d; letter-spacing: 0.14em; margin-left: 4px; }
+      .shop-subtitle {
+        font-size: 11px; color: #7f8a9d; letter-spacing: 0.16em; margin-top: 4px;
+      }
+
+      .shop-section-label {
+        font-size: 10px; color: #b87333; letter-spacing: 0.34em;
+        padding: 0 28px 8px;
+      }
+      .shop-offer-row {
+        display: flex; gap: 10px; padding: 0 20px 16px;
+        justify-content: center;
+      }
+      .bake-offer {
+        flex: 1; max-width: 110px;
+        border: 1px solid rgba(184,115,51,.5);
+        border-radius: 2px; padding: 12px 8px;
+        text-align: center; background: rgba(239,232,220,.03);
+        position: relative; cursor: pointer;
+        touch-action: manipulation;
+      }
+      .bake-offer:active { background: rgba(184,115,51,.1); }
+      .bake-offer.selected-offer { border-color: #e0a35e; background: rgba(224,163,94,.08); }
+      .bake-offer.sold-out { opacity: 0.35; pointer-events: none; }
+      .bake-offer .offer-name {
+        font-size: 13px; color: #efe8dc; margin-bottom: 6px; letter-spacing: 0.06em;
+      }
+      .bake-offer .offer-price {
+        font-size: 16px; font-family: Georgia, serif; color: #e0a35e; font-weight: 600;
+      }
+      .bake-offer .offer-price span { font-size: 10px; color: #7f8a9d; }
+      .bake-offer .offer-desc {
+        font-size: 9.5px; color: #9aa5b5; letter-spacing: 0.06em;
+        line-height: 1.5; margin-top: 6px;
+      }
+
+      .shop-owned-row {
+        display: flex; gap: 8px; padding: 0 20px 12px;
+        flex-wrap: wrap; justify-content: center;
+      }
+      .bake-owned {
+        border: 1px solid rgba(184,115,51,.4);
+        border-radius: 2px; padding: 6px 10px;
+        text-align: center; min-width: 70px;
+        position: relative; cursor: pointer;
+        touch-action: manipulation;
+      }
+      .bake-owned .own-name { font-size: 12px; color: #c8b898; }
+      .bake-owned .own-sell {
+        font-size: 9.5px; color: #7f8a9d; letter-spacing: 0.08em; margin-top: 3px;
+      }
+      .bake-owned:active { background: rgba(184,115,51,.08); }
+      .bake-owned.sell-confirm { border-color: #b8452e; }
+
+      .shop-actions {
+        display: flex; gap: 10px; padding: 0 20px 10px;
+        justify-content: center;
+      }
+      .shop-actions button {
+        font-family: inherit; font-size: 13px; letter-spacing: 0.24em;
+        padding: 11px 20px; border-radius: 2px;
+      }
+      .btn-reload {
+        color: #c9bfae; border: 1px solid rgba(184,115,51,.5); background: none;
+      }
+      .btn-reload:disabled { opacity: 0.3; pointer-events: none; }
+      .btn-proceed {
+        background: #e0a35e; color: #16233a; font-weight: 700;
+        border: none; flex: 1; max-width: 160px;
+      }
+      .btn-proceed:active { background: #c88a42; }
+
+      /* ── Result screen ────────────────────────────────────── */
+      #scr-result {
+        align-items: center; justify-content: center; gap: 0;
+        padding: max(28px, env(safe-area-inset-top)) 28px max(28px, env(safe-area-inset-bottom));
+        background: rgba(16,26,44,.8);
+      }
+      .result-label {
+        font-size: 11px; letter-spacing: 0.4em; color: #b87333; margin-bottom: 8px;
+      }
+      .result-night {
+        font-size: 64px; font-family: Georgia, serif; color: #e0a35e;
+        font-weight: 500; line-height: 1;
+      }
+      .result-night-sub {
+        font-size: 12px; letter-spacing: 0.28em; color: #7f8a9d; margin-bottom: 24px;
+      }
+      .result-sep {
+        width: 60px; height: 1px; background: rgba(184,115,51,.4);
+        margin: 16px 0;
+      }
+      .result-row {
+        font-size: 13px; letter-spacing: 0.14em; color: #c8b898;
+        text-align: center; margin-bottom: 6px;
+      }
+      .result-row b { color: #e0a35e; font-family: Georgia, serif; }
+      .result-unlock {
+        font-size: 11.5px; color: #b87333; letter-spacing: 0.12em;
+        text-align: center; min-height: 1.6em; margin-bottom: 12px;
+      }
+      .result-record {
+        font-size: 11px; color: #7f8a9d; letter-spacing: 0.18em; margin-bottom: 24px;
+      }
+      .result-record b { color: #efe8dc; font-family: Georgia, serif; }
+      .result-btn {
+        font-family: inherit; font-size: 14px; letter-spacing: 0.28em;
+        padding: 13px 36px; border: 1px solid rgba(184,115,51,.55);
+        color: #efe8dc; background: none; border-radius: 2px;
+      }
+      .result-btn:active { background: rgba(184,115,51,.12); }
+
+      /* ── Toast ────────────────────────────────────────────── */
+      #toast {
+        position: absolute; left: 50%; top: 16%;
+        transform: translate(-50%, -6px);
+        z-index: 80; background: #1a2b45; color: #efe8dc;
+        border-left: 3px solid #e0a35e;
+        padding: 9px 14px; font-size: 12.5px; letter-spacing: 0.06em;
+        border-radius: 1px; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+        opacity: 0; transition: opacity 0.22s, transform 0.22s;
+        pointer-events: none; max-width: 82vw; white-space: nowrap;
+      }
+      #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+      /* Back link */
+      .back-link {
+        position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px;
+        z-index: 95; color: rgba(184,115,51,.65); text-decoration: none;
+        font-size: 11px; letter-spacing: 0.08em;
+        padding: 7px 10px; border: 1px solid rgba(184,115,51,.3);
+        border-radius: 2px; background: rgba(16,26,44,.5);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+
+      <!-- Title screen -->
+      <div id="scr-title" class="screen">
+        <div class="title-main">ばけ札</div>
+        <div class="title-sub">ならべて、ばける。</div>
+        <div class="title-sep"></div>
+        <div class="title-stats" id="title-stats">
+          最深夜 <b id="stat-record">—</b> &nbsp;|&nbsp; 妖貨 <b id="stat-yokka">0</b>
+        </div>
+        <div class="title-unlock" id="title-unlock"></div>
+        <div class="title-menu">
+          <button class="btn-primary" id="btn-start">ラン開始</button>
+        </div>
+      </div>
+
+      <!-- Night screen -->
+      <div id="scr-night" class="screen">
+        <div class="night-header">
+          <div class="night-round" id="night-round">第一夜</div>
+          <div class="night-target">
+            <b id="target-pts">—</b><span id="target-suffix">文 GO</span>
+          </div>
+        </div>
+        <div class="gauge-wrap">
+          <div class="gauge-bar" id="gauge-bar">
+            <div class="gauge-fill" id="gauge-fill"></div>
+            <div class="gauge-text" id="gauge-text">0 / 80</div>
+          </div>
+        </div>
+        <div class="boss-bar" id="boss-bar"></div>
+
+        <div class="play-area">
+          <div class="multi-flash" id="multi-flash"></div>
+          <div class="play-cards-row" id="play-cards-row"></div>
+          <div class="score-display">
+            <div class="role-stamp" id="role-stamp"></div>
+            <div class="score-calc" id="score-calc"></div>
+            <span class="score-total" id="score-total"></span>
+          </div>
+        </div>
+
+        <div class="hand-wrap">
+          <div class="hand-row" id="hand-row"></div>
+        </div>
+
+        <div class="bake-row" id="bake-row"></div>
+
+        <div class="night-footer">
+          <button class="btn-play" id="btn-play">出 ス</button>
+          <button class="btn-disc" id="btn-disc">流 ス</button>
+        </div>
+        <div class="night-status" id="night-status">PLAYS 4 · DISCARDS 3 · DECK 40</div>
+      </div>
+
+      <!-- Shop screen -->
+      <div id="scr-shop" class="screen">
+        <div class="shop-header">
+          <div class="shop-title">茶 屋</div>
+          <div class="shop-wallet">
+            <span id="shop-wallet-val">0</span><span>文貨</span>
+          </div>
+          <div class="shop-subtitle" id="shop-subtitle">購入・売却・リロール</div>
+        </div>
+        <div class="shop-section-label">— 品揃え —</div>
+        <div class="shop-offer-row" id="shop-offer-row"></div>
+        <div class="shop-actions">
+          <button class="btn-reload" id="btn-reload">リロール (1文)</button>
+          <button class="btn-proceed" id="btn-proceed">次ノ夜へ</button>
+        </div>
+        <div class="shop-section-label" id="owned-label" style="margin-top:8px;">— 所持化け札 —</div>
+        <div class="shop-owned-row" id="shop-owned-row"></div>
+      </div>
+
+      <!-- Result screen -->
+      <div id="scr-result" class="screen">
+        <div class="result-label">到達夜</div>
+        <div class="result-night" id="result-night">—</div>
+        <div class="result-night-sub" id="result-night-sub">夜</div>
+        <div class="result-sep"></div>
+        <div class="result-row">獲得妖貨 <b id="result-yokka">0</b></div>
+        <div class="result-unlock" id="result-unlock"></div>
+        <div class="result-sep"></div>
+        <div class="result-record" id="result-record">最深記録 <b>—</b></div>
+        <button class="result-btn" id="btn-result-back">タイトルへ</button>
+      </div>
+
+      <div id="toast"></div>
+    </div>
+    <a class="back-link" href="../../">← lab</a>
+    <script type="module" src="./main.ts"></script>
+    <script>
+      if ('serviceWorker' in navigator)
+        navigator.serviceWorker.register('/playlab/sw.js').catch(() => {})
+    </script>
+  </body>
+</html>

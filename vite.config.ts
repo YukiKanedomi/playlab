@@ -22,6 +22,7 @@ export default defineConfig({
         kirisame: resolve(__dirname, 'games/kirisame/index.html'),
         fude: resolve(__dirname, 'games/fude/index.html'),
         nagashi: resolve(__dirname, 'games/nagashi/index.html'),
+        bakefuda: resolve(__dirname, 'games/bakefuda/index.html'),
       },
     },
   },

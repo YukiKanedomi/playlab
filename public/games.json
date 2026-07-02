@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "bakefuda",
+      "no": 10,
+      "title": "ならべて、ばける。",
+      "desc": "花札×ローグライト。手札から役をならべ、妖怪の化け札で倍率を化けさせる。夜ごとの親分の触れを読み、文をインフレさせろ。",
+      "tags": ["ローグライト","カード","花札","DOM"],
+      "date": "2026-07-03",
+      "status": "experiment",
+      "path": "games/bakefuda/",
+      "thumb": "thumbs/bakefuda.png"
+    },
+    {
       "slug": "nagashi",
       "no": 9,
       "title": "ながして、ともす。",
