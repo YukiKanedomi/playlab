@@ -17,13 +17,15 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
+      - run: npx tsc --noEmit -p .
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -32,6 +34,8 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # Pages側のキュー詰まり（2026-07-02の障害）で延々待たないための保険
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
