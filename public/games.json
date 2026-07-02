@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "nagashi",
+      "no": 9,
+      "title": "ながして、ともす。",
+      "desc": "触れられるのは水だけ。指で流れを起こし、光る墨を灯籠へ導く GPU流体パズル。赤と青がまざれば紫。",
+      "tags": ["流体", "WebGL", "パズル", "シェーダー"],
+      "date": "2026-07-02",
+      "status": "experiment",
+      "path": "games/nagashi/",
+      "thumb": "thumbs/nagashi.png"
+    },
+    {
       "slug": "fude",
       "no": 8,
       "title": "かいて、はらう。",

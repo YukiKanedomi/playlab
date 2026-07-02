@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>流灯 — Playlab</title>
+    <link rel="icon" type="image/svg+xml" href="/playlab/icon.svg" />
+    <link rel="apple-touch-icon" href="/playlab/apple-touch-icon.png" />
+    <link rel="manifest" href="/playlab/manifest.webmanifest" />
+    <meta name="theme-color" content="#0d1020" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; overflow: hidden; background: #0d1020; }
+      body { touch-action: none; -webkit-user-select: none; user-select: none; overscroll-behavior: none; }
+      #fluid {
+        display: block;
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100dvh;
+      }
+      #game {
+        display: block;
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100dvh;
+        touch-action: none;
+      }
+      .back {
+        position: fixed;
+        top: max(10px, env(safe-area-inset-top));
+        left: 12px;
+        z-index: 30;
+        color: #cdd3e0;
+        text-decoration: none;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+        padding: 7px 11px;
+        border: 1px solid rgba(205, 211, 224, 0.3);
+        border-radius: 4px;
+        background: rgba(13, 16, 32, 0.55);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="fluid"></canvas>
+    <canvas id="game"></canvas>
+    <a class="back" href="../../">← lab</a>
+    <script type="module" src="./main.ts"></script>
+    <script>
+      if ('serviceWorker' in navigator)
+        navigator.serviceWorker.register('/playlab/sw.js').catch(() => {})
+    </script>
+  </body>
+</html>

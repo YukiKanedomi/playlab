@@ -21,6 +21,7 @@ export default defineConfig({
         racer: resolve(__dirname, 'games/racer/index.html'),
         kirisame: resolve(__dirname, 'games/kirisame/index.html'),
         fude: resolve(__dirname, 'games/fude/index.html'),
+        nagashi: resolve(__dirname, 'games/nagashi/index.html'),
       },
     },
   },
