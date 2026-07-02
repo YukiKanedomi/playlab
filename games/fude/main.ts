@@ -8,6 +8,7 @@ import { isMuted, mountMuteButton, configureMixedSession } from '../../shared/au
 import * as tune from '../../shared/tune'
 import { isPanelOpen } from '../../shared/tune'
 import { SUMI, dot, drawFrog, drawRabbit, drawMonkey, drawBoar, drawBird, drawFox, drawNamazu } from './gika'
+import { makePaper, makeLandscape, Splats } from './sumi'
 
 const canvas = document.getElementById('game') as HTMLCanvasElement
 const ctx = canvas.getContext('2d')!
@@ -85,10 +86,21 @@ function buildPath() {
 }
 const pathAt = (prog: number) => path[clamp(Math.floor(prog / 6), 0, path.length - 1)]
 
+// ── オフスクリーンキャッシュ（紙・山水） ──
+let paperCache: HTMLCanvasElement | null = null
+let landscapeCache: HTMLCanvasElement | null = null
+let landscachedMaki = -1
+let titleLandscapeCache: HTMLCanvasElement | null = null
+
 fitCanvas(canvas, (w, h) => {
   W = w
   H = h
   buildPath()
+  // リサイズ時にキャッシュを破棄（次のフレームで再生成）
+  paperCache = null
+  landscapeCache = null
+  landscachedMaki = -1
+  titleLandscapeCache = null
 })
 if (SHOT) {
   const w = Number(Q.get('w') || 390)
@@ -162,6 +174,25 @@ const SFX = {
   drop() { pluck(PENTA[6], 0.07) },
 }
 
+
+function getPaper(): HTMLCanvasElement {
+  if (!paperCache) paperCache = makePaper(W, H)
+  return paperCache
+}
+function getLandscape(): HTMLCanvasElement {
+  if (!landscapeCache || landscachedMaki !== makiIdx) {
+    landscapeCache = makeLandscape(W, H, makiIdx)
+    landscachedMaki = makiIdx
+  }
+  return landscapeCache
+}
+
+// 飛沫・染み
+const splats = new Splats()
+
+// 被弾ビネット
+let vignetteT = 0 // 0.9秒でフェード
+
 // ── 型 ──
 type EType = 'frog' | 'rabbit' | 'monkey' | 'boar' | 'bird' | 'fox' | 'namazu'
 type Enemy = {
@@ -184,7 +215,8 @@ type Enemy = {
   tired: number // 鯰
   dead: boolean
 }
-type Stroke = { pts: { x: number; y: number; w: number }[]; hp: number; maxHp: number; kind: 'wall' | 'residue' }
+type StrokePt = { x: number; y: number; w: number; spd: number }
+type Stroke = { pts: StrokePt[]; hp: number; maxHp: number; kind: 'wall' | 'residue' }
 type Drop = { x: number; y: number; t: number; value: number; state: 'ground' | 'fly' | 'stolen' }
 type Popup = { x: number; y: number; text: string; t: number; big: boolean }
 type Note = { text: string; t: number }
@@ -208,8 +240,43 @@ const NOTES: Record<EType, string> = {
   namazu: '主・鯰。地揺れがすべての壁を割る',
 }
 
+// ── 画技（ローグライク層） ──
+const GAKI: { id: string; name: string; kanji: string; desc: string }[] = [
+  { id: 'noboku',     name: '濃墨',     kanji: '濃', desc: '斬りの威力+40%。ただし墨の消費+15%' },
+  { id: 'tanboku',   name: '淡墨',     kanji: '淡', desc: '筆の墨消費が2割減る' },
+  { id: 'kaeshi',    name: '返し墨',   kanji: '返', desc: '斬りのあとに残る墨壁の耐久が2倍' },
+  { id: 'shibuki',   name: '飛沫',     kanji: '沫', desc: '獣を払うと周囲に墨が飛び散り追撃する' },
+  { id: 'shingan',   name: '心眼',     kanji: '眼', desc: '筆を走らせる間、時がさらにゆっくりになる' },
+  { id: 'hayase',    name: '早瀬',     kanji: '瀬', desc: '墨の回復が35%はやくなる' },
+  { id: 'shugo',     name: '朱護',     kanji: '護', desc: '汚れた印をひとつ、その場で清める' },
+  { id: 'daien',     name: '大円',     kanji: '円', desc: '丸の破裂の威力+50%' },
+  { id: 'fuujin',    name: '風神',     kanji: '風', desc: '渦の風が強くなり、押し戻しと気絶が延びる' },
+  { id: 'sumidamari',name: '墨溜まり', kanji: '溜', desc: '墨の最大量+30' },
+]
+let taken: Record<string, number> = {}
+
+// 効果値ヘルパー
+function effInkMax() { return P.INK_MAX + 30 * (taken.sumidamari || 0) }
+function effSlashDmg() { return P.SLASH_DMG * (1 + 0.4 * (taken.noboku || 0)) }
+function effCircleDmg() { return P.CIRCLE_DMG * (1 + 0.5 * (taken.daien || 0)) }
+function effInkRegen() { return P.INK_REGEN * (1 + 0.35 * (taken.hayase || 0)) }
+function effSlowmo() { return clamp(P.SLOWMO * Math.pow(0.7, taken.shingan || 0), 0.10, 1) }
+function effStrokeCost(len: number) {
+  const base = (len * P.COST100) / 100
+  const nob = 1 + 0.15 * (taken.noboku || 0)
+  const tan = Math.pow(0.8, taken.tanboku || 0)
+  return base * nob * tan
+}
+function effWallHpMul() { return Math.pow(2, taken.kaeshi || 0) }
+function effFuujinPush() { return 95 * (1 + 0.8 * (taken.fuujin || 0)) }
+function effFuujinStun() { return 0.8 + 0.5 * (taken.fuujin || 0) }
+
+// ドラフト状態
+let draftCards: typeof GAKI = []
+let draftPendingNextWave = false // ドラフト後に nextWave を呼ぶフラグ
+
 // ── 状態 ──
-type Mode = 'title' | 'play' | 'over'
+type Mode = 'title' | 'play' | 'over' | 'draft'
 let mode: Mode = 'title'
 let ink = 100
 let seal = 3
@@ -308,17 +375,23 @@ function spawn(type: EType) {
 
 function startGame() {
   mode = 'play'
-  ink = P.INK_MAX
+  ink = effInkMax()
   seal = 3
   makiIdx = 0
   waveIdx = 0
   waveNum = 0
+  taken = {}
   enemies = []
   strokes = []
   drops = []
   popups = []
   notes = []
   seen = new Set()
+  vignetteT = 0
+  draftPendingNextWave = false
+  // 景色キャッシュをリセット（新しいゲームではmaki=0に戻る）
+  landscapeCache = null
+  landscachedMaki = -1
   nextWave()
 }
 function nextWave() {
@@ -340,14 +413,58 @@ function waveCleared() {
   stampT = 1
   SFX.stamp()
   shake.add(6)
+
+  let makiAdvanced = false
   if (makiIdx < MAKI.length && waveIdx >= MAKI[makiIdx].waves.length) {
     makiIdx++
     waveIdx = 0
     if (seal < 3) seal++
-    ink = P.INK_MAX
+    ink = effInkMax()
+    makiAdvanced = true
+    // 景色キャッシュを無効化（maki が進んだ）
+    landscapeCache = null
+    landscachedMaki = -1
   }
-  setTimeout(() => { if (mode === 'play') nextWave() }, 1100)
+
+  // ドラフト発生判定
+  const inEndless = makiIdx >= MAKI.length
+  const endlessWaveNum = waveNum - 9
+  const triggerDraft = makiAdvanced || (inEndless && endlessWaveNum > 0 && (endlessWaveNum % 3 === 0))
+
+  if (triggerDraft) {
+    // ドラフトモード突入（setTimeout での nextWave を抑止）
+    draftPendingNextWave = true
+    setTimeout(() => {
+      if (mode === 'play' && draftPendingNextWave) {
+        // ドラフトに切り替え
+        openDraft()
+      }
+    }, 1100)
+  } else {
+    setTimeout(() => { if (mode === 'play') nextWave() }, 1100)
+  }
+
   waveDone = true // 二重進行ガード
+}
+
+function openDraft() {
+  // 候補3枚をランダム抽選（重複なし、shugoは seal>=3 なら除外）
+  const pool = GAKI.filter((g) => !(g.id === 'shugo' && seal >= 3))
+  const shuffled = pool.slice().sort(() => Math.random() - 0.5)
+  draftCards = shuffled.slice(0, 3)
+  mode = 'draft'
+}
+
+function pickDraft(idx: number) {
+  if (idx < 0 || idx >= draftCards.length) return
+  const g = draftCards[idx]
+  taken[g.id] = (taken[g.id] || 0) + 1
+  // shugo: 即座に印を清める
+  if (g.id === 'shugo') seal = Math.min(3, seal + 1)
+  SFX.stamp()
+  draftPendingNextWave = false
+  mode = 'play'
+  nextWave()
 }
 function gameOver() {
   mode = 'over'
@@ -378,11 +495,11 @@ function polyContains(poly: { x: number; y: number }[], x: number, y: number) {
 
 // ── 筆（ジェスチャー） ──
 let drawing = false
-let curPts: { x: number; y: number; w: number }[] = []
+let curPts: StrokePt[] = []
 let curLen = 0
 let lastBrushSfx = 0
 
-function strokeCost(len: number) { return (len * P.COST100) / 100 }
+function strokeCost(len: number) { return effStrokeCost(len) }
 
 function classifyAndFire() {
   const pts = curPts
@@ -417,7 +534,7 @@ function classifyAndFire() {
   else fireWall(pts, 0.7) // ぐにゃ線＝弱い壁
 }
 
-function hitEnemy(e: Enemy, dmg: number, kind: 'slash' | 'circle' | 'dot') {
+function hitEnemy(e: Enemy, dmg: number, kind: 'slash' | 'circle' | 'dot', fromShibuki = false) {
   let mul = 1
   if (e.type === 'boar' && e.flip <= 0 && kind !== 'circle') mul = 0.25
   if (e.type === 'boar' && e.flip > 0) mul = 2
@@ -431,6 +548,18 @@ function hitEnemy(e: Enemy, dmg: number, kind: 'slash' | 'circle' | 'dot') {
       if (e.carry) drops.push({ x: e.x, y: e.y - 8, t: 0, value: 5, state: 'ground' })
     }
     parts.burst(e.x, e.y - 8, 14, 'rgba(47,42,38,0.85)', 190, 80)
+    // 墨飛沫の討伐エフェクト
+    splats.burst(e.x, e.y - 8, Math.atan2(-1, (Math.random() - 0.5) * 2))
+    // 飛沫（shibuki）画技：近くの他の敵にダメージ
+    if (!fromShibuki && (taken.shibuki || 0) > 0) {
+      const shibukiDmg = 4 * (taken.shibuki || 0)
+      for (const other of enemies) {
+        if (other === e || other.dead) continue
+        if (Math.hypot(other.x - e.x, other.y - e.y) < 60) {
+          hitEnemy(other, shibukiDmg, 'dot', true)
+        }
+      }
+    }
     return true
   }
   return false
@@ -440,12 +569,12 @@ function comboPopup(kills: number, x: number, y: number) {
   if (kills < 2) return
   const words = ['', '', '一刀両断', '三獣一筆', '四獣掃討', '百鬼一閃']
   popups.push({ x, y, text: words[clamp(kills, 2, 5)], t: 1.6, big: true })
-  ink = clamp(ink + kills * 2, 0, P.INK_MAX)
+  ink = clamp(ink + kills * 2, 0, effInkMax())
   hitstop = 0.09
   shake.add(5)
 }
 
-function fireSlash(pts: { x: number; y: number; w: number }[]) {
+function fireSlash(pts: StrokePt[]) {
   let kills = 0
   let cx = 0
   let cy = 0
@@ -460,7 +589,7 @@ function fireSlash(pts: { x: number; y: number; w: number }[]) {
       hits++
       cx += e.x
       cy += e.y
-      if (hitEnemy(e, P.SLASH_DMG, 'slash')) {
+      if (hitEnemy(e, effSlashDmg(), 'slash')) {
         kills++
         SFX.kill(kills)
       }
@@ -468,14 +597,14 @@ function fireSlash(pts: { x: number; y: number; w: number }[]) {
   }
   SFX.slash()
   if (kills >= 2) comboPopup(kills, cx / hits, cy / hits - 30)
-  // 残り墨は薄壁として残る
-  addStroke(pts, 0.4, 'residue')
+  // 残り墨は薄壁として残る（返し墨で耐久2倍）
+  addStroke(pts, 0.4 * effWallHpMul(), 'residue')
 }
-function fireWall(pts: { x: number; y: number; w: number }[], mul = 1) {
+function fireWall(pts: StrokePt[], mul = 1) {
   addStroke(pts, mul, 'wall')
   SFX.wall()
 }
-function addStroke(pts: { x: number; y: number; w: number }[], hpMul: number, kind: 'wall' | 'residue') {
+function addStroke(pts: StrokePt[], hpMul: number, kind: 'wall' | 'residue') {
   strokes.push({ pts, hp: P.WALL_HP * hpMul, maxHp: P.WALL_HP * hpMul, kind })
   if (strokes.length > 9) strokes.shift()
 }
@@ -497,14 +626,14 @@ function fireCircle(pts: { x: number; y: number; w: number }[]) {
     }
     if (e.ghost) { e.hp = 0; e.dead = true; parts.burst(e.x, e.y - 8, 10, 'rgba(47,42,38,0.5)', 150, 30); continue }
     if (e.carry) { e.carry = false; drops.push({ x: e.x, y: e.y, t: 0, value: 5, state: 'ground' }) }
-    if (hitEnemy(e, P.CIRCLE_DMG, 'circle')) { kills++; SFX.kill(kills + 1) }
+    if (hitEnemy(e, effCircleDmg(), 'circle')) { kills++; SFX.kill(kills + 1) }
   }
   SFX.circle()
   burstFx = { pts: pts.map((p) => ({ x: p.x, y: p.y })), t: 0.35 }
   if (kills >= 2) comboPopup(kills, cx, cy - 30)
 }
 function fireDot(x: number, y: number) {
-  ink = clamp(ink - 3, 0, P.INK_MAX)
+  ink = clamp(ink - 3, 0, effInkMax())
   let kills = 0
   for (const e of enemies) {
     if (e.dead) continue
@@ -523,8 +652,8 @@ function fireSpiral(pts: { x: number; y: number; w: number }[]) {
     if (e.dead) continue
     if (Math.hypot(e.x - cx, e.y - cy) < 150) {
       if (e.type === 'bird') e.y = Math.max(-20, e.y - 90)
-      else e.prog = Math.max(0, e.prog - 95)
-      e.stun = Math.max(e.stun, 0.8)
+      else e.prog = Math.max(0, e.prog - effFuujinPush())
+      e.stun = Math.max(e.stun, effFuujinStun())
       parts.burst(e.x, e.y - 8, 6, 'rgba(120,130,150,0.5)', 160, 20)
     }
   }
@@ -612,6 +741,7 @@ function smudgeSeal(e: Enemy) {
   seal--
   shake.add(12)
   SFX.smudge()
+  vignetteT = 0.9 // 朱ビネット発動
   popups.push({ x: sealX, y: sealY - 40, text: '印、汚れる…', t: 1.6, big: false })
   if (seal <= 0) gameOver()
 }
@@ -625,9 +755,19 @@ function frame(now: number) {
   if (isPanelOpen()) { draw(); ptrh.endFrame(); return }
 
   if (mode === 'play' && !SHOT) update(dt)
-  else if (mode !== 'play' && ptr.justPressed) {
+  else if (mode === 'draft' && ptr.justPressed && !SHOT) {
     ensureAudio()
-    if (mode === 'title' || mode === 'over') startGame()
+    // カードのタップ判定（描画と同じ矩形を使う）
+    for (let ci = 0; ci < draftCards.length; ci++) {
+      const r = draftCardRect(ci)
+      if (ptr.x >= r.x && ptr.x <= r.x + r.w && ptr.y >= r.y && ptr.y <= r.y + r.h) {
+        pickDraft(ci)
+        break
+      }
+    }
+  } else if (ptr.justPressed && (mode === 'title' || mode === 'over')) {
+    ensureAudio()
+    startGame()
   }
   draw()
   ptrh.endFrame()
@@ -635,7 +775,7 @@ function frame(now: number) {
 
 function update(dt: number) {
   if (hitstop > 0) { hitstop -= dt; dt *= 0.12 }
-  const ts = drawing ? P.SLOWMO : 1
+  const ts = drawing ? effSlowmo() : 1
   const gdt = dt * ts
 
   // 筆の入力
@@ -643,7 +783,7 @@ function update(dt: number) {
     ensureAudio()
     if (ink > 3) {
       drawing = true
-      curPts = [{ x: ptr.x, y: ptr.y, w: 5 }]
+      curPts = [{ x: ptr.x, y: ptr.y, w: 5, spd: 0 }]
       curLen = 0
     }
   }
@@ -653,7 +793,7 @@ function update(dt: number) {
     if (d > 4) {
       const spd = d / Math.max(dt, 0.001)
       const w = clamp(11 - spd * 0.006, 3.5, 11) // ゆっくり＝太い
-      curPts.push({ x: ptr.x, y: ptr.y, w: lerp(l.w, w, 0.3) })
+      curPts.push({ x: ptr.x, y: ptr.y, w: lerp(l.w, w, 0.3), spd })
       curLen += d
       if (curLen - lastBrushSfx > 34) { SFX.brushTick(spd); lastBrushSfx = curLen }
       if (strokeCost(curLen) >= ink) commitStroke() // 墨切れで強制筆離れ
@@ -662,7 +802,7 @@ function update(dt: number) {
   if (drawing && !ptr.down) commitStroke()
 
   // 墨
-  ink = clamp(ink + P.INK_REGEN * gdt, 0, P.INK_MAX)
+  ink = clamp(ink + effInkRegen() * gdt, 0, effInkMax())
 
   // 湧き
   for (const q of spawnQ) q.delay -= gdt
@@ -685,7 +825,7 @@ function update(dt: number) {
       dr.x = lerp(dr.x, 60, 1 - Math.pow(0.001, gdt))
       dr.y = lerp(dr.y, 56, 1 - Math.pow(0.001, gdt))
       if (Math.hypot(dr.x - 60, dr.y - 56) < 12) {
-        ink = clamp(ink + dr.value, 0, P.INK_MAX)
+        ink = clamp(ink + dr.value, 0, effInkMax())
         SFX.drop()
         dr.state = 'stolen' // 消費済み扱い
         dr.t = 99
@@ -696,6 +836,8 @@ function update(dt: number) {
 
   // 演出
   parts.update(dt)
+  splats.update(dt)
+  vignetteT = Math.max(0, vignetteT - dt)
   for (const p of popups) p.t -= dt
   popups = popups.filter((p) => p.t > 0)
   for (const n of notes) n.t -= dt
@@ -712,25 +854,80 @@ function update(dt: number) {
 function commitStroke() {
   drawing = false
   lastBrushSfx = 0
-  ink = clamp(ink - strokeCost(curLen), 0, P.INK_MAX)
+  ink = clamp(ink - strokeCost(curLen), 0, effInkMax())
   classifyAndFire()
   curPts = []
   curLen = 0
 }
 
 // ── 描画 ──
-function drawInkLine(pts: { x: number; y: number; w: number }[], alpha: number) {
+/**
+ * 墨線の3層描画（にじみハロー・本線・かすれ）。
+ * kind: 'wall' なら常時ハローあり。drawing=true の描き途中はハロー強め。
+ */
+function drawInkLine(pts: StrokePt[], alpha: number, kind?: 'wall' | 'residue', isDrawing = false) {
+  if (pts.length < 2) return
+  const n = pts.length
   ctx.strokeStyle = SUMI
   ctx.lineCap = 'round'
   ctx.lineJoin = 'round'
-  for (let i = 1; i < pts.length; i++) {
-    ctx.globalAlpha = alpha
-    ctx.lineWidth = pts[i].w
+
+  // (a) にじみハロー（下敷き）
+  const haloAlpha = (kind === 'wall' || isDrawing) ? (isDrawing ? 0.16 : 0.10) : 0.08
+  ctx.globalAlpha = haloAlpha * alpha
+  for (let i = 1; i < n; i++) {
+    ctx.lineWidth = pts[i].w * 2.2
     ctx.beginPath()
     ctx.moveTo(pts[i - 1].x, pts[i - 1].y)
     ctx.lineTo(pts[i].x, pts[i].y)
     ctx.stroke()
   }
+
+  // (b) 本線 + 入り抜きテーパー
+  for (let i = 1; i < n; i++) {
+    // 入り抜き：最初2・最後2のセグメントを細くする
+    let taper = 1
+    if (i <= 2) taper = lerp(0.45, 1.0, (i - 1) / 2)
+    else if (i >= n - 2) taper = lerp(1.0, 0.45, (i - (n - 2)) / 2)
+    const lineA = alpha
+    ctx.globalAlpha = lineA
+    ctx.lineWidth = pts[i].w * taper
+
+    // (c) かすれ（spd > 900 のセグメントは alpha 55%・割れ線付き）
+    const seg = pts[i]
+    const prev = pts[i - 1]
+    const isKasure = (seg.spd || 0) > 900
+    if (isKasure) {
+      ctx.globalAlpha = alpha * 0.55
+      ctx.lineWidth = pts[i].w * taper
+    } else {
+      ctx.globalAlpha = alpha
+    }
+    ctx.beginPath()
+    ctx.moveTo(prev.x, prev.y)
+    ctx.lineTo(seg.x, seg.y)
+    ctx.stroke()
+
+    // かすれの割れ線（法線方向に±w*0.4 ずらした細線2本）
+    if (isKasure) {
+      const dx = seg.x - prev.x
+      const dy = seg.y - prev.y
+      const len = Math.hypot(dx, dy) || 1
+      const nx = -dy / len
+      const ny = dx / len
+      const off = pts[i].w * 0.4
+      const thin = pts[i].w * 0.35
+      ctx.lineWidth = thin
+      ctx.globalAlpha = alpha * 0.40
+      for (const sign of [1, -1]) {
+        ctx.beginPath()
+        ctx.moveTo(prev.x + nx * off * sign, prev.y + ny * off * sign)
+        ctx.lineTo(seg.x + nx * off * sign, seg.y + ny * off * sign)
+        ctx.stroke()
+      }
+    }
+  }
+
   ctx.globalAlpha = 1
 }
 
@@ -783,9 +980,11 @@ function drawSeal() {
 }
 
 function draw() {
-  // 紙
-  ctx.fillStyle = '#f2ead8'
-  ctx.fillRect(0, 0, W, H)
+  // 紙テクスチャ（キャッシュ）
+  ctx.drawImage(getPaper(), 0, 0)
+  // 山水（キャッシュ）
+  if (mode === 'play' || mode === 'draft') ctx.drawImage(getLandscape(), 0, 0)
+
   ctx.save()
   shake.apply(ctx)
 
@@ -802,9 +1001,9 @@ function draw() {
   drawSeal()
 
   // 壁・残り墨
-  for (const s of strokes) drawInkLine(s.pts, 0.25 + 0.65 * (s.hp / s.maxHp))
+  for (const s of strokes) drawInkLine(s.pts, 0.25 + 0.65 * (s.hp / s.maxHp), s.kind)
   // 描き途中の筆
-  if (drawing) drawInkLine(curPts, 0.95)
+  if (drawing) drawInkLine(curPts, 0.95, undefined, true)
   // 丸の破裂
   if (burstFx) {
     ctx.strokeStyle = SUMI
@@ -830,28 +1029,75 @@ function draw() {
   for (const dr of drops) if (dr.state !== 'stolen') dot(ctx, dr.x, dr.y, 4.5, 0.85)
 
   parts.draw(ctx)
+  splats.draw(ctx)
 
-  // 賛（コンボ書）
+  // 賛（コンボ書）— big=true は縦書き
   for (const p of popups) {
     const a = clamp(p.t / 0.4, 0, 1)
     ctx.globalAlpha = a
-    ctx.fillStyle = p.big ? '#8d3a37' : SUMI
-    ctx.font = `${p.big ? 800 : 600} ${p.big ? 30 : 17}px "Hiragino Mincho ProN", "Yu Mincho", serif`
-    ctx.textAlign = 'center'
     ctx.save()
     ctx.translate(p.x, p.y - (1.6 - p.t) * 18)
     ctx.rotate(-0.04)
-    ctx.fillText(p.text, 0, 0)
+    if (p.big) {
+      // 縦書き（1文字ずつ）
+      const fontSize = 30
+      ctx.font = `800 ${fontSize}px "Hiragino Mincho ProN", "Yu Mincho", serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      const chars = Array.from(p.text)
+      for (let ci = 0; ci < chars.length; ci++) {
+        ctx.fillStyle = '#8d3a37'
+        ctx.fillText(chars[ci], 0, ci * fontSize)
+      }
+      // 落款（朱の小矩形）
+      const sealY2 = chars.length * fontSize + 4
+      ctx.fillStyle = 'rgba(199,62,58,0.85)'
+      ctx.fillRect(-5, sealY2, 10, 10)
+    } else {
+      ctx.fillStyle = SUMI
+      ctx.font = `600 17px "Hiragino Mincho ProN", "Yu Mincho", serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(p.text, 0, 0)
+    }
     ctx.restore()
     ctx.globalAlpha = 1
   }
   ctx.restore() // shake
+
+  // 被弾ビネット（HUD 手前）
+  if (vignetteT > 0) {
+    const vA = clamp(vignetteT / 0.9, 0, 1) * 0.28
+    const edge = 60
+    // 四辺の縁取りグラデーション（上・下・左・右）
+    const tops = ctx.createLinearGradient(0, 0, 0, edge)
+    tops.addColorStop(0, `rgba(199,62,58,${vA.toFixed(3)})`)
+    tops.addColorStop(1, 'rgba(199,62,58,0)')
+    ctx.fillStyle = tops
+    ctx.fillRect(0, 0, W, edge)
+    const bots = ctx.createLinearGradient(0, H - edge, 0, H)
+    bots.addColorStop(0, 'rgba(199,62,58,0)')
+    bots.addColorStop(1, `rgba(199,62,58,${vA.toFixed(3)})`)
+    ctx.fillStyle = bots
+    ctx.fillRect(0, H - edge, W, edge)
+    const lefts = ctx.createLinearGradient(0, 0, edge, 0)
+    lefts.addColorStop(0, `rgba(199,62,58,${vA.toFixed(3)})`)
+    lefts.addColorStop(1, 'rgba(199,62,58,0)')
+    ctx.fillStyle = lefts
+    ctx.fillRect(0, 0, edge, H)
+    const rights = ctx.createLinearGradient(W - edge, 0, W, 0)
+    rights.addColorStop(0, 'rgba(199,62,58,0)')
+    rights.addColorStop(1, `rgba(199,62,58,${vA.toFixed(3)})`)
+    ctx.fillStyle = rights
+    ctx.fillRect(W - edge, 0, edge, H)
+  }
 
   drawHud()
   if (banner.t > 0) drawBanner()
   if (stampT > 0) drawStamp()
   if (mode === 'title') drawTitle()
   if (mode === 'over') drawOver()
+  if (mode === 'draft') drawDraft()
 }
 
 function drawHud() {
@@ -870,7 +1116,7 @@ function drawHud() {
   ctx.strokeStyle = SUMI
   ctx.beginPath()
   ctx.moveTo(bx, by)
-  ctx.lineTo(bx + (bw * ink) / P.INK_MAX, by)
+  ctx.lineTo(bx + (bw * ink) / effInkMax(), by)
   ctx.stroke()
   ctx.fillStyle = SUMI
   ctx.font = '600 12px "Hiragino Mincho ProN", serif'
@@ -880,9 +1126,9 @@ function drawHud() {
   if (drawing) {
     ctx.strokeStyle = '#c73e3a'
     ctx.beginPath()
-    const used = clamp((bw * strokeCost(curLen)) / P.INK_MAX, 0, (bw * ink) / P.INK_MAX)
-    ctx.moveTo(bx + (bw * ink) / P.INK_MAX - used, by)
-    ctx.lineTo(bx + (bw * ink) / P.INK_MAX, by)
+    const used = clamp((bw * strokeCost(curLen)) / effInkMax(), 0, (bw * ink) / effInkMax())
+    ctx.moveTo(bx + (bw * ink) / effInkMax() - used, by)
+    ctx.lineTo(bx + (bw * ink) / effInkMax(), by)
     ctx.stroke()
   }
   // 巻・波
@@ -898,6 +1144,44 @@ function drawHud() {
     ctx.fillRect(W - 26 - i * 20, 48, 13, 13)
   }
   ctx.globalAlpha = 1
+  // 取得済み画技チップ（左下、最大8個）
+  const takenEntries = GAKI.filter((g) => (taken[g.id] || 0) > 0)
+  const chipMax = 8
+  const chipSize = 20
+  const chipGap = 4
+  const chipBottom = H - 36
+  for (let ci = 0; ci < Math.min(takenEntries.length, chipMax); ci++) {
+    const g = takenEntries[ci]
+    const cx2 = bx + ci * (chipSize + chipGap)
+    const cy2 = chipBottom - chipSize
+    ctx.fillStyle = '#efe6cd'
+    ctx.strokeStyle = 'rgba(47,42,38,0.5)'
+    ctx.lineWidth = 0.8
+    ctx.fillRect(cx2, cy2, chipSize, chipSize)
+    ctx.strokeRect(cx2, cy2, chipSize, chipSize)
+    ctx.fillStyle = SUMI
+    ctx.font = `700 12px "Hiragino Mincho ProN", serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(g.kanji, cx2 + chipSize / 2, cy2 + chipSize / 2)
+    if ((taken[g.id] || 0) > 1) {
+      ctx.font = '500 8px "Hiragino Mincho ProN", serif'
+      ctx.fillStyle = '#8d3a37'
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'top'
+      ctx.fillText(`×${taken[g.id]}`, cx2 + chipSize, cy2)
+    }
+  }
+  if (takenEntries.length > chipMax) {
+    const cx2 = bx + chipMax * (chipSize + chipGap)
+    ctx.fillStyle = 'rgba(47,42,38,0.5)'
+    ctx.font = '500 10px "Hiragino Mincho ProN", serif'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('…', cx2, chipBottom - chipSize / 2)
+  }
+  ctx.textBaseline = 'alphabetic'
+
   // 心得（教えの紙片。印を隠さないよう上部に、最大2枚）
   let ny = 104
   ctx.font = '600 13px "Hiragino Mincho ProN", serif'
@@ -944,7 +1228,10 @@ function drawStamp() {
 }
 
 function drawTitle() {
-  ctx.fillStyle = 'rgba(242,234,216,0.9)'
+  // 山水背景（タイトルでは maki=0 の構図）。キャッシュ利用。
+  if (!titleLandscapeCache) titleLandscapeCache = makeLandscape(W, H, 0)
+  ctx.drawImage(titleLandscapeCache, 0, 0)
+  ctx.fillStyle = 'rgba(242,234,216,0.82)'
   ctx.fillRect(0, 0, W, H)
   // 円相（筆の円）
   ctx.strokeStyle = 'rgba(47,42,38,0.85)'
@@ -969,7 +1256,7 @@ function drawTitle() {
   ctx.fillStyle = 'rgba(47,42,38,0.75)'
   ctx.fillText('かいて、はらう。', W / 2, H * 0.61)
   ctx.font = '500 13px "Hiragino Mincho ProN", serif'
-  const lines = ['指の筆で、けものを払え', '線＝斬り・壁　丸＝破裂　点＝しぶき　渦＝風', '墨は有限。倒して墨玉を取り戻せ']
+  const lines = ['指の筆で、けものを払え', '線＝斬り・壁　丸＝破裂　点＝しぶき　渦＝風', '墨は有限。倒して墨玉を取り戻せ', '巻の合間に『画技』を選んで、己の筆を作れ']
   lines.forEach((l, i) => ctx.fillText(l, W / 2, H * 0.68 + i * 22))
   if (best > 0) ctx.fillText(`これまで 第${best}波`, W / 2, H * 0.68 + 3 * 22 + 8)
   ctx.fillStyle = '#8d3a37'
@@ -993,7 +1280,116 @@ function drawOver() {
   if (Math.sin(performance.now() / 200) > -0.2) ctx.fillText('筆を置いて、もう一度', W / 2, H * 0.66)
 }
 
+// ── ドラフト画面 ──
+/** カード矩形（描画とタップ判定で共有） */
+function draftCardRect(ci: number) {
+  const cardW = W * 0.29
+  const cardH = H * 0.36
+  const gap = W * 0.03
+  const totalWidth = cardW * 3 + gap * 2
+  const startX = (W - totalWidth) / 2
+  const cardY = H * 0.22
+  return { x: startX + ci * (cardW + gap), y: cardY, w: cardW, h: cardH }
+}
+
+function drawDraft() {
+  // 半透明オーバーレイ
+  ctx.fillStyle = 'rgba(242,234,216,0.95)'
+  ctx.fillRect(0, 0, W, H)
+
+  // タイトル文
+  ctx.fillStyle = SUMI
+  ctx.font = '700 22px "Hiragino Mincho ProN", "Yu Mincho", serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'alphabetic'
+  ctx.fillText('画技を、ひとつ。', W / 2, H * 0.15)
+
+  const rotations = [-0.02, 0.0, 0.02]
+
+  for (let ci = 0; ci < draftCards.length; ci++) {
+    const g = draftCards[ci]
+    const rect = draftCardRect(ci)
+    const cardW = rect.w
+    const cardH = rect.h
+    const cx3 = rect.x + cardW / 2
+    const cy3 = rect.y + cardH / 2
+
+    ctx.save()
+    ctx.translate(cx3, cy3)
+    ctx.rotate(rotations[ci] || 0)
+
+    // カード背景・縁取り
+    ctx.fillStyle = '#efe6cd'
+    ctx.strokeStyle = SUMI
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 4)
+    ctx.fill()
+    ctx.stroke()
+
+    // 以降のテキストはカード内にクリップ（はみ出し防止）
+    ctx.beginPath()
+    ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, 4)
+    ctx.clip()
+
+    // 大きな漢字（カード高の28%位置）
+    ctx.fillStyle = SUMI
+    ctx.font = `700 44px "Hiragino Mincho ProN", "Yu Mincho", serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(g.kanji, 0, -cardH / 2 + cardH * 0.28)
+
+    // 名前（48%位置）
+    ctx.font = `600 16px "Hiragino Mincho ProN", serif`
+    ctx.fillText(g.name, 0, -cardH / 2 + cardH * 0.48)
+
+    // 説明文（58%位置から。measureText で幅に収まるよう折り返し）
+    ctx.font = `500 11px "Hiragino Mincho ProN", serif`
+    ctx.fillStyle = 'rgba(47,42,38,0.75)'
+    const descLines = wrapTextByWidth(g.desc, cardW - 14)
+    const descY0 = -cardH / 2 + cardH * 0.58
+    for (let li2 = 0; li2 < descLines.length; li2++) {
+      ctx.fillText(descLines[li2], 0, descY0 + li2 * 15)
+    }
+
+    // 取得済み表示
+    const cnt = taken[g.id] || 0
+    if (cnt > 0) {
+      ctx.font = `600 10px "Hiragino Mincho ProN", serif`
+      ctx.fillStyle = '#8d3a37'
+      ctx.textAlign = 'right'
+      ctx.textBaseline = 'top'
+      ctx.fillText(`×${cnt}`, cardW / 2 - 4, -cardH / 2 + 4)
+    }
+
+    ctx.restore()
+  }
+}
+
+/** 文字列を measureText で maxWidth(px) に収まるよう文字単位で折り返す（最大5行） */
+function wrapTextByWidth(text: string, maxWidth: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const ch of Array.from(text)) {
+    if (ctx.measureText(line + ch).width > maxWidth && line.length > 0) {
+      lines.push(line)
+      line = ch
+      if (lines.length >= 5) return lines
+    } else {
+      line += ch
+    }
+  }
+  if (line.length > 0 && lines.length < 5) lines.push(line)
+  return lines
+}
+
 // ── SHOT（QA・サムネ用の静止シーン） ──
+if (SHOT === 'draft') {
+  mode = 'draft'
+  // 固定3枚（noboku, shibuki, shingan）
+  draftCards = GAKI.filter((g) => ['noboku', 'shibuki', 'shingan'].includes(g.id)).slice(0, 3)
+}
+
 if (SHOT === 'battle') {
   mode = 'play'
   makiIdx = 1
@@ -1019,9 +1415,13 @@ if (SHOT === 'battle') {
     enemies[enemies.length - 1].x = W * 0.3
     enemies[enemies.length - 1].y = H * 0.24
     void bird
+    // 飛沫の染みを事前散布（見た目確認用）
+    for (let si = 0; si < 5; si++) {
+      splats.burst(W * (0.2 + Math.random() * 0.6), H * (0.3 + Math.random() * 0.5), Math.random() * Math.PI * 2)
+    }
     // 壁と賛
-    const wallPts = [] as { x: number; y: number; w: number }[]
-    for (let i = 0; i <= 10; i++) wallPts.push({ x: W * 0.3 + i * (W * 0.4 / 10), y: H * 0.62 - i * 4, w: 9 })
+    const wallPts = [] as StrokePt[]
+    for (let i = 0; i <= 10; i++) wallPts.push({ x: W * 0.3 + i * (W * 0.4 / 10), y: H * 0.62 - i * 4, w: 9, spd: 0 })
     strokes.push({ pts: wallPts, hp: 30, maxHp: 40, kind: 'wall' })
     popups.push({ x: W * 0.55, y: H * 0.38, text: '三獣一筆', t: 1.4, big: true })
     notes = [{ text: NOTES.boar, t: 4 }]
