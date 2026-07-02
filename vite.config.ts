@@ -20,6 +20,7 @@ export default defineConfig({
         spacelab: resolve(__dirname, 'games/spacelab/index.html'),
         racer: resolve(__dirname, 'games/racer/index.html'),
         kirisame: resolve(__dirname, 'games/kirisame/index.html'),
+        fude: resolve(__dirname, 'games/fude/index.html'),
       },
     },
   },

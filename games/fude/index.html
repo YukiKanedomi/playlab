@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>墨戯絵巻 — Playlab</title>
+    <link rel="icon" type="image/svg+xml" href="/playlab/icon.svg" />
+    <link rel="apple-touch-icon" href="/playlab/apple-touch-icon.png" />
+    <link rel="manifest" href="/playlab/manifest.webmanifest" />
+    <meta name="theme-color" content="#f2ead8" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      html, body { height: 100%; overflow: hidden; background: #f2ead8; }
+      body { touch-action: none; -webkit-user-select: none; user-select: none; overscroll-behavior: none; }
+      #game { display: block; width: 100vw; height: 100dvh; touch-action: none; }
+      .back {
+        position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px; z-index: 30;
+        color: #4a443c; text-decoration: none; font-size: 12px; letter-spacing: 0.04em;
+        font-family: "Hiragino Mincho ProN", "Yu Mincho", serif;
+        padding: 7px 11px; border: 1px solid rgba(47, 42, 38, 0.35); border-radius: 4px;
+        background: rgba(242, 234, 216, 0.7);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <a class="back" href="../../">← lab</a>
+    <script type="module" src="./main.ts"></script>
+    <script>
+      if ('serviceWorker' in navigator)
+        navigator.serviceWorker.register('/playlab/sw.js').catch(() => {})
+    </script>
+  </body>
+</html>

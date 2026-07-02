@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "fude",
+      "no": 8,
+      "title": "かいて、はらう。",
+      "desc": "指＝筆。線で斬り、線で守り、丸で破裂、渦で風。墨の残量と相談しながら鳥獣戯画ふうのけものを払う筆捌きタワーディフェンス。",
+      "tags": ["TD", "筆", "鳥獣戯画", "Canvas2D"],
+      "date": "2026-07-02",
+      "status": "experiment",
+      "path": "games/fude/",
+      "thumb": "thumbs/fude.png"
+    },
+    {
       "slug": "kirisame",
       "no": 7,
       "title": "あつめて、あばく。",
