@@ -86,6 +86,10 @@
         font-weight: 700;
       }
       .title-menu .btn-primary:active { background: #c88a42; }
+      .title-credit {
+        font-size: 10px; color: #3d4f6a; letter-spacing: 0.1em;
+        text-align: center; margin-top: 14px;
+      }
 
       /* ── Night screen ─────────────────────────────────────── */
       #scr-night {
@@ -94,9 +98,8 @@
       }
 
       .night-header {
-        display: flex; justify-content: space-between; align-items: baseline;
-        /* Extra left padding keeps the night label clear of the fixed ← lab button */
-        padding: 20px 28px 6px 64px;
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 20px 14px 6px 64px;
       }
       .night-round {
         font-size: 12px; letter-spacing: 0.36em; color: #b87333;
@@ -107,6 +110,13 @@
       .night-target span {
         font-size: 10px; color: #7f8a9d; letter-spacing: 0.18em; margin-left: 4px;
       }
+      .btn-techo {
+        font-family: inherit; font-size: 9.5px; letter-spacing: 0.22em;
+        color: #b87333; border: 1px solid rgba(184,115,51,.4);
+        background: none; padding: 5px 9px; border-radius: 2px;
+        touch-action: manipulation;
+      }
+      .btn-techo:active { background: rgba(184,115,51,.1); }
 
       /* Copper gauge */
       .gauge-wrap { margin: 0 28px 4px; }
@@ -149,12 +159,17 @@
         margin-bottom: 8px; min-height: 72px;
         align-items: flex-end;
       }
+      /* Card face uses SVG asset image */
       .play-card-mini {
         width: 44px; height: 66px;
-        background: linear-gradient(170deg, #f4efe4, #ded5c2);
-        border: 1px solid #b87333; border-radius: 2px;
-        position: relative; overflow: hidden;
+        border-radius: 6px;
+        overflow: hidden;
+        box-shadow: 0 2px 6px rgba(0,0,0,.35);
         animation: cardFlip 0.18s ease-out;
+        flex-shrink: 0;
+      }
+      .play-card-mini img {
+        width: 100%; height: 100%; object-fit: cover; display: block;
       }
       @keyframes cardFlip {
         0% { opacity: 0; transform: scale(0.7) translateY(10px); }
@@ -212,6 +227,21 @@
         75% { transform: translateX(3px); }
       }
 
+      /* Live preview row */
+      .preview-row {
+        text-align: center; font-size: 12px; letter-spacing: 0.14em;
+        color: #7f8a9d; padding: 3px 20px 2px; min-height: 22px;
+      }
+      .preview-row.has-role { color: #e0a35e; }
+      .preview-row .pr-yaku { color: #e0a35e; font-weight: 700; letter-spacing: 0.1em; }
+      .preview-row .pr-num  { font-family: Georgia, serif; color: #e0a35e; }
+      .preview-row.yaku-pop { animation: yakuPop 0.3s cubic-bezier(.2,1.8,.4,1); }
+      @keyframes yakuPop {
+        0%   { transform: scale(1); }
+        45%  { transform: scale(1.11); }
+        100% { transform: scale(1); }
+      }
+
       /* Hand */
       .hand-wrap {
         padding: 0 14px 8px;
@@ -220,22 +250,31 @@
       .hand-row {
         display: flex; gap: 5px; justify-content: center;
       }
+      /* Card button — SVG asset fills the face */
       .card-btn {
-        width: 42px; height: 63px;
-        background: linear-gradient(170deg, #f4efe4, #ded5c2);
-        border: 1px solid #b87333; border-radius: 2px;
-        position: relative; overflow: hidden;
+        background: transparent;
+        border: none;
+        border-radius: 6px;
+        overflow: hidden;
+        box-shadow: 0 2px 6px rgba(0,0,0,.38);
         padding: 0; cursor: pointer;
-        transition: transform 0.12s ease, outline 0.08s;
+        transition: transform 0.12s ease, box-shadow 0.1s;
         touch-action: manipulation;
+        flex-shrink: 0;
+      }
+      .card-btn img {
+        width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none;
       }
       .card-btn:active { transform: scale(0.94); }
       .card-btn.selected {
         transform: translateY(-10px);
-        outline: 2px solid #e0a35e; outline-offset: 2px;
-        box-shadow: 0 8px 16px rgba(0,0,0,.4);
+        outline: 2.5px solid #e0a35e; outline-offset: 2px;
+        box-shadow: 0 8px 18px rgba(0,0,0,.45);
       }
-      .card-btn.dimmed { opacity: 0.45; }
+      .card-btn.dimmed { opacity: 0.4; }
+      .card-btn.hint-glow {
+        box-shadow: 0 0 0 2px rgba(184,115,51,.5), 0 2px 8px rgba(0,0,0,.35);
+      }
 
       /* Bake-fuda chips */
       .bake-row {
@@ -450,6 +489,110 @@
       }
       #toast.on { opacity: 1; transform: translate(-50%, 0); }
 
+      /* ── Techo overlay ────────────────────────────────────── */
+      #techo-overlay {
+        position: absolute; inset: 0; z-index: 100;
+        background: #0e1a2d;
+        overflow-y: auto; -webkit-overflow-scrolling: touch;
+        display: none;
+      }
+      #techo-overlay.open { display: block; }
+      .techo-inner {
+        max-width: 420px; margin: 0 auto;
+        padding-bottom: 48px;
+      }
+      .techo-header-bar {
+        display: flex; justify-content: space-between; align-items: center;
+        /* 左上の ← lab（fixed）と重ならないよう左に余白 */
+        padding: max(20px,env(safe-area-inset-top)) 20px 14px 76px;
+        border-bottom: 1px solid rgba(184,115,51,.3);
+        position: sticky; top: 0; background: #0e1a2d; z-index: 1;
+      }
+      .techo-title-text {
+        font-size: 13px; letter-spacing: 0.44em; color: #b87333;
+      }
+      #btn-techo-close {
+        font-family: inherit; font-size: 11px; letter-spacing: 0.2em;
+        color: #efe8dc; border: 1px solid rgba(184,115,51,.45);
+        background: none; padding: 6px 14px; border-radius: 2px;
+        touch-action: manipulation;
+      }
+      #btn-techo-close:active { background: rgba(184,115,51,.1); }
+      #techo-content {
+        padding: 0;
+      }
+      .techo-pts-row {
+        display: flex; gap: 6px; justify-content: center;
+        padding: 14px 20px 12px;
+        border-bottom: 1px solid rgba(184,115,51,.15);
+      }
+      .techo-pt {
+        display: flex; flex-direction: column; align-items: center; gap: 4px;
+        font-size: 10px; color: #9aa5b5; letter-spacing: 0.1em;
+      }
+      .techo-pt b { font-family: Georgia, serif; color: #e0a35e; font-size: 11px; font-weight: 600; }
+      .techo-thumb {
+        width: 30px; height: 45px; border-radius: 3px; object-fit: cover; display: block;
+        box-shadow: 0 1px 4px rgba(0,0,0,.4);
+      }
+      .techo-section {
+        padding: 12px 20px 4px;
+        border-bottom: 1px solid rgba(184,115,51,.12);
+      }
+      .techo-sec-label {
+        font-size: 10px; letter-spacing: 0.36em; color: #b87333; margin-bottom: 8px;
+      }
+      .techo-role {
+        padding: 8px 0;
+        border-bottom: 1px solid rgba(184,115,51,.07);
+      }
+      .techo-role:last-child { border-bottom: none; }
+      .techo-role-head {
+        display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;
+      }
+      .techo-role-name {
+        font-size: 14px; color: #efe8dc; letter-spacing: 0.06em;
+      }
+      .techo-role-multi {
+        font-size: 13px; font-family: Georgia, serif; color: #e0a35e;
+      }
+      .techo-role-body {
+        display: flex; align-items: center; gap: 10px;
+      }
+      .techo-role-desc {
+        font-size: 10px; color: #7f8a9d; letter-spacing: 0.06em;
+        line-height: 1.6; flex: 1;
+      }
+      .techo-role-cards {
+        display: flex; gap: 3px; flex-shrink: 0;
+      }
+
+      /* ── Tutorial overlay ─────────────────────────────────── */
+      #tutorial-overlay {
+        position: absolute; inset: 0; z-index: 110;
+        background: rgba(10,18,32,.97);
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        touch-action: manipulation;
+      }
+      #tutorial-slide {
+        text-align: center; padding: 32px 36px; max-width: 320px;
+      }
+      .slide-text {
+        font-size: 18px; letter-spacing: 0.1em; color: #efe8dc;
+        line-height: 2.3; margin-bottom: 28px;
+      }
+      .slide-text b { color: #e0a35e; font-family: Georgia, serif; }
+      .slide-counter {
+        font-size: 11px; color: #7f8a9d; letter-spacing: 0.24em;
+        font-family: Georgia, serif; margin-bottom: 14px;
+      }
+      .slide-hint {
+        font-size: 10px; color: #3d4f6a; letter-spacing: 0.16em;
+      }
+
       /* Back link */
       .back-link {
         position: fixed; top: max(10px, env(safe-area-inset-top)); left: 12px;
@@ -474,7 +617,9 @@
         <div class="title-unlock" id="title-unlock"></div>
         <div class="title-menu">
           <button class="btn-primary" id="btn-start">ラン開始</button>
+          <button id="btn-techo-title">帳面（役一覧）</button>
         </div>
+        <div class="title-credit">札絵: Louie Mantia ほか（CC BY-SA 4.0）</div>
       </div>
 
       <!-- Night screen -->
@@ -484,6 +629,7 @@
           <div class="night-target">
             <b id="target-pts">—</b><span id="target-suffix">文 GO</span>
           </div>
+          <button class="btn-techo" id="btn-techo">帳面</button>
         </div>
         <div class="gauge-wrap">
           <div class="gauge-bar" id="gauge-bar">
@@ -502,6 +648,8 @@
             <span class="score-total" id="score-total"></span>
           </div>
         </div>
+
+        <div class="preview-row" id="preview-row">札を えらんで ならべる</div>
 
         <div class="hand-wrap">
           <div class="hand-row" id="hand-row"></div>
@@ -546,6 +694,22 @@
         <div class="result-sep"></div>
         <div class="result-record" id="result-record">最深記録 <b>—</b></div>
         <button class="result-btn" id="btn-result-back">タイトルへ</button>
+      </div>
+
+      <!-- Techo overlay (role reference) -->
+      <div id="techo-overlay">
+        <div class="techo-inner">
+          <div class="techo-header-bar">
+            <span class="techo-title-text">帳 面</span>
+            <button id="btn-techo-close">とじる</button>
+          </div>
+          <div id="techo-content"></div>
+        </div>
+      </div>
+
+      <!-- Tutorial overlay (first play only) -->
+      <div id="tutorial-overlay">
+        <div id="tutorial-slide"></div>
       </div>
 
       <div id="toast"></div>

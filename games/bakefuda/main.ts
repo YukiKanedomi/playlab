@@ -5,12 +5,13 @@ import { isMuted, mountMuteButton, configureMixedSession } from '../../shared/au
 import * as tune from '../../shared/tune'
 import { enterTransition, wireLink } from '../../shared/transition'
 import {
-  type Card, type BakeFuda, type BossId,
+  type Card, type BakeFuda, type BossId, type RoleId, type Kind,
   makeDeck, shuffle, calcScore, calcReward,
   availableBake, shopOffer, sellPrice, hasBake,
   NIGHT_TARGETS, NIGHT_BOSS, BOSS_NAME, BOSS_DESC,
+  ROLE_NAME, ROLE_MULTI,
 } from './data'
-import { cardSVG } from './cards'
+import { cardImgUrl } from './cards'
 
 // ── Tune parameters ────────────────────────────────────────────────────────
 const P = tune.panel('bakefuda', {
@@ -23,59 +24,76 @@ const P = tune.panel('bakefuda', {
 
 // ── Constants ─────────────────────────────────────────────────────────────
 const NIGHT_NAMES = ['第一夜','第二夜','第三夜','第四夜','第五夜','第六夜','第七夜','第八夜']
-const LS_YOKKA  = 'playlab.bakefuda.yokka'
-const LS_RECORD = 'playlab.bakefuda.record'
-const MAX_BAKE  = 5
+const LS_YOKKA    = 'playlab.bakefuda.yokka'
+const LS_RECORD   = 'playlab.bakefuda.record'
+const LS_TUTORED  = 'playlab.bakefuda.tutored'
+const MAX_BAKE    = 5
+
+const TUTORIAL_SLIDES = [
+  '札には 文（もん）がある。<br>光 <b>20</b> · タネ <b>10</b> · 短冊 <b>5</b> · カス <b>1</b>',
+  '同じ月、そろいの光——<br>ならべて出すと役。倍率が 化ける',
+  'えらべば その場で点が見える。<br>まよったら、帳面 を開くべし',
+]
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const $ = (id: string): HTMLElement => document.getElementById(id)!
 
-const stage         = $('stage')
-const scrTitle      = $('scr-title')
-const scrNight      = $('scr-night')
-const scrShop       = $('scr-shop')
-const scrResult     = $('scr-result')
-const toastEl       = $('toast')
+const stage          = $('stage')
+const scrTitle       = $('scr-title')
+const scrNight       = $('scr-night')
+const scrShop        = $('scr-shop')
+const scrResult      = $('scr-result')
+const toastEl        = $('toast')
 
-const statRecord    = $('stat-record')
-const statYokka     = $('stat-yokka')
-const titleUnlock   = $('title-unlock')
-const btnStart      = $('btn-start') as HTMLButtonElement
+const statRecord     = $('stat-record')
+const statYokka      = $('stat-yokka')
+const titleUnlock    = $('title-unlock')
+const btnStart       = $('btn-start') as HTMLButtonElement
+const btnTechoTitle  = $('btn-techo-title') as HTMLButtonElement
 
-const nightRound    = $('night-round')
-const targetPts     = $('target-pts')
-const targetSuffix  = $('target-suffix')
-const gaugeFill     = $('gauge-fill')
-const gaugeText     = $('gauge-text')
-const gaugeBar      = $('gauge-bar')
-const bossBar       = $('boss-bar')
-const multiFlash    = $('multi-flash')
-const playCardsRow  = $('play-cards-row')
-const roleStamp     = $('role-stamp')
-const scoreCalc     = $('score-calc')
-const scoreTotalEl  = $('score-total')
-const handRow       = $('hand-row')
-const bakeRow       = $('bake-row')
-const btnPlay       = $('btn-play') as HTMLButtonElement
-const btnDisc       = $('btn-disc') as HTMLButtonElement
-const nightStatus   = $('night-status')
+const nightRound     = $('night-round')
+const targetPts      = $('target-pts')
+const targetSuffix   = $('target-suffix')
+const gaugeFill      = $('gauge-fill')
+const gaugeText      = $('gauge-text')
+const gaugeBar       = $('gauge-bar')
+const bossBar        = $('boss-bar')
+const btnTecho       = $('btn-techo') as HTMLButtonElement
+const multiFlash     = $('multi-flash')
+const playCardsRow   = $('play-cards-row')
+const roleStamp      = $('role-stamp')
+const scoreCalc      = $('score-calc')
+const scoreTotalEl   = $('score-total')
+const previewRow     = $('preview-row')
+const handRow        = $('hand-row')
+const bakeRow        = $('bake-row')
+const btnPlay        = $('btn-play') as HTMLButtonElement
+const btnDisc        = $('btn-disc') as HTMLButtonElement
+const nightStatus    = $('night-status')
 
-const shopWalletVal = $('shop-wallet-val')
-const shopSubtitle  = $('shop-subtitle')
-const shopOfferRow  = $('shop-offer-row')
-const btnReload     = $('btn-reload') as HTMLButtonElement
-const btnProceed    = $('btn-proceed') as HTMLButtonElement
-const shopOwnedRow  = $('shop-owned-row')
+const shopWalletVal  = $('shop-wallet-val')
+const shopSubtitle   = $('shop-subtitle')
+const shopOfferRow   = $('shop-offer-row')
+const btnReload      = $('btn-reload') as HTMLButtonElement
+const btnProceed     = $('btn-proceed') as HTMLButtonElement
+const shopOwnedRow   = $('shop-owned-row')
 
-const resultNight   = $('result-night')
+const resultNight    = $('result-night')
 const resultNightSub = $('result-night-sub')
-const resultYokka   = $('result-yokka')
-const resultUnlock  = $('result-unlock')
-const resultRecord  = $('result-record')
-const btnResultBack = $('btn-result-back') as HTMLButtonElement
+const resultYokka    = $('result-yokka')
+const resultUnlock   = $('result-unlock')
+const resultRecord   = $('result-record')
+const btnResultBack  = $('btn-result-back') as HTMLButtonElement
+
+const techoOverlay   = $('techo-overlay')
+const techoContent   = $('techo-content')
+const btnTechoClose  = $('btn-techo-close') as HTMLButtonElement
+
+const tutorialOverlay = $('tutorial-overlay')
+const tutorialSlide   = $('tutorial-slide')
 
 // ── Persistent state ──────────────────────────────────────────────────────
-let cumYokka  = 0
+let cumYokka   = 0
 let bestRecord = 0
 try {
   cumYokka   = parseInt(localStorage.getItem(LS_YOKKA)  || '0', 10) || 0
@@ -83,22 +101,23 @@ try {
 } catch {}
 
 // ── Run state ─────────────────────────────────────────────────────────────
-let deck:        Card[]    = []
-let hand:        Card[]    = []
-let selected     = new Set<number>()
-let bake:        BakeFuda[] = []
-let wallet       = 0
-let nightIndex   = 0
-let nightScore   = 0
-let playsLeft    = 4
-let discardsLeft = 3
-let windBonus    = 0
-let playsUsed    = 0
-let target       = 80
-let boss:        BossId = null
-let shopOffers:  BakeFuda[] = []
+let deck:          Card[]     = []
+let hand:          Card[]     = []
+let selected       = new Set<number>()
+let bake:          BakeFuda[] = []
+let wallet         = 0
+let nightIndex     = 0
+let nightScore     = 0
+let playsLeft      = 4
+let discardsLeft   = 3
+let windBonus      = 0
+let playsUsed      = 0
+let target         = 80
+let boss:          BossId = null
+let shopOffers:    BakeFuda[] = []
 let sellConfirmId: string | null = null
-let animating    = false
+let animating      = false
+let lastPreviewRole: string = 'none'
 
 // ── Audio ─────────────────────────────────────────────────────────────────
 let audioCtx: AudioContext | null = null
@@ -139,6 +158,18 @@ function playTick(): void {
   g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.035)
   osc.connect(g); g.connect(c.destination)
   osc.start(); osc.stop(c.currentTime + 0.035)
+}
+
+function playPreviewYaku(): void {
+  if (isMuted()) return
+  const c = getCtx()
+  const osc = c.createOscillator()
+  const g   = c.createGain()
+  osc.frequency.value = 660; osc.type = 'sine'
+  g.gain.setValueAtTime(0.08, c.currentTime)
+  g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.18)
+  osc.connect(g); g.connect(c.destination)
+  osc.start(); osc.stop(c.currentTime + 0.18)
 }
 
 function playRole(): void {
@@ -220,6 +251,216 @@ function nextBossNight(fromNight: number): number {
   return -1
 }
 
+// ── Card element helpers ──────────────────────────────────────────────────
+
+function cardImg(card: Card): HTMLImageElement {
+  const img = document.createElement('img')
+  img.src = cardImgUrl(card)
+  img.alt = card.label
+  img.draggable = false
+  img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;'
+  return img
+}
+
+// Sample card URL for techo thumbnails — only needs month/kind/ordinal
+function sampleUrl(month: number, kind: Kind, ordinal = 1): string {
+  return cardImgUrl({ month, kind, ordinal })
+}
+
+// ── Pure score preview ────────────────────────────────────────────────────
+// Single function used for both live preview and actual play score computation.
+// Returns simplified display values; animatePlay calls calcScore directly for bakeEffects detail.
+function previewScore(
+  selectedCards: Card[],
+  bakeState: BakeFuda[],
+  ns: {
+    deckSize: number; nightIndex: number; completedNights: number
+    isFirstPlay: boolean; isLastPlay: boolean; windBonus: number; bossId: BossId
+  },
+): { yakuName: string; mult: number; bun: number; total: number } {
+  const r = calcScore({
+    selected: selectedCards,
+    bake: bakeState,
+    deckSize: ns.deckSize,
+    nightIndex: ns.nightIndex,
+    completedNights: ns.completedNights,
+    isFirstPlay: ns.isFirstPlay,
+    isLastPlay: ns.isLastPlay,
+    windBonus: ns.windBonus,
+    bossId: ns.bossId,
+  })
+  return { yakuName: r.roleName, mult: r.totalMulti, bun: r.basePts, total: r.total }
+}
+
+// ── Live preview row ──────────────────────────────────────────────────────
+function renderPreview(): void {
+  const sel = hand.filter(c => selected.has(c.id))
+  if (sel.length === 0) {
+    previewRow.innerHTML = '札を えらんで ならべる'
+    previewRow.className = 'preview-row'
+    lastPreviewRole = 'none'
+    return
+  }
+  const ps = previewScore(sel, bake, {
+    deckSize: deck.length,
+    nightIndex,
+    completedNights: nightIndex,
+    isFirstPlay: playsUsed === 0,
+    isLastPlay: playsLeft === 1,
+    windBonus,
+    bossId: boss,
+  })
+  const multStr = ps.mult % 1 === 0 ? String(ps.mult) : ps.mult.toFixed(1)
+  const hasRole = ps.yakuName !== '役なし'
+
+  if (hasRole && ps.yakuName !== lastPreviewRole) {
+    playPreviewYaku()
+    previewRow.classList.remove('yaku-pop')
+    void previewRow.offsetWidth
+    previewRow.classList.add('yaku-pop')
+  }
+  lastPreviewRole = ps.yakuName
+
+  if (hasRole) {
+    previewRow.innerHTML =
+      `<span class="pr-yaku">${ps.yakuName}</span>` +
+      ` ×<span class="pr-num">${multStr}</span>` +
+      ` ＝ <span class="pr-num">${ps.total}</span>文`
+    previewRow.className = 'preview-row has-role'
+  } else {
+    previewRow.innerHTML =
+      `役なし ×<span class="pr-num">${multStr}</span>` +
+      ` ＝ <span class="pr-num">${ps.total}</span>文`
+    previewRow.className = 'preview-row'
+  }
+}
+
+// ── Hint glow logic ───────────────────────────────────────────────────────
+function isHintCard(card: Card): boolean {
+  if (selected.has(card.id) || selected.size === 0) return false
+  const sel = hand.filter(c => selected.has(c.id))
+  const selMonths = new Set(sel.map(c => c.month))
+  if (selMonths.has(card.month)) return true
+  if (sel.some(c => c.kind === 'ko')   && card.kind === 'ko')   return true
+  if (sel.some(c => c.kind === 'tan')  && card.kind === 'tan')  return true
+  if (sel.some(c => c.kind === 'tane') && card.kind === 'tane') return true
+  return false
+}
+
+// ── Techo (rule reference) ────────────────────────────────────────────────
+function buildTechoHTML(): string {
+  function th(month: number, kind: Kind, ordinal = 1): string {
+    return `<img src="${sampleUrl(month, kind, ordinal)}" class="techo-thumb" loading="lazy" alt="">`
+  }
+  function thumbs(specs: Array<[number, Kind, number?]>): string {
+    return specs.map(([m, k, o]) => th(m, k, o)).join('')
+  }
+  function row(id: RoleId, desc: string, specs: Array<[number, Kind, number?]>): string {
+    return `<div class="techo-role">
+      <div class="techo-role-head">
+        <span class="techo-role-name">${ROLE_NAME[id]}</span>
+        <span class="techo-role-multi">×${ROLE_MULTI[id]}</span>
+      </div>
+      <div class="techo-role-body">
+        <div class="techo-role-desc">${desc}</div>
+        <div class="techo-role-cards">${thumbs(specs)}</div>
+      </div>
+    </div>`
+  }
+  function sec(label: string, rows: string): string {
+    return `<div class="techo-section"><div class="techo-sec-label">${label}</div>${rows}</div>`
+  }
+
+  return `
+    <div class="techo-pts-row">
+      <div class="techo-pt">${th(1,'ko')}<span>光</span><b>20文</b></div>
+      <div class="techo-pt">${th(2,'tane')}<span>タネ</span><b>10文</b></div>
+      <div class="techo-pt">${th(1,'tan')}<span>短冊</span><b>5文</b></div>
+      <div class="techo-pt">${th(1,'kasu',1)}<span>カス</span><b>1文</b></div>
+    </div>
+    ${sec('光もの', [
+      row('gogko',       '全五光（松・桜・芒・柳・桐）',         [[1,'ko'],[3,'ko'],[8,'ko'],[11,'ko'],[12,'ko']]),
+      row('yonko_dry',   '四光（雨札を含まない）',               [[1,'ko'],[3,'ko'],[8,'ko'],[12,'ko']]),
+      row('yonko_rain',  '四光（雨札＝柳光を含む）',             [[1,'ko'],[3,'ko'],[8,'ko'],[11,'ko']]),
+      row('sanko',       '三光（雨札を除く光三枚）',             [[1,'ko'],[3,'ko'],[8,'ko']]),
+    ].join(''))}
+    ${sec('獣と鳥', [
+      row('inoshikacho', '猪・鹿・蝶のタネ三枚',                [[7,'tane'],[10,'tane'],[6,'tane']]),
+    ].join(''))}
+    ${sec('短冊', [
+      row('akatan',      '赤短冊三枚（一・二・三月）',            [[1,'tan'],[2,'tan'],[3,'tan']]),
+      row('aotan',       '青短冊三枚（六・九・十月）',            [[6,'tan'],[9,'tan'],[10,'tan']]),
+    ].join(''))}
+    ${sec('月見・花見', [
+      row('hanamizan',   '桜幕（三月光）＋菊盃（九月タネ）',     [[3,'ko'],[9,'tane']]),
+      row('tsukimizake', '芒月（八月光）＋菊盃（九月タネ）',     [[8,'ko'],[9,'tane']]),
+    ].join(''))}
+    ${sec('重ね（同月）', [
+      row('dotsuki4',    '同じ月の四枚すべて',                   [[1,'ko'],[1,'tan'],[1,'kasu',1],[1,'kasu',2]]),
+      row('dotsuki3',    '同じ月の三枚',                         [[1,'ko'],[1,'tan'],[1,'kasu',1]]),
+      row('dotsuki2',    '同じ月の二枚',                         [[1,'ko'],[1,'tan']]),
+    ].join(''))}
+    ${sec('数もの', [
+      row('tane3',  'タネ三枚以上',                              [[2,'tane'],[4,'tane'],[7,'tane']]),
+      row('tan3',   '短冊三枚以上',                              [[1,'tan'],[2,'tan'],[4,'tan']]),
+      row('kasu5',  'カス五枚以上',                              [[1,'kasu',1],[1,'kasu',2],[2,'kasu',1],[2,'kasu',2],[3,'kasu',1]]),
+    ].join(''))}
+    ${sec('役なし', [
+      row('none', '何役も成立しない — 素直に文の合計',           []),
+    ].join(''))}
+  `
+}
+
+function openTecho(): void {
+  techoContent.innerHTML = buildTechoHTML()
+  techoOverlay.classList.add('open')
+}
+
+function closeTecho(): void {
+  techoOverlay.classList.remove('open')
+}
+
+// ── Tutorial (shown once on first run) ───────────────────────────────────
+function showTutorial(onDone: () => void): void {
+  let idx = 0
+  tutorialOverlay.style.display = 'flex'
+
+  function showSlide(): void {
+    const total = TUTORIAL_SLIDES.length
+    tutorialSlide.innerHTML = `
+      <div class="slide-text">${TUTORIAL_SLIDES[idx]}</div>
+      <div class="slide-counter">${idx + 1} / ${total}</div>
+      <div class="slide-hint">どこかをタップして進む</div>
+    `
+  }
+
+  showSlide()
+
+  function advance(): void {
+    idx++
+    if (idx >= TUTORIAL_SLIDES.length) {
+      tutorialOverlay.removeEventListener('pointerdown', advance)
+      tutorialOverlay.style.display = 'none'
+      try { localStorage.setItem(LS_TUTORED, '1') } catch {}
+      onDone()
+    } else {
+      showSlide()
+    }
+  }
+
+  tutorialOverlay.addEventListener('pointerdown', advance)
+}
+
+function startRunWithTutorial(): void {
+  let tutored = false
+  try { tutored = !!localStorage.getItem(LS_TUTORED) } catch {}
+  if (tutored) {
+    startRun()
+  } else {
+    showTutorial(startRun)
+  }
+}
+
 // ── Title screen ──────────────────────────────────────────────────────────
 function showTitle(): void {
   statRecord.textContent = bestRecord > 0 ? String(bestRecord) : '—'
@@ -257,6 +498,7 @@ function startNight(): void {
   discardsLeft = boss === 'short' ? 0 : P.DISCARDS
   windBonus   = 0
   playsUsed   = 0
+  lastPreviewRole = 'none'
   target      = Math.round(NIGHT_TARGETS[nightIndex] * P.TARGET_MUL)
   sellConfirmId = null
   animating   = false
@@ -279,7 +521,6 @@ function renderNight(): void {
 
 function renderHeader(): void {
   nightRound.textContent = NIGHT_NAMES[nightIndex]
-  // Remaining pts to target (never negative). On reach show 達成 state.
   const remain = Math.max(0, target - nightScore)
   if (remain === 0) {
     targetPts.textContent = '達成'
@@ -297,7 +538,7 @@ function renderGauge(): void {
 }
 
 function renderBossBar(): void {
-  const cur  = NIGHT_BOSS[nightIndex]
+  const cur   = NIGHT_BOSS[nightIndex]
   const nextI = nextBossNight(nightIndex)
   const parts: string[] = []
 
@@ -321,7 +562,6 @@ function renderBossBar(): void {
 function renderHand(): void {
   handRow.innerHTML = ''
 
-  // Dynamically size cards to fit without scrolling
   const totalGap = (Math.max(hand.length, 1) - 1) * 5
   const avail    = Math.min(370, window.innerWidth - 28)
   const cw       = Math.min(42, Math.floor((avail - totalGap) / Math.max(hand.length, 1)))
@@ -329,13 +569,16 @@ function renderHand(): void {
 
   for (const card of hand) {
     const btn = document.createElement('button')
-    btn.className  = 'card-btn'
+    btn.className = 'card-btn'
     btn.style.cssText = `width:${cw}px;height:${ch}px;`
-    btn.innerHTML  = cardSVG(card.month, card.kind, card.motif, card.tanColor)
+    btn.appendChild(cardImg(card))
+
     if (selected.has(card.id)) {
       btn.classList.add('selected')
     } else if (selected.size >= 5) {
       btn.classList.add('dimmed')
+    } else if (isHintCard(card)) {
+      btn.classList.add('hint-glow')
     }
 
     btn.addEventListener('pointerdown', () => {
@@ -355,6 +598,8 @@ function renderHand(): void {
     })
     handRow.appendChild(btn)
   }
+
+  renderPreview()
 }
 
 function renderBakeRow(): void {
@@ -392,10 +637,10 @@ function renderStatus(): void {
 }
 
 function clearPlayArea(): void {
-  playCardsRow.innerHTML = ''
-  roleStamp.textContent  = ''
-  roleStamp.className    = 'role-stamp'
-  scoreCalc.textContent  = ''
+  playCardsRow.innerHTML  = ''
+  roleStamp.textContent   = ''
+  roleStamp.className     = 'role-stamp'
+  scoreCalc.textContent   = ''
   scoreTotalEl.textContent = ''
   scoreTotalEl.className  = 'score-total'
 }
@@ -405,20 +650,18 @@ async function animatePlay(played: Card[]): Promise<void> {
   animating = true
   renderPlayButtons()
 
-  // Show mini-cards in play area
   playCardsRow.innerHTML = ''
   const minis: HTMLDivElement[] = []
   for (const card of played) {
     const div = document.createElement('div')
     div.className = 'play-card-mini'
-    div.innerHTML = cardSVG(card.month, card.kind, card.motif, card.tanColor)
+    div.appendChild(cardImg(card))
     playCardsRow.appendChild(div)
     minis.push(div)
   }
 
   await wait(100)
 
-  // Count up pts card by card
   let runPts = 0
   for (let i = 0; i < minis.length; i++) {
     playTick()
@@ -430,7 +673,6 @@ async function animatePlay(played: Card[]): Promise<void> {
 
   await wait(80)
 
-  // Calculate full score
   const result = calcScore({
     selected: played,
     bake,
@@ -443,27 +685,22 @@ async function animatePlay(played: Card[]): Promise<void> {
     bossId: boss,
   })
 
-  // Reset wind bonus after use
   windBonus = 0
 
-  // Role stamp
   playRole()
   roleStamp.textContent = result.roleName
   roleStamp.className   = 'role-stamp show'
   await wait(180)
 
-  // Multiplier line
   const multStr = result.totalMulti % 1 === 0
     ? String(result.totalMulti)
     : result.totalMulti.toFixed(1)
   scoreCalc.textContent = `${result.basePts} × ${multStr} =`
   await wait(150)
 
-  // Total score pop
   scoreTotalEl.textContent = String(result.total)
   scoreTotalEl.className   = 'score-total show'
 
-  // Bake-fuda bounces with pop labels
   for (const eff of result.bakeEffects) {
     const chip = document.getElementById(`bchip-${eff.id}`)
     if (chip) {
@@ -480,7 +717,6 @@ async function animatePlay(played: Card[]): Promise<void> {
 
   await wait(200)
 
-  // Update score and gauge
   nightScore += result.total
   renderHeader()
 
@@ -505,8 +741,8 @@ async function onPlay(): Promise<void> {
 
   const played = hand.filter(c => selected.has(c.id))
   selected.clear()
+  lastPreviewRole = 'none'
 
-  // Remove played cards from hand
   hand = hand.filter(c => !played.some(p => p.id === c.id))
 
   playsLeft--
@@ -514,7 +750,6 @@ async function onPlay(): Promise<void> {
 
   await animatePlay(played)
 
-  // Refill hand
   const handSize = boss === 'tanuki' ? 7 : P.HAND
   while (hand.length < handSize && deck.length > 0) {
     hand.push(deck.shift()!)
@@ -523,7 +758,6 @@ async function onPlay(): Promise<void> {
   renderHand()
   renderStatus()
 
-  // Check win
   if (nightScore >= target) {
     playClear()
     await wait(600)
@@ -531,7 +765,6 @@ async function onPlay(): Promise<void> {
     return
   }
 
-  // Check defeat
   if (playsLeft <= 0) {
     playDefeat()
     await wait(600)
@@ -552,19 +785,17 @@ function onDiscard(): void {
 
   playTap()
 
-  // Shuffle discarded cards back into the deck
   const discarded = hand.filter(c => selected.has(c.id))
   hand = hand.filter(c => !selected.has(c.id))
   deck.push(...discarded)
   deck = shuffle(deck)
 
-  // 風待ち: accumulate bonus for next play
   if (hasBake(bake, 'kaze')) windBonus += 10
 
   selected.clear()
+  lastPreviewRole = 'none'
   discardsLeft--
 
-  // Refill hand
   const handSize = boss === 'tanuki' ? 7 : P.HAND
   while (hand.length < handSize && deck.length > 0) {
     hand.push(deck.shift()!)
@@ -579,9 +810,7 @@ function onDiscard(): void {
 // ── After night (clear or defeat) ────────────────────────────────────────
 function afterNight(cleared: boolean): void {
   if (cleared) {
-    // Enter shop (or result if last night)
     if (nightIndex === 7) {
-      // Full clear
       enterResult(true)
     } else {
       enterShop()
@@ -593,7 +822,6 @@ function afterNight(cleared: boolean): void {
 
 // ── Shop screen ───────────────────────────────────────────────────────────
 function enterShop(): void {
-  // Award night reward
   const reward = calcReward(playsLeft, wallet, bake)
   wallet += reward
 
@@ -609,7 +837,6 @@ function renderShop(): void {
   shopWalletVal.textContent = String(wallet)
   shopSubtitle.textContent  = `化け札 ${bake.length}/${MAX_BAKE} 枠`
 
-  // Offers
   shopOfferRow.innerHTML = ''
   const adjPrice = (b: BakeFuda) => Math.max(1, Math.round(b.price * P.PRICE_MUL))
 
@@ -643,10 +870,8 @@ function renderShop(): void {
     shopOfferRow.appendChild(card)
   }
 
-  // Reload button
   btnReload.disabled = wallet < 1
 
-  // Owned bake-fuda
   shopOwnedRow.innerHTML = ''
   if (bake.length === 0) {
     const msg = document.createElement('div')
@@ -655,9 +880,9 @@ function renderShop(): void {
     shopOwnedRow.appendChild(msg)
   }
   for (const b of bake) {
-    const sp    = sellPrice(b, bake)
+    const sp     = sellPrice(b, bake)
     const isSell = sellConfirmId === b.id
-    const item = document.createElement('div')
+    const item   = document.createElement('div')
     item.className = `bake-owned${isSell ? ' sell-confirm' : ''}`
     item.innerHTML = `
       <div class="own-name">${b.name}</div>
@@ -665,7 +890,6 @@ function renderShop(): void {
     item.addEventListener('pointerdown', () => {
       playTap()
       if (sellConfirmId === b.id) {
-        // Second tap: sell
         wallet += sp
         bake = bake.filter(o => o !== b)
         sellConfirmId = null
@@ -681,7 +905,7 @@ function renderShop(): void {
 
 // ── Result screen ─────────────────────────────────────────────────────────
 function enterResult(cleared: boolean): void {
-  const reachedNight = nightIndex + 1 // 1-indexed
+  const reachedNight = nightIndex + 1
   const yokkaGain    = reachedNight
 
   const prevLevel = cumYokka >= 15 ? 2 : cumYokka >= 5 ? 1 : 0
@@ -714,59 +938,75 @@ function enterResult(cleared: boolean): void {
 const SHOT = new URLSearchParams(location.search).get('shot')
 
 function setupShotPlay(): void {
-  // Night 3 (index 2), 三光 scenario, 480pt displayed
-  // Fixed showcase state: target 480 / current 160 → remaining 320, gauge one-third
-  nightIndex  = 2
-  boss        = NIGHT_BOSS[2]   // 'rain'
-  target      = 480
-  nightScore  = 160
-  playsLeft   = 2
+  nightIndex   = 2
+  boss         = NIGHT_BOSS[2]
+  target       = 480
+  nightScore   = 160
+  playsLeft    = 2
   discardsLeft = 1
-  playsUsed   = 1
-  windBonus   = 0
-  bake        = []
+  playsUsed    = 1
+  windBonus    = 0
+  bake         = []
 
-  // Build a sample hand from full deck
   const raw = makeDeck()
   hand = shuffle(raw).slice(0, 5)
   deck = raw.filter(c => !hand.some(h => h.id === c.id)).slice(0, 27)
 
-  // Find 三光 cards for play display
   const koCards = raw.filter(c => c.kind === 'ko' && !c.isRain).slice(0, 3)
 
   renderNight()
   showScreen(scrNight)
 
-  // Show play area in frozen "result" state
   playCardsRow.innerHTML = ''
   for (const card of koCards) {
     const div = document.createElement('div')
     div.className = 'play-card-mini lit'
-    div.innerHTML = cardSVG(card.month, card.kind, card.motif, card.tanColor)
+    div.appendChild(cardImg(card))
     playCardsRow.appendChild(div)
   }
-  roleStamp.textContent = '三光'
-  roleStamp.className   = 'role-stamp show'
-  scoreCalc.textContent = '60 × 8 ='
+  roleStamp.textContent  = '三光'
+  roleStamp.className    = 'role-stamp show'
+  scoreCalc.textContent  = '60 × 8 ='
   scoreTotalEl.textContent = '480'
-  scoreTotalEl.className   = 'score-total show'
+  scoreTotalEl.className  = 'score-total show'
 }
 
 function setupShotShop(): void {
-  nightIndex = 2
-  wallet     = 12
-  bake       = []
+  nightIndex  = 2
+  wallet      = 12
+  bake        = []
   const avail = availableBake(0)
   shopOffers  = shopOffer(avail, bake)
   renderShop()
   showScreen(scrShop)
 }
 
+function setupShotTecho(): void {
+  openTecho()
+  showTitle()
+}
+
 // ── Event wiring ──────────────────────────────────────────────────────────
 btnStart.addEventListener('pointerdown', () => {
   if (tune.isPanelOpen()) return
   playTap()
-  startRun()
+  startRunWithTutorial()
+})
+
+btnTechoTitle.addEventListener('pointerdown', () => {
+  playTap()
+  openTecho()
+})
+
+btnTecho.addEventListener('pointerdown', () => {
+  if (animating) return
+  playTap()
+  openTecho()
+})
+
+btnTechoClose.addEventListener('pointerdown', () => {
+  playTap()
+  closeTecho()
 })
 
 btnPlay.addEventListener('pointerdown', () => {
@@ -781,8 +1021,8 @@ btnReload.addEventListener('pointerdown', () => {
   if (wallet < 1) return
   wallet -= 1
   playTap()
-  const avail  = availableBake(cumYokka)
-  shopOffers   = shopOffer(avail, bake)
+  const avail = availableBake(cumYokka)
+  shopOffers  = shopOffer(avail, bake)
   renderShop()
 })
 
@@ -798,10 +1038,9 @@ btnResultBack.addEventListener('pointerdown', () => {
   showTitle()
 })
 
-// Cancel sell confirm on outside tap
 scrShop.addEventListener('pointerdown', (e) => {
-  const target = e.target as HTMLElement
-  if (!target.closest('.bake-owned') && sellConfirmId !== null) {
+  const t = e.target as HTMLElement
+  if (!t.closest('.bake-owned') && sellConfirmId !== null) {
     sellConfirmId = null
     renderShop()
   }
@@ -812,7 +1051,6 @@ mountMuteButton()
 
 document.querySelectorAll<HTMLAnchorElement>('a.back-link').forEach(wireLink)
 
-// SHOT: fix stage to screenshot dimensions
 if (SHOT) {
   const q = new URLSearchParams(location.search)
   const w = Number(q.get('w') || 390)
@@ -826,6 +1064,8 @@ if (SHOT) {
     setupShotPlay()
   } else if (SHOT === 'shop') {
     setupShotShop()
+  } else if (SHOT === 'techo') {
+    setupShotTecho()
   } else {
     showTitle()
   }

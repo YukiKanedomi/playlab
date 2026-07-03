@@ -66,6 +66,7 @@ export interface Card {
   month: number          // 1-12
   kind: Kind
   pts: number            // base points
+  ordinal: number        // 1-indexed within same month+kind (kasu1, kasu2, kasu3)
   tanColor?: TanColor    // only for kind === 'tan'
   isRain: boolean        // true only for 11月光 (small-ono-no-komachi)
   motif: string          // used for role/bake-fuda checks
@@ -177,10 +178,13 @@ export function hasBake(owned: BakeFuda[], id: string): boolean {
 // ── Deck construction ─────────────────────────────────────────────────────
 export function makeDeck(): Card[] {
   let id = 0
+  const ords: Record<string, number> = {}
   const c = (month: number, kind: Kind, pts: number, motif: string, tanColor?: TanColor, isRain = false): Card => {
+    const key = `${month}:${kind}`
+    const ordinal = (ords[key] = (ords[key] ?? 0) + 1)
     const lblPfx = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][month - 1]
     const plant = ['松','梅','桜','藤','菖蒲','牡丹','萩','芒','菊','紅葉','柳','桐'][month - 1]
-    return { id: id++, month, kind, pts, isRain, motif, label: `${lblPfx}・${plant}`, tanColor }
+    return { id: id++, month, kind, pts, ordinal, isRain, motif, label: `${lblPfx}・${plant}`, tanColor }
   }
 
   return [
