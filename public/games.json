@@ -1,6 +1,17 @@
 {
   "games": [
     {
+      "slug": "monkiri",
+      "no": 11,
+      "title": "きって、ひらく。",
+      "desc": "江戸の紙遊び〈紋切り〉。折りたたんだ紙に鋏を入れ、ひらいた瞬間、紋様があらわれる。後半は開いた紋から折りを頭で逆算する。",
+      "tags": ["紋切り", "パズル", "工作", "Canvas2D"],
+      "date": "2026-07-11",
+      "status": "experiment",
+      "path": "games/monkiri/",
+      "thumb": "thumbs/monkiri.png"
+    },
+    {
       "slug": "bakefuda",
       "no": 10,
       "title": "ならべて、ばける。",
