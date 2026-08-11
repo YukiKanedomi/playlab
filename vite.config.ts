@@ -24,6 +24,7 @@ export default defineConfig({
         nagashi: resolve(__dirname, 'games/nagashi/index.html'),
         bakefuda: resolve(__dirname, 'games/bakefuda/index.html'),
         monkiri: resolve(__dirname, 'games/monkiri/index.html'),
+        yacho: resolve(__dirname, 'games/yacho/index.html'),
       },
     },
   },

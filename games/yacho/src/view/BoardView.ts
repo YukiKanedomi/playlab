@@ -1,0 +1,334 @@
+// 盤面ビュー：エンジンのイベント列をタイムライン化して描く。
+// 方針: ロジックは即時確定・ビューが追いかける。入力割込時は snap で追いつく。
+// タイミングは RESEARCH.md §5 実測値。
+import { Container, Graphics, Sprite, Renderer } from 'pixi.js'
+import { Board, W, H } from '../core/board'
+import type { BoardEvent, Piece, XY } from '../core/types'
+import { PAL, pieceKey, pieceTexture } from './pieces'
+import { delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
+
+// juice 実測値テーブル（ms）
+export const T = {
+  swap: 130,
+  pop: 200, // 消滅ポップ 170-230
+  blockHit: 300, // 箱破壊 270-330
+  fall: 380, // 落下 330-430
+  chainBeat: 650, // 連鎖ビート 600-800
+  specialBorn: 240,
+} as const
+
+export class BoardView {
+  root = new Container()
+  cellLayer = new Container()
+  groundLayer = new Container()
+  blockLayer = new Container()
+  pieceLayer = new Container()
+  fxLayer = new Container()
+  S: number
+  sprites = new Map<string, Sprite>() // "x,y" -> 駒スプライト
+  blockG = new Map<string, Graphics>()
+  groundG = new Map<string, Graphics>()
+  busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
+
+  constructor(
+    public board: Board,
+    public renderer: Renderer,
+    size: number,
+  ) {
+    this.S = Math.floor(size / W)
+    this.root.addChild(this.cellLayer, this.groundLayer, this.blockLayer, this.pieceLayer, this.fxLayer)
+    this.drawStatic()
+    this.syncAll()
+  }
+
+  key(x: number, y: number) {
+    return `${x},${y}`
+  }
+  px(x: number) {
+    return x * this.S + this.S / 2
+  }
+
+  private drawStatic() {
+    const g = new Graphics()
+    // 盤下地（市松2トーン。背景より暗く＝明度対比の生命線）
+    g.roundRect(-8, -8, W * this.S + 16, H * this.S + 16, 14).fill(PAL.boardBg)
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        if (!this.board.at(x, y)) continue
+        g.roundRect(x * this.S + 1.5, y * this.S + 1.5, this.S - 3, this.S - 3, 6).fill((x + y) % 2 ? PAL.cellA : PAL.cellB)
+      }
+    this.cellLayer.addChild(g)
+  }
+
+  /** 盤の論理状態をそのまま描画に反映（初期化・保険） */
+  syncAll() {
+    for (const s of this.sprites.values()) s.destroy()
+    this.sprites.clear()
+    for (const g of this.blockG.values()) g.destroy()
+    this.blockG.clear()
+    for (const g of this.groundG.values()) g.destroy()
+    this.groundG.clear()
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const c = this.board.at(x, y)
+        if (!c) continue
+        if (c.ground > 0) this.makeGround(x, y, c.ground as 1 | 2)
+        if (c.block) this.makeBlock(x, y)
+        if (c.piece) this.makePiece(x, y, c.piece)
+      }
+  }
+
+  private makePiece(x: number, y: number, p: Piece): Sprite {
+    const sp = new Sprite(pieceTexture(this.renderer, p, this.S))
+    sp.anchor.set(0.5)
+    sp.position.set(this.px(x), this.px(y))
+    ;(sp as unknown as { __kind: string }).__kind = pieceKey(p)
+    this.pieceLayer.addChild(sp)
+    this.sprites.set(this.key(x, y), sp)
+    return sp
+  }
+
+  private makeBlock(x: number, y: number) {
+    const c = this.board.at(x, y)!
+    const g = new Graphics()
+    const b = c.block!
+    const S = this.S
+    if (b.type === 'kokeishi') {
+      g.roundRect(3, 3, S - 6, S - 6, 8).fill(b.hp === 2 ? PAL.stoneDark : PAL.stone)
+      g.roundRect(3, 3, S - 6, S - 6, 8).stroke({ width: 2.5, color: 0x4d5147 })
+      if (b.hp === 2) g.moveTo(S * 0.25, S * 0.5).lineTo(S * 0.75, S * 0.5).stroke({ width: 2, color: 0x4d5147 })
+      g.circle(S * 0.3, S * 0.28, S * 0.09).fill(0x77905c) // 苔
+    } else if (b.type === 'hako') {
+      g.roundRect(4, 4, S - 8, S - 8, 6).fill(PAL.wood).stroke({ width: 2.5, color: 0x6b5238 })
+      g.moveTo(4, S / 2).lineTo(S - 4, S / 2).stroke({ width: 2, color: 0x6b5238 })
+    } else if (b.type === 'touhen') {
+      g.circle(S / 2, S / 2, S * 0.34).fill(0xe8e2d2).stroke({ width: 2.5, color: 0x9a927e })
+      g.circle(S / 2, S / 2, S * 0.2).stroke({ width: 1.5, color: 0x9a927e })
+    } else if (b.type === 'subi') {
+      g.circle(S / 2, S / 2, S * 0.4).fill(0x54636f).stroke({ width: 2.5, color: 0x39434c })
+      g.circle(S / 2, S / 2, S * 0.18).fill(PAL.glowSpore)
+    }
+    g.position.set(x * this.S, y * this.S)
+    this.blockLayer.addChild(g)
+    this.blockG.set(this.key(x, y), g)
+  }
+
+  private makeGround(x: number, y: number, level: 1 | 2) {
+    const g = new Graphics()
+    const S = this.S
+    g.roundRect(2, 2, S - 4, S - 4, 6).fill({ color: 0x4f7a4a, alpha: level === 2 ? 0.85 : 0.5 })
+    g.position.set(x * this.S, y * this.S)
+    this.groundLayer.addChild(g)
+    this.groundG.set(this.key(x, y), g)
+  }
+
+  // ---- イベント→タイムライン ----
+
+  /** イベント列をアニメ予約。所要合計msを返す */
+  play(evs: BoardEvent[]): number {
+    let t = 0
+    let chainSeen = 0
+    // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
+    for (const e of evs) {
+      switch (e.t) {
+        case 'swap': {
+          const a = this.sprites.get(this.key(e.a.x, e.a.y))
+          const b = this.sprites.get(this.key(e.b.x, e.b.y))
+          if (a && b) {
+            this.sprites.set(this.key(e.a.x, e.a.y), b)
+            this.sprites.set(this.key(e.b.x, e.b.y), a)
+            const move = (sp: Sprite, to: XY, back: boolean) => {
+              tween(sp.position, { x: this.px(to.x), y: this.px(to.y) }, T.swap, { delay: t })
+              if (back)
+                tween(sp.position, { x: this.px(back ? e.a.x : to.x), y: this.px(back ? e.a.y : to.y) }, T.swap, {
+                  delay: t + T.swap,
+                })
+            }
+            if (e.illegal) {
+              // 行って戻る
+              tween(a.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swap, { delay: t })
+              tween(b.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swap, { delay: t })
+              tween(a.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swap, { delay: t + T.swap })
+              tween(b.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swap, { delay: t + T.swap })
+              this.sprites.set(this.key(e.a.x, e.a.y), a)
+              this.sprites.set(this.key(e.b.x, e.b.y), b)
+              t += T.swap * 2
+            } else {
+              move(a, e.b, false)
+              move(b, e.a, false)
+              t += T.swap
+            }
+          }
+          break
+        }
+        case 'match': {
+          if (e.chain > chainSeen) {
+            if (e.chain > 1) t += T.chainBeat - T.pop - T.fall // 連鎖ビートに揃える
+            if (t < 0) t = 0
+            chainSeen = e.chain
+          }
+          for (const p of e.cells) this.popPieceAt(p, t)
+          break
+        }
+        case 'special-fire': {
+          for (const p of e.cleared) this.popPieceAt(p, t, true)
+          this.flashFx(e.at, t)
+          break
+        }
+        case 'combo': {
+          this.flashFx(e.at, t)
+          break
+        }
+        case 'special-born': {
+          const sp = this.makePiece(e.at.x, e.at.y, e.piece)
+          sp.scale.set(0)
+          sp.alpha = 0
+          tween(sp, { alpha: 1 }, 80, { delay: t + T.pop })
+          tween(sp.scale, { x: 1, y: 1 }, T.specialBorn, { delay: t + T.pop, ease: easeOutBack })
+          break
+        }
+        case 'block-hit': {
+          const g = this.blockG.get(this.key(e.at.x, e.at.y))
+          if (g) {
+            const gg = g
+            tween(gg.scale, { x: 1.08, y: 1.08 }, 60, { delay: t })
+            tween(gg.scale, { x: 1, y: 1 }, 100, { delay: t + 60 })
+            if (e.destroyed || e.type === 'hako') {
+              // 破壊 or 匣→陶片: 再描画
+              delay(t + T.blockHit, () => {
+                gg.destroy()
+                this.blockG.delete(this.key(e.at.x, e.at.y))
+                const c = this.board.at(e.at.x, e.at.y)
+                if (c?.block) this.makeBlock(e.at.x, e.at.y)
+              })
+              this.debrisFx(e.at, t, e.type === 'kokeishi' ? PAL.stone : PAL.wood)
+            }
+          }
+          break
+        }
+        case 'ground-hit': {
+          const g = this.groundG.get(this.key(e.at.x, e.at.y))
+          if (g) {
+            const gg = g
+            const left = e.left
+            delay(t + T.pop * 0.6, () => {
+              gg.destroy()
+              this.groundG.delete(this.key(e.at.x, e.at.y))
+              if (left > 0) this.makeGround(e.at.x, e.at.y, left as 1 | 2)
+            })
+          }
+          break
+        }
+        case 'fall': {
+          const sp = this.sprites.get(this.key(e.from.x, e.from.y))
+          if (sp) {
+            this.sprites.delete(this.key(e.from.x, e.from.y))
+            this.sprites.set(this.key(e.to.x, e.to.y), sp)
+            const dist = Math.abs(e.to.y - e.from.y)
+            tween(sp.position, { x: this.px(e.to.x), y: this.px(e.to.y) }, T.fall * Math.min(1, 0.5 + dist * 0.25), {
+              delay: t + T.pop,
+              ease: easeInCubic,
+              onDone: () => {
+                // 着地バウンス
+                tween(sp.scale, { x: 1.12, y: 0.88 }, 60, {
+                  onDone: () => tween(sp.scale, { x: 1, y: 1 }, 90, { ease: easeOutCubic }),
+                })
+              },
+            })
+          }
+          break
+        }
+        case 'refill': {
+          const sp = this.makePiece(e.at.x, e.at.y, e.piece)
+          sp.position.y = -this.S * 0.8
+          sp.alpha = 0
+          tween(sp, { alpha: 1 }, 80, { delay: t + T.pop })
+          tween(sp.position, { y: this.px(e.at.y) }, T.fall, { delay: t + T.pop + e.at.y * 18, ease: easeInCubic })
+          break
+        }
+        case 'spore-born': {
+          const sp = this.makePiece(e.at.x, e.at.y, { kind: 'spore' })
+          sp.scale.set(0)
+          tween(sp.scale, { x: 1, y: 1 }, 250, { delay: t, ease: easeOutBack })
+          break
+        }
+        case 'spore-rise': {
+          const sp = this.sprites.get(this.key(e.from.x, e.from.y))
+          const other = this.sprites.get(this.key(e.to.x, e.to.y))
+          if (sp) {
+            this.sprites.set(this.key(e.to.x, e.to.y), sp)
+            if (other) this.sprites.set(this.key(e.from.x, e.from.y), other)
+            else this.sprites.delete(this.key(e.from.x, e.from.y))
+            tween(sp.position, { y: this.px(e.to.y) }, 300, { delay: t, ease: easeOutCubic })
+            if (other) tween(other.position, { y: this.px(e.from.y) }, 300, { delay: t, ease: easeOutCubic })
+          }
+          break
+        }
+        case 'spore-collected': {
+          const sp = this.sprites.get(this.key(e.at.x, e.at.y))
+          if (sp) {
+            this.sprites.delete(this.key(e.at.x, e.at.y))
+            tween(sp, { alpha: 0 }, 250, { delay: t })
+            tween(sp.position, { y: sp.position.y - this.S }, 250, { delay: t, onDone: () => sp.destroy() })
+          }
+          break
+        }
+      }
+    }
+    return t + T.pop + T.fall
+  }
+
+  private popPieceAt(p: XY, t: number, byFire = false) {
+    const k = this.key(p.x, p.y)
+    const sp = this.sprites.get(k)
+    if (!sp) return
+    this.sprites.delete(k)
+    tween(sp.scale, { x: 1.25, y: 1.25 }, T.pop * 0.35, { delay: t })
+    tween(sp.scale, { x: 0, y: 0 }, T.pop * 0.65, { delay: t + T.pop * 0.35, ease: easeInCubic })
+    tween(sp, { alpha: byFire ? 0.4 : 0.9 }, T.pop, { delay: t, onDone: () => sp.destroy() })
+    this.sparkFx(p, t)
+  }
+
+  private sparkFx(p: XY, t: number) {
+    delay(t, () => {
+      for (let i = 0; i < 6; i++) {
+        const g = new Graphics()
+        g.circle(0, 0, 2.4).fill(0xfff2c8)
+        g.position.set(this.px(p.x), this.px(p.y))
+        this.fxLayer.addChild(g)
+        const a = Math.random() * Math.PI * 2
+        const d = this.S * (0.4 + Math.random() * 0.5)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 320, { ease: easeOutCubic })
+        tween(g, { alpha: 0 }, 320, { onDone: () => g.destroy() })
+      }
+    })
+  }
+
+  private debrisFx(p: XY, t: number, color: number) {
+    delay(t, () => {
+      for (let i = 0; i < 8; i++) {
+        const g = new Graphics()
+        g.roundRect(-3, -3, 6, 6, 1.5).fill(color)
+        g.position.set(this.px(p.x), this.px(p.y))
+        this.fxLayer.addChild(g)
+        const a = Math.random() * Math.PI * 2
+        const d = this.S * (0.5 + Math.random() * 0.7)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d + this.S * 0.4 }, 420, {
+          ease: easeOutCubic,
+        })
+        tween(g, { alpha: 0, rotation: (Math.random() - 0.5) * 4 }, 420, { onDone: () => g.destroy() })
+      }
+    })
+  }
+
+  private flashFx(p: XY, t: number) {
+    delay(t, () => {
+      const g = new Graphics()
+      g.circle(0, 0, this.S * 0.2).fill({ color: 0xffffff, alpha: 0.9 })
+      g.position.set(this.px(p.x), this.px(p.y))
+      this.fxLayer.addChild(g)
+      tween(g.scale, { x: 5, y: 5 }, 300, { ease: easeOutCubic })
+      tween(g, { alpha: 0 }, 300, { onDone: () => g.destroy() })
+    })
+  }
+}
