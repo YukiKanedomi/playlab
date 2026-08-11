@@ -5,7 +5,7 @@ import { Container, Graphics, Sprite, Renderer } from 'pixi.js'
 import { Board, W, H } from '../core/board'
 import type { BoardEvent, Piece, XY } from '../core/types'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
-import { delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
+import { completeAll, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
 
 // juice 実測値テーブル（ms）
 export const T = {
@@ -157,6 +157,7 @@ export class BoardView {
 
   /** イベント列をアニメ予約。所要合計msを返す */
   play(evs: BoardEvent[]): number {
+    completeAll() // 進行中の演出を終端までスナップ（入力割込・連続タイムラインの整合）
     let t = 0
     let chainSeen = 0
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
@@ -204,6 +205,18 @@ export class BoardView {
         case 'special-fire': {
           for (const p of e.cleared) this.popPieceAt(p, t, true)
           this.flashFx(e.at, t)
+          t += 220 // 起爆ごとのビート（連発時に畳み掛ける間隔）
+          chainSeen = 0
+          break
+        }
+        case 'win-drain': {
+          // 残手数→特殊駒変換の彗星（1手 約45ms＝実測30-60msの中庸）
+          if (e.convertAt) this.cometFx(e.convertAt, t)
+          t += 45
+          break
+        }
+        case 'win-detonate-begin': {
+          t += 350
           break
         }
         case 'combo': {
@@ -353,6 +366,19 @@ export class BoardView {
         })
         tween(g, { alpha: 0, rotation: (Math.random() - 0.5) * 4 }, 420, { onDone: () => g.destroy() })
       }
+    })
+  }
+
+  /** 画面上部からセルへ飛ぶ白い彗星（勝利ドレイン用） */
+  private cometFx(p: XY, t: number) {
+    delay(t, () => {
+      const g = new Graphics()
+      g.circle(0, 0, this.S * 0.14).fill({ color: 0xfff6d8, alpha: 0.95 })
+      g.circle(-this.S * 0.18, 0, this.S * 0.08).fill({ color: 0xfff6d8, alpha: 0.4 })
+      g.position.set(this.px(p.x) * 0.3 - this.S, -this.S * 1.2)
+      this.fxLayer.addChild(g)
+      tween(g.position, { x: this.px(p.x), y: this.px(p.y) }, 260, { ease: easeOutCubic })
+      tween(g, { alpha: 0 }, 300, { delay: 180, onDone: () => g.destroy() })
     })
   }
 

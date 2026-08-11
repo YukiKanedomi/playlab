@@ -72,6 +72,9 @@ export type BoardEvent =
   | { t: 'fall'; from: XY; to: XY }
   | { t: 'refill'; at: XY; piece: Piece }
   | { t: 'goal-progress'; goal: Goal; done: number }
+  // 勝利シーケンス（RESEARCH §5: 残手数ドレイン→特殊駒変換→自動起爆）
+  | { t: 'win-drain'; movesLeft: number; convertAt: XY | null }
+  | { t: 'win-detonate-begin' }
 
 export interface XY {
   x: number

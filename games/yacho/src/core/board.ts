@@ -679,6 +679,54 @@ export class Board {
   get lost(): boolean {
     return !this.won && this.movesLeft <= 0
   }
+  /**
+   * 勝利シーケンス：残手数を特殊駒（銛/歯車爆弾）に変換して全自動起爆（RM実測の再現）。
+   * クリア確定後に一度だけ呼ぶ。イベント列を返す。
+   */
+  finishWin(): BoardEvent[] {
+    const ev: BoardEvent[] = []
+    const drain = Math.min(this.movesLeft, 20) // 演出上限
+    for (let i = 0; i < drain; i++) {
+      this.movesLeft--
+      // 変換先：ランダムな通常駒
+      const cands: XY[] = []
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) if (this.at(x, y)?.piece?.kind === 'normal') cands.push({ x, y })
+      let at: XY | null = null
+      if (cands.length > 0) {
+        at = cands[randInt(this.rng, cands.length)]
+        const c = this.at(at.x, at.y)!
+        const p: Piece =
+          this.rng() < 0.75 ? { kind: 'harpoon', dir: this.rng() < 0.5 ? 'h' : 'v' } : { kind: 'hitsubo' }
+        c.piece = p
+        ev.push({ t: 'special-born', at, piece: p })
+      }
+      ev.push({ t: 'win-drain', movesLeft: this.movesLeft, convertAt: at })
+    }
+    this.movesLeft = 0
+    ev.push({ t: 'win-detonate-begin' })
+    // 盤上の特殊駒を順に全起爆（誘爆・連鎖込み）
+    let guard = 0
+    while (guard++ < 80) {
+      let fired = false
+      outer: for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const c = this.at(x, y)
+          if (c?.piece && c.piece.kind !== 'normal' && c.piece.kind !== 'spore') {
+            const p = c.piece
+            c.piece = null
+            this.chain = 0
+            this.fireSpecial({ x, y }, p, ev)
+            this.resolveCascades(ev)
+            fired = true
+            break outer
+          }
+        }
+      if (!fired) break
+    }
+    return ev
+  }
+
   /** 3つ星評価（★1=クリア、★2/★3=スコア閾値。閾値はレベル定義 or 既定値） */
   get stars(): 0 | 1 | 2 | 3 {
     if (!this.won) return 0

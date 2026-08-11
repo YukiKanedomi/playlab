@@ -38,6 +38,7 @@ export function tween(
   dur: number,
   opts: { delay?: number; ease?: Ease; onDone?: () => void } = {},
 ): void {
+  if (obj == null) return // 破棄済みPixiオブジェクトのgetterがnullを返すケース
   tweens.push({
     obj: obj as Record<string, number>,
     from: {},
@@ -66,6 +67,22 @@ export function snap(obj: unknown): void {
   }
 }
 
+/** 全トゥイーンを即時完了（新しいタイムライン開始前のスナップ）。onDone も発火する */
+export function completeAll(): void {
+  // onDone が新しいトゥイーンを生む場合があるので、現時点の分だけ処理
+  const list = tweens.slice()
+  for (const tw of list) {
+    if (tw.dead) continue
+    tw.dead = true
+    try {
+      for (const k of Object.keys(tw.to)) tw.obj[k] = tw.to[k]
+    } catch {
+      /* 破棄済みオブジェクトは無視 */
+    }
+    tw.onDone?.()
+  }
+}
+
 export function update(dtMs: number): void {
   for (const tw of tweens) {
     if (tw.dead) continue
@@ -76,12 +93,22 @@ export function update(dtMs: number): void {
     }
     if (tw.t < 0) {
       tw.t = 0
-      for (const k of Object.keys(tw.to)) tw.from[k] = tw.obj[k]
+      try {
+        for (const k of Object.keys(tw.to)) tw.from[k] = tw.obj[k]
+      } catch {
+        tw.dead = true // 対象が破棄済み：このトゥイーンだけ落とす
+        continue
+      }
     }
     tw.t += dtMs
     const p = tw.dur <= 0 ? 1 : Math.min(1, tw.t / tw.dur)
     const e = tw.ease(p)
-    for (const k of Object.keys(tw.to)) tw.obj[k] = tw.from[k] + (tw.to[k] - tw.from[k]) * e
+    try {
+      for (const k of Object.keys(tw.to)) tw.obj[k] = tw.from[k] + (tw.to[k] - tw.from[k]) * e
+    } catch {
+      tw.dead = true // 破棄済みオブジェクト：このトゥイーンだけ落とし、他は巻き込まない
+      continue
+    }
     if (p >= 1) {
       tw.dead = true
       tw.onDone?.()

@@ -2,20 +2,21 @@
 import { Assets, Container, Graphics, RenderTexture, Renderer, Texture } from 'pixi.js'
 import type { Piece } from '../core/types'
 
-// 生成アセット（b7参照・256px透過）。vite が URL 解決する
+// 生成アセット AD v2（user_master 参照・256px透過）。vite が URL 解決する
+// 色スロット: 0=鉱石(黄) 1=葉(緑) 2=結晶(青) 3=花(紫) 4=キノコ(赤)
 const SPRITE_URLS: Record<string, URL> = {
-  n0: new URL('../../assets/sprites/p_sun.png', import.meta.url),
-  n1: new URL('../../assets/sprites/p_seed.png', import.meta.url),
-  n2: new URL('../../assets/sprites/p_drop.png', import.meta.url),
-  n3: new URL('../../assets/sprites/p_moon.png', import.meta.url),
-  n4: new URL('../../assets/sprites/p_blossom.png', import.meta.url),
-  harpoon: new URL('../../assets/sprites/sp_harpoon.png', import.meta.url),
-  hamushi: new URL('../../assets/sprites/sp_hamushi.png', import.meta.url),
-  hitsubo: new URL('../../assets/sprites/sp_hitsubo.png', import.meta.url),
-  seiju: new URL('../../assets/sprites/sp_seiju.png', import.meta.url),
-  spore: new URL('../../assets/sprites/sp_spore.png', import.meta.url),
-  kokeishi: new URL('../../assets/sprites/ob_kokeishi.png', import.meta.url),
-  hako: new URL('../../assets/sprites/ob_hako.png', import.meta.url),
+  n0: new URL('../../assets/sprites2/p0_ore.png', import.meta.url),
+  n1: new URL('../../assets/sprites2/p1_leaf.png', import.meta.url),
+  n2: new URL('../../assets/sprites2/p2_crystal.png', import.meta.url),
+  n3: new URL('../../assets/sprites2/p3_flower.png', import.meta.url),
+  n4: new URL('../../assets/sprites2/p4_mushroom.png', import.meta.url),
+  harpoon: new URL('../../assets/sprites2/s_wrench.png', import.meta.url),
+  hamushi: new URL('../../assets/sprites2/s_compass.png', import.meta.url),
+  hitsubo: new URL('../../assets/sprites2/s_gearbomb.png', import.meta.url),
+  seiju: new URL('../../assets/sprites2/s_lantern.png', import.meta.url),
+  spore: new URL('../../assets/sprites2/s_spore.png', import.meta.url),
+  kokeishi: new URL('../../assets/sprites2/o_stone.png', import.meta.url),
+  hako: new URL('../../assets/sprites2/o_crate.png', import.meta.url),
 }
 
 const loaded = new Map<string, Texture>()

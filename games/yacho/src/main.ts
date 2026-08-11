@@ -230,27 +230,139 @@ async function boot() {
     downAt = null
     downCell = null
     if (evs.length === 0) return
-    view.play(evs)
+    const dur = view.play(evs)
     refreshHud()
-    if (board.won || board.lost) {
+    if (board.won) {
+      inputLocked = true
+      tw.delay(Math.min(dur, 1200), () => triggerWin())
+    } else if (board.lost) {
       inputLocked = true
       tw.delay(900, () => {
-        const close = board.won
-          ? banner('探 索 成 功 ！', `${'★'.repeat(board.stars)}${'☆'.repeat(3 - board.stars)}　スコア ${board.score.toLocaleString()}`, UI.brass)
-          : banner('あと少し…', `スコア ${board.score.toLocaleString()}`, 0xc9d4de)
+        const close = banner('あと少し…', `スコア ${board.score.toLocaleString()}`, 0xc9d4de)
         tw.delay(2000, () => {
           close()
-          if (board.won) levelIdx = (levelIdx + 1) % LEVELS.length
-          board = new Board(LEVELS[levelIdx])
-          view.board = board
-          view.syncAll()
-          buildGoals()
-          refreshHud()
-          inputLocked = false
+          nextLevel(false)
         })
       })
     }
   })
+
+  const nextLevel = (advance: boolean) => {
+    if (advance) levelIdx = (levelIdx + 1) % LEVELS.length
+    board = new Board(LEVELS[levelIdx])
+    view.board = board
+    view.syncAll()
+    buildGoals()
+    refreshHud()
+    inputLocked = false
+  }
+
+  /** 勝利シーケンス：大発見バナー→残手数ドレイン＋変換→自動起爆→探索成功パネル（RESEARCH §5） */
+  const triggerWin = () => {
+    inputLocked = true
+    // 1. 「大発見！」バナー（暗転＋約1.6秒）
+    const dim = new Graphics()
+    dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0 })
+    scene.addChild(dim)
+    tw.tween(dim, { alpha: 0.45 }, 250)
+    const bt = new Text({
+      text: '大 発 見 ！',
+      style: { fill: UI.brass, fontSize: fs(0.1), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x2a1c0e, width: 6 } },
+    })
+    bt.anchor.set(0.5)
+    bt.position.set(vw / 2, vh * 0.45)
+    bt.scale.set(0)
+    scene.addChild(bt)
+    tw.tween(bt.scale, { x: 1, y: 1 }, 320, { ease: tw.easeOutBack })
+    tw.delay(1500, () => {
+      // バナー退場（約300msスケールアウト・実測準拠）
+      tw.tween(bt.scale, { x: 0, y: 0 }, 300, { ease: tw.easeInCubic, onDone: () => bt.destroy() })
+      tw.tween(dim, { alpha: 0 }, 150, { onDone: () => dim.destroy() })
+      // 2-4. ドレイン→変換→自動起爆
+      const evs = board.finishWin()
+      const dur = view.play(evs)
+      // HUDの残手数を高速ドレイン表示（45ms/手）
+      const drains = evs.filter((e) => e.t === 'win-drain')
+      drains.forEach((e, i) => {
+        tw.delay(i * 45, () => {
+          if (e.t === 'win-drain') movesText.text = String(e.movesLeft)
+        })
+      })
+      const scoreTick = () => {
+        scoreText.text = `スコア ${board.score.toLocaleString()}`
+      }
+      tw.delay(dur * 0.5, scoreTick)
+      tw.delay(dur, () => {
+        scoreTick()
+        refreshHud()
+        showClearPanel()
+      })
+    })
+  }
+
+  // 5-6. 探索成功パネル（モック③準拠の簡易版）
+  const showClearPanel = () => {
+    const panel = new Container()
+    const dim = new Graphics()
+    dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0.55 })
+    panel.addChild(dim)
+    const pw = vw * 0.78
+    const ph = vh * 0.42
+    const px0 = (vw - pw) / 2
+    const py0 = vh * 0.24
+    const bg = new Graphics()
+    bg.roundRect(px0, py0, pw, ph, 14).fill(UI.paper).stroke({ width: 4, color: UI.woodLight })
+    // リボンバナー
+    bg.roundRect(px0 + pw * 0.12, py0 - vh * 0.035, pw * 0.76, vh * 0.07, 10).fill(0x7d4f3a).stroke({ width: 3, color: UI.brass })
+    panel.addChild(bg)
+    const title = new Text({
+      text: '探索成功！',
+      style: { fill: UI.badgeText, fontSize: fs(0.06), fontFamily: 'serif', fontWeight: 'bold' },
+    })
+    title.anchor.set(0.5)
+    title.position.set(vw / 2, py0)
+    panel.addChild(title)
+    // 星（1つずつバウンドで出す）
+    const starY = py0 + ph * 0.24
+    for (let i = 0; i < 3; i++) {
+      const filled = i < board.stars
+      const st = new Text({
+        text: '★',
+        style: { fill: filled ? 0xf2c14e : 0xcbc2ab, fontSize: fs(filled ? 0.13 : 0.1), fontFamily: 'serif' },
+      })
+      st.anchor.set(0.5)
+      st.position.set(vw / 2 + (i - 1) * pw * 0.24, starY + (i === 1 ? -ph * 0.03 : 0))
+      st.scale.set(0)
+      panel.addChild(st)
+      tw.tween(st.scale, { x: 1, y: 1 }, 300, { delay: 200 + i * 180, ease: tw.easeOutBack })
+    }
+    const sc = new Text({
+      text: `スコア\n${board.score.toLocaleString()}`,
+      style: { fill: UI.paperInk, fontSize: fs(0.055), fontFamily: 'serif', fontWeight: 'bold', align: 'center' },
+    })
+    sc.anchor.set(0.5)
+    sc.position.set(vw / 2, py0 + ph * 0.55)
+    panel.addChild(sc)
+    // つぎへボタン
+    const btn = new Container()
+    const bw2 = pw * 0.6
+    const bh2 = vh * 0.06
+    const bg2 = new Graphics()
+    bg2.roundRect(-bw2 / 2, -bh2 / 2, bw2, bh2, 12).fill(0x5d7a3f).stroke({ width: 3, color: 0x3f5429 })
+    btn.addChild(bg2)
+    const bt2 = new Text({ text: 'つぎへ', style: { fill: 0xf4f8ea, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold' } })
+    bt2.anchor.set(0.5)
+    btn.addChild(bt2)
+    btn.position.set(vw / 2, py0 + ph * 0.85)
+    btn.eventMode = 'static'
+    btn.cursor = 'pointer'
+    btn.on('pointertap', () => {
+      panel.destroy({ children: true })
+      nextLevel(true)
+    })
+    panel.addChild(btn)
+    scene.addChild(panel)
+  }
 
   app.ticker.add((t) => tw.update(t.deltaMS))
 
@@ -261,6 +373,12 @@ async function boot() {
     },
     view,
     metrics: () => ({ S: view.S, ox: view.root.position.x, oy: view.root.position.y, vw, vh }),
+    /** ゴールを達成扱いにして勝利シーケンスを起動（動画撮影・QA用） */
+    forceWin: () => {
+      board.goals.forEach((g, i) => (board.goalDone[i] = g.count))
+      refreshHud()
+      triggerWin()
+    },
   }
 }
 
