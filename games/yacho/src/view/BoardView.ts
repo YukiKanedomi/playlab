@@ -4,7 +4,7 @@
 import { Container, Graphics, Sprite, Renderer } from 'pixi.js'
 import { Board, W, H } from '../core/board'
 import type { BoardEvent, Piece, XY } from '../core/types'
-import { PAL, pieceKey, pieceTexture } from './pieces'
+import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import { delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
 
 // juice 実測値テーブル（ms）
@@ -26,7 +26,7 @@ export class BoardView {
   fxLayer = new Container()
   S: number
   sprites = new Map<string, Sprite>() // "x,y" -> 駒スプライト
-  blockG = new Map<string, Graphics>()
+  blockG = new Map<string, Container>()
   groundG = new Map<string, Graphics>()
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
 
@@ -81,6 +81,12 @@ export class BoardView {
   private makePiece(x: number, y: number, p: Piece): Sprite {
     const sp = new Sprite(pieceTexture(this.renderer, p, this.S))
     sp.anchor.set(0.5)
+    // テクスチャ原寸に依らずセル寸法へ正規化（この基準スケールが演出の「1」）
+    const target = this.S * (p.kind === 'normal' ? 0.94 : 0.98)
+    const base = target / Math.max(sp.texture.width, sp.texture.height)
+    sp.scale.set(base)
+    ;(sp as unknown as { __base: number }).__base = base
+    if (p.kind === 'harpoon' && p.dir === 'h') sp.rotation = Math.PI / 2 // 縦画像を横向きに
     sp.position.set(this.px(x), this.px(y))
     ;(sp as unknown as { __kind: string }).__kind = pieceKey(p)
     this.pieceLayer.addChild(sp)
@@ -88,11 +94,36 @@ export class BoardView {
     return sp
   }
 
+  /** 演出用: スプライトの基準スケール */
+  private bs(sp: Sprite): number {
+    return (sp as unknown as { __base?: number }).__base ?? 1
+  }
+
   private makeBlock(x: number, y: number) {
     const c = this.board.at(x, y)!
-    const g = new Graphics()
     const b = c.block!
     const S = this.S
+    // 生成アセットがある障害物は Sprite で
+    if (b.type === 'kokeishi' || b.type === 'hako') {
+      const tex = spriteTexture(b.type)
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        const base = (S - 4) / Math.max(tex.width, tex.height)
+        sp.scale.set(base)
+        sp.position.set(this.px(x), this.px(y))
+        if (b.type === 'kokeishi' && b.hp === 1) {
+          sp.alpha = 0.82 // 1層目: 削れた表現（v1簡易。ひび差分はアセット第2弾で）
+          sp.tint = 0xd8d2c2
+        }
+        const wrap = new Container()
+        wrap.addChild(sp)
+        this.blockLayer.addChild(wrap)
+        this.blockG.set(this.key(x, y), wrap)
+        return
+      }
+    }
+    const g = new Graphics()
     if (b.type === 'kokeishi') {
       g.roundRect(3, 3, S - 6, S - 6, 8).fill(b.hp === 2 ? PAL.stoneDark : PAL.stone)
       g.roundRect(3, 3, S - 6, S - 6, 8).stroke({ width: 2.5, color: 0x4d5147 })
@@ -181,10 +212,11 @@ export class BoardView {
         }
         case 'special-born': {
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
+          const b = this.bs(sp)
           sp.scale.set(0)
           sp.alpha = 0
           tween(sp, { alpha: 1 }, 80, { delay: t + T.pop })
-          tween(sp.scale, { x: 1, y: 1 }, T.specialBorn, { delay: t + T.pop, ease: easeOutBack })
+          tween(sp.scale, { x: b, y: b }, T.specialBorn, { delay: t + T.pop, ease: easeOutBack })
           break
         }
         case 'block-hit': {
@@ -225,13 +257,14 @@ export class BoardView {
             this.sprites.delete(this.key(e.from.x, e.from.y))
             this.sprites.set(this.key(e.to.x, e.to.y), sp)
             const dist = Math.abs(e.to.y - e.from.y)
+            const b = this.bs(sp)
             tween(sp.position, { x: this.px(e.to.x), y: this.px(e.to.y) }, T.fall * Math.min(1, 0.5 + dist * 0.25), {
               delay: t + T.pop,
               ease: easeInCubic,
               onDone: () => {
                 // 着地バウンス
-                tween(sp.scale, { x: 1.12, y: 0.88 }, 60, {
-                  onDone: () => tween(sp.scale, { x: 1, y: 1 }, 90, { ease: easeOutCubic }),
+                tween(sp.scale, { x: b * 1.12, y: b * 0.88 }, 60, {
+                  onDone: () => tween(sp.scale, { x: b, y: b }, 90, { ease: easeOutCubic }),
                 })
               },
             })
@@ -248,8 +281,9 @@ export class BoardView {
         }
         case 'spore-born': {
           const sp = this.makePiece(e.at.x, e.at.y, { kind: 'spore' })
+          const b = this.bs(sp)
           sp.scale.set(0)
-          tween(sp.scale, { x: 1, y: 1 }, 250, { delay: t, ease: easeOutBack })
+          tween(sp.scale, { x: b, y: b }, 250, { delay: t, ease: easeOutBack })
           break
         }
         case 'spore-rise': {
@@ -283,7 +317,8 @@ export class BoardView {
     const sp = this.sprites.get(k)
     if (!sp) return
     this.sprites.delete(k)
-    tween(sp.scale, { x: 1.25, y: 1.25 }, T.pop * 0.35, { delay: t })
+    const b = this.bs(sp)
+    tween(sp.scale, { x: b * 1.25, y: b * 1.25 }, T.pop * 0.35, { delay: t })
     tween(sp.scale, { x: 0, y: 0 }, T.pop * 0.65, { delay: t + T.pop * 0.35, ease: easeInCubic })
     tween(sp, { alpha: byFire ? 0.4 : 0.9 }, T.pop, { delay: t, onDone: () => sp.destroy() })
     this.sparkFx(p, t)

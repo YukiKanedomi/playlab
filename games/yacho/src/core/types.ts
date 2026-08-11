@@ -53,6 +53,8 @@ export interface LevelDef {
   /** 巣灯1基あたりの排出数（既定4） */
   subiCharge?: number
   bossRun?: boolean // 絶界行（ブースター不可・報酬増）
+  star2?: number // ★2スコア閾値（既定1500）
+  star3?: number // ★3スコア閾値（既定3000）
 }
 
 /** 1回の解決で起きた事実（描画・音・スコアが購読するイベント） */

@@ -15,6 +15,7 @@ export class Board {
   goalDone: number[] = []
   chain = 0 // 現在の連鎖段数（SEピッチ用）
   subiCharge: number
+  score = 0 // 消去1駒=10点×連鎖倍率、特殊駒発動=+50（DESIGN.md §2）
 
   constructor(public def: LevelDef) {
     this.rng = makeRng(def.seed)
@@ -321,11 +322,12 @@ export class Board {
     return true
   }
 
-  /** 駒を消す（蔦苔剥がし・ゴール計上込み） */
+  /** 駒を消す（蔦苔剥がし・ゴール計上・スコア込み） */
   private clearPieceAt(p: XY, ev: BoardEvent[], countColor?: Color) {
     const c = this.at(p.x, p.y)
     if (!c) return
     if (c.piece?.kind === 'normal' && countColor !== undefined) this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+    if (c.piece) this.score += 10 * Math.max(1, this.chain)
     c.piece = null
     if (c.ground > 0) {
       c.ground = (c.ground - 1) as 0 | 1
@@ -445,6 +447,7 @@ export class Board {
     const blast = (cx: number, cy: number, r: number) => {
       for (let y = cy - r; y <= cy + r; y++) for (let x = cx - r; x <= cx + r; x++) clearCell(x, y)
     }
+    this.score += 50 // 特殊駒発動ボーナス
     const kinds = combo ? [p.kind, combo.kind].sort().join('+') : p.kind
 
     switch (kinds) {
@@ -675,5 +678,12 @@ export class Board {
   }
   get lost(): boolean {
     return !this.won && this.movesLeft <= 0
+  }
+  /** 3つ星評価（★1=クリア、★2/★3=スコア閾値。閾値はレベル定義 or 既定値） */
+  get stars(): 0 | 1 | 2 | 3 {
+    if (!this.won) return 0
+    const s2 = this.def.star2 ?? 1500
+    const s3 = this.def.star3 ?? 3000
+    return this.score >= s3 ? 3 : this.score >= s2 ? 2 : 1
   }
 }

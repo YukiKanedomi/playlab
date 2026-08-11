@@ -1,7 +1,41 @@
-// プレースホルダー駒テクスチャ（Graphics 描き）。
-// アセット差し替え時はここを Assets.load に置き換えるだけにする（ART.md §6）。
-import { Container, Graphics, RenderTexture, Renderer } from 'pixi.js'
+// 駒テクスチャ供給。生成アセット（assets/sprites）優先、無ければプレースホルダー（Graphics）。
+import { Assets, Container, Graphics, RenderTexture, Renderer, Texture } from 'pixi.js'
 import type { Piece } from '../core/types'
+
+// 生成アセット（b7参照・256px透過）。vite が URL 解決する
+const SPRITE_URLS: Record<string, URL> = {
+  n0: new URL('../../assets/sprites/p_sun.png', import.meta.url),
+  n1: new URL('../../assets/sprites/p_seed.png', import.meta.url),
+  n2: new URL('../../assets/sprites/p_drop.png', import.meta.url),
+  n3: new URL('../../assets/sprites/p_moon.png', import.meta.url),
+  n4: new URL('../../assets/sprites/p_blossom.png', import.meta.url),
+  harpoon: new URL('../../assets/sprites/sp_harpoon.png', import.meta.url),
+  hamushi: new URL('../../assets/sprites/sp_hamushi.png', import.meta.url),
+  hitsubo: new URL('../../assets/sprites/sp_hitsubo.png', import.meta.url),
+  seiju: new URL('../../assets/sprites/sp_seiju.png', import.meta.url),
+  spore: new URL('../../assets/sprites/sp_spore.png', import.meta.url),
+  kokeishi: new URL('../../assets/sprites/ob_kokeishi.png', import.meta.url),
+  hako: new URL('../../assets/sprites/ob_hako.png', import.meta.url),
+}
+
+const loaded = new Map<string, Texture>()
+
+/** 起動時に一括ロード。失敗した分はプレースホルダーにフォールバック */
+export async function loadSprites(): Promise<void> {
+  await Promise.all(
+    Object.entries(SPRITE_URLS).map(async ([k, u]) => {
+      try {
+        loaded.set(k, await Assets.load<Texture>(u.href))
+      } catch {
+        /* fallback へ */
+      }
+    }),
+  )
+}
+
+export function spriteTexture(key: string): Texture | null {
+  return loaded.get(key) ?? null
+}
 
 // ART.md §2 パレット
 export const PAL = {
@@ -31,8 +65,12 @@ export function pieceKey(p: Piece): string {
   return p.kind
 }
 
-/** サイズ S のセルに合わせた駒テクスチャを生成（キャッシュ） */
-export function pieceTexture(renderer: Renderer, p: Piece, S: number): RenderTexture {
+/** サイズ S のセルに合わせた駒テクスチャ。生成アセット優先・無ければ Graphics 描き */
+export function pieceTexture(renderer: Renderer, p: Piece, S: number): Texture {
+  // 生成アセット（銛は縦画像を横向きに回すのでキーは共通）
+  const assetKey = p.kind === 'normal' ? `n${p.color}` : p.kind
+  const asset = loaded.get(assetKey)
+  if (asset) return asset
   const key = `${pieceKey(p)}@${S}`
   const hit = cache.get(key)
   if (hit) return hit
