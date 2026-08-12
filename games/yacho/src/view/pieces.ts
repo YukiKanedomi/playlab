@@ -30,7 +30,7 @@ const SPRITE_URLS: Record<string, URL> = {
   // 文字焼き込み部材（ラベルはコード描画せずこちらを使う）
   ui_button_next: new URL('../../assets/ui/button_next.png', import.meta.url),
   ui_ribbon_clear: new URL('../../assets/ui/ribbon_clear.png', import.meta.url),
-  ui_banner_word: new URL('../../assets/ui/banner_mitsuketa.png', import.meta.url),
+  ui_banner_word: new URL('../../assets/ui/banner_toha.png', import.meta.url), // 「深界踏破！」（本人選定 2026-08-12）
   // 層テーマ背景（Lv1-10 森 / 11-20 機械遺跡 / 21-30 結晶洞窟）
   bg_forest: new URL('../../assets/bg/bg_forest.png', import.meta.url),
   bg_machine: new URL('../../assets/bg/bg_machine.png', import.meta.url),
