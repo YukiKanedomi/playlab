@@ -6,6 +6,7 @@ import { Board, W, H } from '../core/board'
 import type { BoardEvent, Piece, XY } from '../core/types'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import { completeAll, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
+import { sfx } from '../juice/sound'
 
 // juice 実測値テーブル（ms）
 export const T = {
@@ -29,6 +30,7 @@ export class BoardView {
   blockG = new Map<string, Container>()
   groundG = new Map<string, Graphics>()
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
+  private drainCount = 0 // 勝利ドレインSEのピッチ段数
 
   constructor(
     public board: Board,
@@ -226,13 +228,15 @@ export class BoardView {
             if (e.chain > 1) t += T.chainBeat - T.pop - T.fall // 連鎖ビートに揃える
             if (t < 0) t = 0
             chainSeen = e.chain
+            sfx.pop(e.chain, t / 1000)
           }
           for (const p of e.cells) this.popPieceAt(p, t)
           break
         }
         case 'special-fire': {
           for (const p of e.cleared) this.popPieceAt(p, t, true)
-          this.flashFx(e.at, t)
+          this.fireFx(e.at, e.piece, t)
+          sfx.fire(e.piece.kind, t / 1000)
           t += 220 // 起爆ごとのビート（連発時に畳み掛ける間隔）
           chainSeen = 0
           break
@@ -240,6 +244,7 @@ export class BoardView {
         case 'win-drain': {
           // 残手数→特殊駒変換の彗星（1手 約45ms＝実測30-60msの中庸）
           if (e.convertAt) this.cometFx(e.convertAt, t)
+          sfx.drain(this.drainCount++, t / 1000)
           t += 45
           break
         }
@@ -261,6 +266,7 @@ export class BoardView {
           break
         }
         case 'block-hit': {
+          if (e.destroyed) sfx.block(t / 1000)
           const g = this.blockG.get(this.key(e.at.x, e.at.y))
           if (g) {
             const gg = g
@@ -340,6 +346,7 @@ export class BoardView {
           break
         }
         case 'spore-collected': {
+          sfx.spore(t / 1000)
           const sp = this.sprites.get(this.key(e.at.x, e.at.y))
           if (sp) {
             this.sprites.delete(this.key(e.at.x, e.at.y))
@@ -395,6 +402,64 @@ export class BoardView {
         tween(g, { alpha: 0, rotation: (Math.random() - 0.5) * 4 }, 420, { onDone: () => g.destroy() })
       }
     })
+  }
+
+  /** 特殊駒ごとの発動演出 */
+  private fireFx(at: XY, piece: Piece, t: number) {
+    const S = this.S
+    if (piece.kind === 'harpoon') {
+      // 行/列を走る光のスイープ
+      delay(t, () => {
+        const g = new Graphics()
+        if (piece.dir === 'h') {
+          g.roundRect(-S * 0.2, -S * 0.28, W * S + S * 0.4, S * 0.56, S * 0.28).fill({ color: 0xfff1c4, alpha: 0.85 })
+          g.position.set(0, this.px(at.y) - 0)
+          g.pivot.set(0, 0)
+          g.y = this.px(at.y)
+          g.x = 0
+          g.scale.x = 0.05
+          this.fxLayer.addChild(g)
+          tween(g.scale, { x: 1 }, 160, { ease: easeOutCubic })
+        } else {
+          g.roundRect(-S * 0.28, -S * 0.2, S * 0.56, H * S + S * 0.4, S * 0.28).fill({ color: 0xfff1c4, alpha: 0.85 })
+          this.fxLayer.addChild(g)
+          g.x = this.px(at.x)
+          g.y = 0
+          g.scale.y = 0.05
+          tween(g.scale, { y: 1 }, 160, { ease: easeOutCubic })
+        }
+        tween(g, { alpha: 0 }, 260, { delay: 120, onDone: () => g.destroy() })
+      })
+    } else if (piece.kind === 'hitsubo') {
+      // 衝撃波リング＋閃光
+      delay(t, () => {
+        const ring = new Graphics()
+        ring.circle(0, 0, S * 0.5).stroke({ width: S * 0.16, color: 0xffc978, alpha: 0.9 })
+        ring.position.set(this.px(at.x), this.px(at.y))
+        this.fxLayer.addChild(ring)
+        tween(ring.scale, { x: 5.2, y: 5.2 }, 340, { ease: easeOutCubic })
+        tween(ring, { alpha: 0 }, 340, { onDone: () => ring.destroy() })
+      })
+      this.flashFx(at, t)
+    } else if (piece.kind === 'seiju') {
+      // ランタンの虹色放射
+      delay(t, () => {
+        const colors = [0xf7b1a0, 0xf7e3a0, 0xb9e6a8, 0xa8cdf0, 0xd7b5ec]
+        for (let i = 0; i < 10; i++) {
+          const ray = new Graphics()
+          ray.roundRect(0, -S * 0.09, S * 3.4, S * 0.18, S * 0.09).fill({ color: colors[i % colors.length], alpha: 0.8 })
+          ray.position.set(this.px(at.x), this.px(at.y))
+          ray.rotation = (i / 10) * Math.PI * 2
+          ray.scale.set(0.1, 1)
+          this.fxLayer.addChild(ray)
+          tween(ray.scale, { x: 1 }, 300, { ease: easeOutCubic })
+          tween(ray, { alpha: 0 }, 420, { delay: 140, onDone: () => ray.destroy() })
+        }
+      })
+      this.flashFx(at, t)
+    } else {
+      this.flashFx(at, t)
+    }
   }
 
   /** 画面上部からセルへ飛ぶ白い彗星（勝利ドレイン用） */

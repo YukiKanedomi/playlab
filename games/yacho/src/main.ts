@@ -6,6 +6,7 @@ import { BoardView } from './view/BoardView'
 import { PAL, loadSprites, pieceTexture, spriteTexture, themeForLevel } from './view/pieces'
 import type { Goal } from './core/types'
 import * as tw from './juice/tween'
+import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
 
 // AD v2 のUI配色（木×真鍮×羊皮紙）
 const UI = {
@@ -95,6 +96,13 @@ async function boot() {
   }
   gear.circle(0, 0, gr * 0.4).fill(UI.woodLight)
   gear.position.set(vw * 0.93, vh * 0.03 + gr)
+  gear.eventMode = 'static'
+  gear.cursor = 'pointer'
+  gear.alpha = isMuted() ? 0.45 : 1
+  gear.on('pointertap', () => {
+    const m = toggleMute() // 暫定：歯車=ミュート切替（設定パネルは後続）
+    gear.alpha = m ? 0.45 : 1
+  })
   ui.addChild(gear)
 
   // 上中央〜右: ターゲット札（羊皮紙）
@@ -230,7 +238,12 @@ async function boot() {
 
   app.stage.eventMode = 'static'
   app.stage.hitArea = app.screen
+  let bgmStarted = false
   app.stage.on('pointerdown', (e) => {
+    if (!bgmStarted) {
+      bgmStarted = true // 初回操作でBGM開始（オートプレイ規制対応）
+      startBgm(themeForLevel(LEVELS[levelIdx].id))
+    }
     downAt = { x: e.global.x, y: e.global.y }
     downCell = toCell(e.global.x, e.global.y)
   })
@@ -250,6 +263,8 @@ async function boot() {
     downAt = null
     downCell = null
     if (evs.length === 0) return
+    if (evs.some((ev2) => ev2.t === 'swap' && ev2.illegal)) sfx.illegal()
+    else sfx.swap()
     const dur = view.play(evs)
     refreshHud()
     if (board.won) {
@@ -258,6 +273,7 @@ async function boot() {
     } else if (board.lost) {
       inputLocked = true
       tw.delay(900, () => {
+        sfx.lose()
         const close = banner('あと少し…', `スコア ${board.score.toLocaleString()}`, 0xc9d4de)
         tw.delay(2000, () => {
           close()
@@ -273,6 +289,7 @@ async function boot() {
     view.board = board
     view.syncAll()
     applyTheme()
+    if (bgmStarted) startBgm(themeForLevel(LEVELS[levelIdx].id))
     buildGoals()
     refreshHud()
     inputLocked = false
@@ -323,6 +340,7 @@ async function boot() {
 
   // 5-6. 探索成功パネル（モック③準拠の簡易版）
   const showClearPanel = () => {
+    sfx.fanfare()
     const panel = new Container()
     const dim = new Graphics()
     dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0.55 })
@@ -355,7 +373,13 @@ async function boot() {
       st.position.set(vw / 2 + (i - 1) * pw * 0.24, starY + (i === 1 ? -ph * 0.03 : 0))
       st.scale.set(0)
       panel.addChild(st)
-      tw.tween(st.scale, { x: 1, y: 1 }, 300, { delay: 200 + i * 180, ease: tw.easeOutBack })
+      tw.tween(st.scale, { x: 1, y: 1 }, 300, {
+        delay: 200 + i * 180,
+        ease: tw.easeOutBack,
+        onDone: () => {
+          if (filled) sfx.star(i)
+        },
+      })
     }
     const sc = new Text({
       text: `スコア\n${board.score.toLocaleString()}`,
