@@ -66,8 +66,8 @@ export const LEVELS30: LevelDef[] = [
   },
   // 第一層の総仕上げとして、苔石と蔦苔を少ない手数で掃除する難面。
   {
-    id: 10, seed: 110, moves: 30, colors: 4,
-    goals: [{ type: 'color', color: 2, count: 30 }, { type: 'kokeishi', count: 8 }, { type: 'tsutagoke', count: 18 }],
+    id: 10, seed: 110, moves: 24, colors: 5,
+    goals: [{ type: 'color', color: 2, count: 40 }, { type: 'kokeishi', count: 8 }, { type: 'tsutagoke', count: 18 }],
     layout: ['........', '.gggggg.', '.gGGGGg.', '.gggggg.', '.kK..Kk.', '.Kk..kK.', '........', '........'],
     star2: 1800, star3: 3300,
   },
@@ -101,7 +101,7 @@ export const LEVELS30: LevelDef[] = [
   },
   // 箱・苔石・蔦苔を密集させ、第二層前半の難所を作る面。
   {
-    id: 15, seed: 115, moves: 25, colors: 5,
+    id: 15, seed: 115, moves: 21, colors: 5,
     goals: [{ type: 'color', color: 2, count: 28 }, { type: 'touhen', count: 8 }, { type: 'kokeishi', count: 8 }, { type: 'tsutagoke', count: 14 }],
     layout: ['........', '.hggggh.', '.gKkkKg.', '.hGhhGh.', '.gKkkKg.', '.hggggh.', '........', '........'],
     star2: 1500, star3: 2800,
@@ -136,8 +136,8 @@ export const LEVELS30: LevelDef[] = [
   },
   // 第二層の総仕上げとして、全目標を高密度で要求する難面。
   {
-    id: 20, seed: 120, moves: 28, colors: 5,
-    goals: [{ type: 'color', color: 2, count: 24 }, { type: 'touhen', count: 10 }, { type: 'kokeishi', count: 8 }],
+    id: 20, seed: 120, moves: 22, colors: 5,
+    goals: [{ type: 'color', color: 2, count: 30 }, { type: 'touhen', count: 14 }, { type: 'kokeishi', count: 8 }],
     layout: ['........', '.hhhhhh.', '.gGGGGg.', '.gGggGg.', '.kKhhKk.', '.KkhhkK.', '.hhhhhh.', '........'],
     star2: 1500, star3: 2800,
   },
@@ -187,7 +187,7 @@ export const LEVELS30: LevelDef[] = [
   // 巣火を三基に増やし、蔦苔と色目標をテンポよく削る面。
   {
     id: 27, seed: 127, moves: 26, colors: 5,
-    goals: [{ type: 'color', color: 3, count: 22 }, { type: 'spore', count: 9 }, { type: 'tsutagoke', count: 22 }],
+    goals: [{ type: 'color', color: 3, count: 22 }, { type: 'spore', count: 7 }, { type: 'tsutagoke', count: 22 }],
     layout: ['........', '..gggg..', '.gGggGg.', '.ggGGgg.', '.gGggGg.', '........', '.s.s.s..', '........'],
     subiCharge: 4, star2: 1600, star3: 2900,
   },
@@ -209,7 +209,7 @@ export const LEVELS30: LevelDef[] = [
   },
   // 最高密度の目標を最少手数で突破する、最終ボスランの超難面。
   {
-    id: 30, seed: 130, moves: 27, colors: 5,
+    id: 30, seed: 130, moves: 26, colors: 5,
     goals: [{ type: 'color', color: 4, count: 20 }, { type: 'spore', count: 6 }, { type: 'touhen', count: 6 }],
     // 最終面：狭い菱形＋二重石壁。煙突はx3,x4のみ、外側の巣灯は壁割り必須
     layout: ['##....##', '#hg..gh#', '.gK..Kg.', '.hG..Gh.', '.gK..Kg.', '.hg..gh.', '#.ssss.#', '##....##'],

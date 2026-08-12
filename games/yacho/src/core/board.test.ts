@@ -162,6 +162,20 @@ describe('障害物', () => {
   })
 })
 
+describe('斜め落下（本家仕様）', () => {
+  it('障害物の真下の空マスに斜め上から駒が供給される', () => {
+    // (3,2)に苔石。 (3,3)を空にすると、垂直供給不可→斜め上(2,2)or(4,2)から滑り込む
+    const layout = ['........', '........', '...k....', '........', '........', '........', '........', '........']
+    const b = new Board(plain({ layout }))
+    const c = b.at(3, 3)!
+    c.piece = null
+    const ev: import('./types').BoardEvent[] = []
+    ;(b as unknown as { applyGravity: (e: unknown[]) => void }).applyGravity(ev)
+    expect(b.at(3, 3)?.piece).toBeTruthy()
+    expect(ev.some((e) => (e as { t: string }).t === 'fall')).toBe(true)
+  })
+})
+
 describe('健全性', () => {
   it('初期盤面に即マッチが無く、有効手がある', () => {
     for (let seed = 1; seed <= 30; seed++) {

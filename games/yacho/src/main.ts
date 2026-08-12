@@ -360,16 +360,22 @@ async function boot() {
         gi.count.destroy()
       }
       goalItems.length = 0
+      // 目標数に応じてグループ幅を決め、パネルの内側（12%〜88%）に収める
+      const n = board.goals.length
+      const inner = tpW * 0.76
+      const groupW = Math.min(tpW * 0.3, inner / n)
+      const iconScale = n >= 3 ? 0.22 : 0.28
       board.goals.forEach((g, i) => {
         const icon = goalIcon(g)
-        const cx = tpW * (0.5 + (i - (board.goals.length - 1) / 2) * 0.3)
-        icon.position.set(cx - tpW * 0.12, tpH * 0.58)
+        for (const ch of icon.children) if (ch instanceof Sprite) ch.scale.set((tpH * iconScale) / Math.max(ch.texture.width, ch.texture.height))
+        const cx = tpW / 2 + (i - (n - 1) / 2) * groupW
+        icon.position.set(cx - groupW * 0.22, tpH * 0.58)
         const count = new Text({
           text: '',
-          style: { fill: UI.paperInk, fontSize: fs(0.045), fontFamily: 'serif', fontWeight: 'bold' },
+          style: { fill: UI.paperInk, fontSize: fs(n >= 3 ? 0.038 : 0.045), fontFamily: 'serif', fontWeight: 'bold' },
         })
         count.anchor.set(0, 0.5)
-        count.position.set(cx + tpW * 0.03, tpH * 0.58)
+        count.position.set(cx + groupW * 0.06, tpH * 0.58)
         tp.addChild(icon)
         tp.addChild(count)
         goalItems.push({ icon, count })

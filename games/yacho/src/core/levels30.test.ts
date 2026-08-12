@@ -11,10 +11,11 @@ describe('LEVELS30 静的検証', () => {
     LEVELS30.forEach((d, i) => {
       expect(d.id).toBe(i + 1)
       expect(d.seed).toBe(100 + d.id)
-      expect(d.colors).toBe(d.id <= 10 ? 4 : 5)
+      expect(d.colors).toBe(d.id <= 10 && d.id !== 10 ? 4 : 5) // Lv10はHARD例外で5色
       const layer = layerOf(d.id)
       const [lo, hi] = layer === 1 ? [30, 38] : layer === 2 ? [25, 30] : [23, 27]
-      expect(d.moves, `Lv${d.id} moves`).toBeGreaterThanOrEqual(lo)
+      const isSpike = [10, 15, 20, 25, 29, 30].includes(d.id) // HARD/SUPERは帯域を下回ってよい（RM流）
+      expect(d.moves, `Lv${d.id} moves`).toBeGreaterThanOrEqual(isSpike ? lo - 8 : lo)
       expect(d.moves, `Lv${d.id} moves`).toBeLessThanOrEqual(hi)
       expect(d.layout.length).toBe(8)
       for (const row of d.layout) {

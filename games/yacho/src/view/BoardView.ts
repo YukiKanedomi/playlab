@@ -198,6 +198,7 @@ export class BoardView {
     completeAll() // 進行中の演出を終端までスナップ（入力割込・連続タイムラインの整合）
     let t = 0
     let chainSeen = 0
+    let chainStartT = 0 // 連鎖セグメントの開始時刻（ビートはここから650ms刻み＝落下完了を待つ）
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
     for (const e of evs) {
       switch (e.t) {
@@ -233,9 +234,10 @@ export class BoardView {
         }
         case 'match': {
           if (e.chain > chainSeen) {
-            if (e.chain > 1) t += T.chainBeat - T.pop - T.fall // 連鎖ビートに揃える
-            if (t < 0) t = 0
+            // 連鎖ビート＝前セグメント開始から650ms（落下がt+pop+fallで終わるのを跨がない）Codexレビュー#2
+            if (e.chain > 1) t = Math.max(t, chainStartT + T.chainBeat)
             chainSeen = e.chain
+            chainStartT = t
             sfx.pop(e.chain, t / 1000)
           }
           for (const p of e.cells) this.popPieceAt(p, t)
@@ -284,18 +286,16 @@ export class BoardView {
             const gg = g
             tween(gg.scale, { x: 1.08, y: 1.08 }, 60, { delay: t })
             tween(gg.scale, { x: 1, y: 1 }, 100, { delay: t + 60 })
-            if (e.destroyed || e.type === 'hako') {
-              // 破壊 or 匣→陶片: 再描画（世代跨ぎは無効＝レベル遷移後の幽霊生成防止）
-              const ep = this.epoch
-              delay(t + T.blockHit, () => {
-                if (ep !== this.epoch) return
-                gg.destroy()
-                this.blockG.delete(this.key(e.at.x, e.at.y))
-                const c = this.board.at(e.at.x, e.at.y)
-                if (c?.block) this.makeBlock(e.at.x, e.at.y)
-              })
-              this.debrisFx(e.at, t, e.type === 'kokeishi' ? PAL.stone : PAL.wood)
-            }
+            // 破壊 or 状態変化（匣→陶片、苔石2層→1層）: 再描画。世代跨ぎ・多重破棄は無効化
+            const ep = this.epoch
+            delay(t + T.blockHit, () => {
+              if (ep !== this.epoch || gg.destroyed) return
+              gg.destroy()
+              this.blockG.delete(this.key(e.at.x, e.at.y))
+              const c = this.board.at(e.at.x, e.at.y)
+              if (c?.block) this.makeBlock(e.at.x, e.at.y)
+            })
+            if (e.destroyed || e.type === 'hako') this.debrisFx(e.at, t, e.type === 'kokeishi' ? PAL.stone : PAL.wood)
           }
           break
         }
@@ -394,7 +394,6 @@ export class BoardView {
           }
           continue
         }
-        if (want.kind === 'spore') continue // 胞子は浮遊演出中のことがあるため触らない
         if (!sp || sp.destroyed || (sp as unknown as { __kind: string }).__kind !== pieceKey(want)) {
           if (sp && !sp.destroyed) sp.destroy()
           this.sprites.delete(k)

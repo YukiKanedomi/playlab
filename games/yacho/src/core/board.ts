@@ -77,13 +77,18 @@ export class Board {
     return pool[randInt(this.rng, pool.length)]
   }
 
-  private rerollSomePieces() {
+  private rerollSomePieces(ev?: BoardEvent[]) {
     // 詰み防止：ランダムな通常駒を数個塗り直す（盤面シャッフルはしない＝RM流）
+    // 即マッチを作らない色を選び、ビューへは refill イベントで通知する（Codexレビュー#1）
     for (let i = 0; i < 6; i++) {
       const x = randInt(this.rng, W)
       const y = randInt(this.rng, H)
       const c = this.at(x, y)
-      if (c?.piece?.kind === 'normal') c.piece = { kind: 'normal', color: this.colors[randInt(this.rng, this.colors.length)] }
+      if (c?.piece?.kind === 'normal') {
+        const piece: Piece = { kind: 'normal', color: this.pickColorNoMatch(x, y) }
+        c.piece = piece
+        ev?.push({ t: 'refill', at: { x, y }, piece })
+      }
     }
   }
 
@@ -607,16 +612,63 @@ export class Board {
   private resolveCascades(ev: BoardEvent[]) {
     let guard = 0
     while (guard++ < 50) {
+      // 充填（落下＋斜め滑り＋リフィル）が安定するまで反復してからマッチ解決
+      let inner = 0
+      while (inner++ < 20) {
+        const before = ev.length
+        this.applyGravity(ev)
+        this.refill(ev)
+        if (ev.length === before) break
+      }
+      if (!this.resolveMatches(ev)) break
+    }
+    // 連鎖ガード到達時も充填だけは安定させる（Codexレビュー#6）
+    let inner2 = 0
+    while (inner2++ < 20) {
+      const before = ev.length
       this.applyGravity(ev)
       this.refill(ev)
-      if (!this.resolveMatches(ev)) break
+      if (ev.length === before) break
     }
     // 連鎖収束後の詰み保険
     let g2 = 0
-    while (!this.hasValidMove() && g2++ < 100) this.rerollSomePieces()
+    while (!this.hasValidMove() && g2++ < 100) this.rerollSomePieces(ev)
   }
 
   private applyGravity(ev: BoardEvent[]) {
+    // 垂直落下＋斜め滑り込みを安定するまで反復（本家仕様：真上が塞がれた空マスへ斜め上から供給）
+    let guard = 0
+    while (guard++ < 30) {
+      this.applyVerticalGravity(ev)
+      if (!this.applyDiagonalSlide(ev)) break
+    }
+  }
+
+  /** 真上が障害物/盤外で塞がれた空マスへ、斜め上の駒を1つ滑り込ませる。動きがあれば true */
+  private applyDiagonalSlide(ev: BoardEvent[]): boolean {
+    let moved = false
+    for (let y = H - 1; y >= 1; y--)
+      for (let x = 0; x < W; x++) {
+        const c = this.at(x, y)
+        if (!c || c.block || c.piece) continue
+        const up = this.at(x, y - 1)
+        const upSealed = !up || up.block !== null // 盤外 or 障害物＝垂直供給が不可能
+        if (!upSealed) continue
+        for (const dx of [-1, 1]) {
+          const s = this.at(x + dx, y - 1)
+          if (s?.piece && s.piece.kind !== 'spore') {
+            c.piece = s.piece
+            s.piece = null
+            ev.push({ t: 'fall', from: { x: x + dx, y: y - 1 }, to: { x, y } })
+            moved = true
+            break
+          }
+        }
+      }
+    return moved
+  }
+
+  private applyVerticalGravity(ev: BoardEvent[]) {
     // 列ごとに、block/hole で区切られたセグメント内で下詰め。胞子は落ちない（浮遊）。
     for (let x = 0; x < W; x++) {
       let segBottom = H - 1
@@ -669,6 +721,7 @@ export class Board {
 
   /** 手の締め：胞子の浮上・回収、勝敗判定用の状態更新 */
   private afterMove(ev: BoardEvent[]) {
+    let sporeMoved = false
     // 胞子は1手ごとに1マス浮上（上のマスの駒と入れ替わる「泡上がり」）。上端で回収。
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
@@ -678,6 +731,7 @@ export class Board {
           c.piece = null
           ev.push({ t: 'spore-collected', at: { x, y } })
           this.progressGoal({ type: 'spore' }, ev)
+          sporeMoved = true
           continue
         }
         const up = this.at(x, y - 1)!
@@ -686,8 +740,11 @@ export class Board {
           up.piece = c.piece
           c.piece = t
           ev.push({ t: 'spore-rise', from: { x, y }, to: { x, y: y - 1 } })
+          sporeMoved = true
         }
       }
+    // 浮上で生じた空セル・偶発マッチを再安定化（Codexレビュー#3）
+    if (sporeMoved) this.resolveCascades(ev)
   }
 
   private progressGoal(match: { type: Goal['type']; color?: Color }, ev: BoardEvent[]) {
@@ -710,7 +767,11 @@ export class Board {
    * 勝利シーケンス：残手数を特殊駒（銛/歯車爆弾）に変換して全自動起爆（RM実測の再現）。
    * クリア確定後に一度だけ呼ぶ。イベント列を返す。
    */
+  private winFinished = false
+
   finishWin(): BoardEvent[] {
+    if (this.winFinished) return [] // 二重呼び出しガード（Codexレビュー#7）
+    this.winFinished = true
     const ev: BoardEvent[] = []
     const drain = Math.min(this.movesLeft, 12) // 演出上限（ラッシュ全体を約5-6秒に収める）
     for (let i = 0; i < drain; i++) {
