@@ -754,6 +754,11 @@ export class Board {
     return ev
   }
 
+  /** 追加手数の購入（敗北オファー用） */
+  addMoves(n: number): void {
+    this.movesLeft += n
+  }
+
   /** 3つ星評価（★1=クリア、★2/★3=スコア閾値。閾値はレベル定義 or 既定値） */
   get stars(): 0 | 1 | 2 | 3 {
     if (!this.won) return 0

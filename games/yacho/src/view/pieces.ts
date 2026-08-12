@@ -29,6 +29,10 @@ const SPRITE_URLS: Record<string, URL> = {
   ui_parchment: new URL('../../assets/ui/parchment.png', import.meta.url),
   // 文字焼き込み部材（ラベルはコード描画せずこちらを使う）
   ui_button_next: new URL('../../assets/ui/button_next.png', import.meta.url),
+  ui_coin: new URL('../../assets/ui/coin.png', import.meta.url),
+  map_bg: new URL('../../assets/bg/map_bg.png', import.meta.url),
+  map_node: new URL('../../assets/ui/map_node.png', import.meta.url),
+  map_node_gold: new URL('../../assets/ui/map_node_gold.png', import.meta.url),
   ui_ribbon_clear: new URL('../../assets/ui/ribbon_clear.png', import.meta.url),
   ui_banner_word: new URL('../../assets/ui/banner_toha.png', import.meta.url), // 「深界踏破！」（本人選定 2026-08-12）
   // 層テーマ背景（Lv1-10 森 / 11-20 機械遺跡 / 21-30 結晶洞窟）
