@@ -461,7 +461,7 @@ export class Board {
         this.hamushiStrike(at, ev, 1, cleared)
         break
       case 'seiju':
-        this.seijuClear(at, ev, null)
+        this.seijuClear(at, ev, null, cleared)
         break
       case 'harpoon+harpoon':
         row(at.y)
@@ -494,7 +494,7 @@ export class Board {
       case 'harpoon+seiju':
       case 'hitsubo+seiju':
       case 'hamushi+seiju':
-        this.seijuClear(at, ev, combo && p.kind === 'seiju' ? combo : p)
+        this.seijuClear(at, ev, combo && p.kind === 'seiju' ? combo : p, cleared)
         break
       case 'seiju+seiju':
         for (let y = 0; y < H; y++) row(y)
@@ -539,8 +539,8 @@ export class Board {
     return cands.length ? cands[randInt(this.rng, cands.length)] : null
   }
 
-  /** 星珠：盤上最多色を全消し。combo があれば消す代わりにその特殊駒へ変換して順次起爆 */
-  private seijuClear(_at: XY, ev: BoardEvent[], convertTo: Piece | null) {
+  /** 星珠：盤上最多色を全消し。combo があれば消す代わりにその特殊駒へ変換して順次起爆。消去セルは cleared に記録 */
+  private seijuClear(_at: XY, ev: BoardEvent[], convertTo: Piece | null, cleared: XY[]) {
     const count = new Map<Color, XY[]>()
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
@@ -571,6 +571,7 @@ export class Board {
         const c = this.at(p.x, p.y)!
         this.progressGoal({ type: 'color', color: (c.piece as { color: Color }).color }, ev)
         this.clearPieceAt(p, ev)
+        cleared.push(p) // ビューへ通知（未通知だと幽霊/空白の温床）
       }
       this.damageAround(best, ev)
     }

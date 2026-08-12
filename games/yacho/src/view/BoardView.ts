@@ -109,6 +109,12 @@ export class BoardView {
   }
 
   private makePiece(x: number, y: number, p: Piece): Sprite {
+    // 同セルに既存スプライトがいたら破棄（変換・胞子湧き等の上書き生成で孤児を作らない）
+    const old = this.sprites.get(this.key(x, y))
+    if (old) {
+      this.sprites.delete(this.key(x, y))
+      old.destroy()
+    }
     const sp = new Sprite(pieceTexture(this.renderer, p, this.S))
     sp.anchor.set(0.5)
     // テクスチャ原寸に依らずセル寸法へ正規化（この基準スケールが演出の「1」）
@@ -361,7 +367,46 @@ export class BoardView {
         }
       }
     }
-    return t + T.pop + T.fall
+    const total = t + T.pop + T.fall
+    // タイムライン終端で必ず照合修復：稀な競合で残る位置ズレ/孤児を吸収し、描画=エンジンを保証
+    delay(total + 80, () => this.reconcile())
+    return total
+  }
+
+  /** エンジン状態への収束（差分だけ直すので通常は何も起きない） */
+  reconcile() {
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const k = this.key(x, y)
+        const c = this.board.at(x, y)
+        const want = c && !c.block ? c.piece : null
+        const sp = this.sprites.get(k)
+        if (!want) {
+          if (sp) {
+            this.sprites.delete(k)
+            if (!sp.destroyed) sp.destroy()
+          }
+          continue
+        }
+        if (want.kind === 'spore') continue // 胞子は浮遊演出中のことがあるため触らない
+        if (!sp || sp.destroyed || (sp as unknown as { __kind: string }).__kind !== pieceKey(want)) {
+          if (sp && !sp.destroyed) sp.destroy()
+          this.sprites.delete(k)
+          this.makePiece(x, y, want)
+        } else {
+          // 位置・透明度・スケールをセル定位置へスナップ
+          sp.position.set(this.px(x), this.px(y))
+          sp.alpha = 1
+          const b = this.bs(sp)
+          sp.scale.set(b)
+          if (want.kind !== 'harpoon') sp.rotation = 0
+        }
+      }
+    // mapに居ない可視孤児を掃除
+    const mapped = new Set(this.sprites.values())
+    for (const ch of [...this.pieceLayer.children]) {
+      if (!mapped.has(ch as Sprite) && !ch.destroyed) ch.destroy()
+    }
   }
 
   private popPieceAt(p: XY, t: number, byFire = false) {
