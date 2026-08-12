@@ -31,6 +31,7 @@ export class BoardView {
   groundG = new Map<string, Graphics>()
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
   private drainCount = 0 // 勝利ドレインSEのピッチ段数
+  private epoch = 0 // レベル遷移の世代。跨いだ遅延コールバックは無効化する
 
   constructor(
     public board: Board,
@@ -92,6 +93,7 @@ export class BoardView {
 
   /** 盤の論理状態をそのまま描画に反映（初期化・保険） */
   syncAll() {
+    this.epoch++ // 以降、旧世代の遅延コールバックは無効
     for (const s of this.sprites.values()) s.destroy()
     this.sprites.clear()
     for (const g of this.blockG.values()) g.destroy()
@@ -244,7 +246,7 @@ export class BoardView {
           for (const p of e.cleared) this.popPieceAt(p, t, true)
           this.fireFx(e.at, e.piece, t)
           sfx.fire(e.piece.kind, t / 1000)
-          t += 220 // 起爆ごとのビート（連発時に畳み掛ける間隔）
+          t += 160 // 起爆ごとのビート（連発時に畳み掛ける間隔）
           chainSeen = 0
           break
         }
@@ -283,8 +285,10 @@ export class BoardView {
             tween(gg.scale, { x: 1.08, y: 1.08 }, 60, { delay: t })
             tween(gg.scale, { x: 1, y: 1 }, 100, { delay: t + 60 })
             if (e.destroyed || e.type === 'hako') {
-              // 破壊 or 匣→陶片: 再描画
+              // 破壊 or 匣→陶片: 再描画（世代跨ぎは無効＝レベル遷移後の幽霊生成防止）
+              const ep = this.epoch
               delay(t + T.blockHit, () => {
+                if (ep !== this.epoch) return
                 gg.destroy()
                 this.blockG.delete(this.key(e.at.x, e.at.y))
                 const c = this.board.at(e.at.x, e.at.y)
@@ -300,7 +304,9 @@ export class BoardView {
           if (g) {
             const gg = g
             const left = e.left
+            const ep = this.epoch
             delay(t + T.pop * 0.6, () => {
+              if (ep !== this.epoch) return // レベル遷移後の幽霊タイル防止
               gg.destroy()
               this.groundG.delete(this.key(e.at.x, e.at.y))
               if (left > 0) this.makeGround(e.at.x, e.at.y, left as 1 | 2)
@@ -407,6 +413,29 @@ export class BoardView {
     for (const ch of [...this.pieceLayer.children]) {
       if (!mapped.has(ch as Sprite) && !ch.destroyed) ch.destroy()
     }
+    // 障害物・蔦苔の帳簿も照合（レベル遷移コールバック等の取りこぼし保険）
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const k = this.key(x, y)
+        const c = this.board.at(x, y)
+        const bg = this.blockG.get(k)
+        if (c?.block && (!bg || bg.destroyed)) {
+          if (bg) this.blockG.delete(k)
+          this.makeBlock(x, y)
+        } else if (!c?.block && bg) {
+          this.blockG.delete(k)
+          if (!bg.destroyed) bg.destroy()
+        }
+        const gg = this.groundG.get(k)
+        const groundWant = c?.ground ?? 0
+        if (groundWant > 0 && (!gg || gg.destroyed)) {
+          if (gg) this.groundG.delete(k)
+          this.makeGround(x, y, groundWant as 1 | 2)
+        } else if (groundWant === 0 && gg) {
+          this.groundG.delete(k)
+          if (!gg.destroyed) gg.destroy()
+        }
+      }
   }
 
   private popPieceAt(p: XY, t: number, byFire = false) {

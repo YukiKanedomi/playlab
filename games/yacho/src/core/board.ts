@@ -87,6 +87,31 @@ export class Board {
     }
   }
 
+  /** 有効なスワップ手を列挙（ソルバー・ヒント用） */
+  validMoves(): { a: XY; b: XY }[] {
+    const out: { a: XY; b: XY }[] = []
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++)
+        for (const [dx, dy] of [
+          [1, 0],
+          [0, 1],
+        ] as const) {
+          if (this.wouldMatch(x, y, x + dx, y + dy)) out.push({ a: { x, y }, b: { x: x + dx, y: y + dy } })
+        }
+    return out
+  }
+
+  /** 盤上の特殊駒位置を列挙 */
+  specialsOnBoard(): XY[] {
+    const out: XY[] = []
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const p = this.at(x, y)?.piece
+        if (p && p.kind !== 'normal' && p.kind !== 'spore') out.push({ x, y })
+      }
+    return out
+  }
+
   /** 有効手（スワップしてマッチが生まれる手 or 特殊駒タップ）があるか */
   hasValidMove(): boolean {
     for (let y = 0; y < H; y++)
@@ -687,7 +712,7 @@ export class Board {
    */
   finishWin(): BoardEvent[] {
     const ev: BoardEvent[] = []
-    const drain = Math.min(this.movesLeft, 20) // 演出上限
+    const drain = Math.min(this.movesLeft, 12) // 演出上限（ラッシュ全体を約5-6秒に収める）
     for (let i = 0; i < drain; i++) {
       this.movesLeft--
       // 変換先：ランダムな通常駒

@@ -1,7 +1,7 @@
 // 『そろえて、しるす。』エントリ。AD v2（user_master モック準拠）のHUDレイアウト。
 import { Application, Container, Graphics, Sprite, Text } from 'pixi.js'
 import { Board, W, H } from './core/board'
-import { LEVELS } from './core/levels'
+import { LEVELS30 as LEVELS } from './core/levels30'
 import { BoardView } from './view/BoardView'
 import { PAL, loadSprites, pieceTexture, spriteTexture, themeForLevel } from './view/pieces'
 import type { Goal } from './core/types'
@@ -60,23 +60,33 @@ async function boot() {
   scene.addChild(ui)
   const fs = (r: number) => Math.round(vw * r) // フォントスケール
 
-  // 左上: MOVES バッジ（木札＋真鍮縁）
-  const badgeW = vw * 0.19
-  const badgeH = vw * 0.19
-  const badge = new Graphics()
-  badge.roundRect(0, 0, badgeW, badgeH, 10).fill(UI.wood).stroke({ width: 3, color: UI.brass })
-  badge.roundRect(0, 0, badgeW, badgeH * 0.36, 10).fill(UI.woodLight)
-  badge.position.set(vw * 0.03, vh * 0.03)
-  const movesLabel = new Text({ text: 'のこり', style: { fill: UI.badgeText, fontSize: fs(0.032), fontFamily: 'serif' } })
+  // 左上: MOVES 木札（生成UI部材。無ければコード描きにフォールバック）
+  const badgeW = vw * 0.17
+  const plaqueTex = spriteTexture('ui_moves')
+  let badgeH = vw * 0.19
+  if (plaqueTex) {
+    const sp = new Sprite(plaqueTex)
+    sp.width = badgeW
+    sp.height = (badgeW / plaqueTex.width) * plaqueTex.height
+    badgeH = sp.height
+    sp.position.set(vw * 0.03, vh * 0.025)
+    ui.addChild(sp)
+  } else {
+    const badge = new Graphics()
+    badge.roundRect(0, 0, badgeW, badgeH, 10).fill(UI.wood).stroke({ width: 3, color: UI.brass })
+    badge.position.set(vw * 0.03, vh * 0.025)
+    ui.addChild(badge)
+  }
+  const movesLabel = new Text({ text: 'のこり', style: { fill: UI.badgeText, fontSize: fs(0.03), fontFamily: 'serif' } })
   movesLabel.anchor.set(0.5)
-  movesLabel.position.set(vw * 0.03 + badgeW / 2, vh * 0.03 + badgeH * 0.18)
+  movesLabel.position.set(vw * 0.03 + badgeW / 2, vh * 0.025 + badgeH * 0.17)
   const movesText = new Text({
     text: '',
-    style: { fill: UI.badgeText, fontSize: fs(0.075), fontFamily: 'serif', fontWeight: 'bold' },
+    style: { fill: UI.badgeText, fontSize: fs(0.08), fontFamily: 'serif', fontWeight: 'bold' },
   })
   movesText.anchor.set(0.5)
-  movesText.position.set(vw * 0.03 + badgeW / 2, vh * 0.03 + badgeH * 0.64)
-  ui.addChild(badge, movesLabel, movesText)
+  movesText.position.set(vw * 0.03 + badgeW / 2, vh * 0.025 + badgeH * 0.58)
+  ui.addChild(movesLabel, movesText)
 
   // スコア（バッジ下に小さく）
   const scoreText = new Text({
@@ -86,16 +96,21 @@ async function boot() {
   scoreText.position.set(vw * 0.03, vh * 0.03 + badgeH + 8)
   ui.addChild(scoreText)
 
-  // 右上: 歯車（設定・現状ダミー）
-  const gear = new Graphics()
-  const gr = vw * 0.045
-  gear.circle(0, 0, gr).fill(UI.wood).stroke({ width: 3, color: UI.brass })
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2
-    gear.roundRect(Math.cos(a) * gr - gr * 0.13, Math.sin(a) * gr - gr * 0.13, gr * 0.26, gr * 0.26, gr * 0.08).fill(UI.brass)
+  // 右上: 歯車（ミュート切替）
+  const gearTex = spriteTexture('ui_gear')
+  let gear: Container
+  const gr = vw * 0.05
+  if (gearTex) {
+    const sp = new Sprite(gearTex)
+    sp.anchor.set(0.5)
+    sp.scale.set((gr * 2.2) / Math.max(gearTex.width, gearTex.height))
+    gear = sp
+  } else {
+    const g = new Graphics()
+    g.circle(0, 0, gr).fill(UI.wood).stroke({ width: 3, color: UI.brass })
+    gear = g
   }
-  gear.circle(0, 0, gr * 0.4).fill(UI.woodLight)
-  gear.position.set(vw * 0.93, vh * 0.03 + gr)
+  gear.position.set(vw * 0.92, vh * 0.03 + gr)
   gear.eventMode = 'static'
   gear.cursor = 'pointer'
   gear.alpha = isMuted() ? 0.45 : 1
@@ -105,19 +120,26 @@ async function boot() {
   })
   ui.addChild(gear)
 
-  // 上中央〜右: ターゲット札（羊皮紙）
-  const tpW = vw * 0.52
-  const tpH = badgeH
+  // 上中央〜右: ターゲット札（生成の羊皮紙パネル。タブ付き）
+  const tpW = vw * 0.55
+  const tpTex = spriteTexture('ui_target')
+  const tpH = tpTex ? (tpW / tpTex.width) * tpTex.height : badgeH
   const tp = new Container()
-  const tpBg = new Graphics()
-  tpBg.roundRect(0, 0, tpW, tpH, 10).fill(UI.paper).stroke({ width: 3, color: UI.woodLight })
-  tpBg.roundRect(tpW * 0.28, -tpH * 0.22, tpW * 0.44, tpH * 0.3, 8).fill(UI.wood).stroke({ width: 2, color: UI.brass })
-  tp.addChild(tpBg)
-  const tpLabel = new Text({ text: 'ターゲット', style: { fill: UI.badgeText, fontSize: fs(0.03), fontFamily: 'serif' } })
+  if (tpTex) {
+    const sp = new Sprite(tpTex)
+    sp.width = tpW
+    sp.height = tpH
+    tp.addChild(sp)
+  } else {
+    const tpBg = new Graphics()
+    tpBg.roundRect(0, 0, tpW, tpH, 10).fill(UI.paper).stroke({ width: 3, color: UI.woodLight })
+    tp.addChild(tpBg)
+  }
+  const tpLabel = new Text({ text: 'ターゲット', style: { fill: UI.badgeText, fontSize: fs(0.028), fontFamily: 'serif' } })
   tpLabel.anchor.set(0.5)
-  tpLabel.position.set(tpW / 2, -tpH * 0.07)
+  tpLabel.position.set(tpW / 2, tpH * 0.1) // タブの帯に載せる
   tp.addChild(tpLabel)
-  tp.position.set(vw * 0.28, vh * 0.03 + tpH * 0.12)
+  tp.position.set(vw * 0.26, vh * 0.02)
   ui.addChild(tp)
 
   // ターゲット札の中身（ゴールごとにアイコン＋残数）
@@ -130,7 +152,7 @@ async function boot() {
     else if (g.type === 'spore' && spriteTexture('spore')) sp = new Sprite(spriteTexture('spore')!)
     if (sp) {
       sp.anchor.set(0.5)
-      const s = (tpH * 0.42) / Math.max(sp.texture.width, sp.texture.height)
+      const s = (tpH * 0.28) / Math.max(sp.texture.width, sp.texture.height)
       sp.scale.set(s)
       c.addChild(sp)
     } else {
@@ -141,18 +163,21 @@ async function boot() {
     return c
   }
   const buildGoals = () => {
-    for (const gi of goalItems) gi.icon.destroy()
+    for (const gi of goalItems) {
+      gi.icon.destroy()
+      gi.count.destroy() // テキストの破棄漏れ→前レベルの✓が残るバグの修正
+    }
     goalItems.length = 0
     board.goals.forEach((g, i) => {
       const icon = goalIcon(g)
-      const cx = tpW * (0.5 + (i - (board.goals.length - 1) / 2) * 0.34)
-      icon.position.set(cx - tpW * 0.1, tpH * 0.55)
+      const cx = tpW * (0.5 + (i - (board.goals.length - 1) / 2) * 0.3)
+      icon.position.set(cx - tpW * 0.08, tpH * 0.58)
       const count = new Text({
         text: '',
-        style: { fill: UI.paperInk, fontSize: fs(0.048), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: UI.paperInk, fontSize: fs(0.045), fontFamily: 'serif', fontWeight: 'bold' },
       })
       count.anchor.set(0, 0.5)
-      count.position.set(cx + tpW * 0.01, tpH * 0.55)
+      count.position.set(cx + tpW * 0.015, tpH * 0.58)
       tp.addChild(icon)
       tp.addChild(count)
       goalItems.push({ icon, count, idx: i })
@@ -162,29 +187,35 @@ async function boot() {
   // 下段: ブースター帯（メダリオン3・現状は飾り。Phase 3 で機能接続）
   const boosterBar = new Container()
   const medalKeys = ['harpoon', 'hitsubo', 'seiju']
+  const medalTex = spriteTexture('ui_medal')
   medalKeys.forEach((k, i) => {
     const m = new Container()
     const r = vw * 0.075
-    const g = new Graphics()
-    g.circle(0, 0, r).fill(UI.wood).stroke({ width: 4, color: UI.brass })
-    g.circle(0, 0, r * 0.8).stroke({ width: 2, color: UI.woodLight })
-    m.addChild(g)
+    if (medalTex) {
+      const base = new Sprite(medalTex)
+      base.anchor.set(0.5)
+      base.scale.set((r * 2.3) / Math.max(medalTex.width, medalTex.height))
+      m.addChild(base)
+    } else {
+      const g = new Graphics()
+      g.circle(0, 0, r).fill(UI.wood).stroke({ width: 4, color: UI.brass })
+      m.addChild(g)
+    }
     const tex = spriteTexture(k)
     if (tex) {
       const sp = new Sprite(tex)
       sp.anchor.set(0.5)
-      sp.scale.set((r * 1.1) / Math.max(tex.width, tex.height))
+      sp.scale.set((r * 1.05) / Math.max(tex.width, tex.height))
+      sp.position.set(0, -r * 0.06)
       m.addChild(sp)
     }
-    const cb = new Graphics()
-    cb.circle(r * 0.72, r * 0.72, r * 0.3).fill(UI.paper).stroke({ width: 2, color: UI.woodLight })
-    m.addChild(cb)
-    const ct = new Text({ text: '0', style: { fill: UI.paperInk, fontSize: fs(0.035), fontFamily: 'serif', fontWeight: 'bold' } })
+    const ct = new Text({ text: '0', style: { fill: UI.badgeText, fontSize: fs(0.032), fontFamily: 'serif', fontWeight: 'bold' } })
     ct.anchor.set(0.5)
-    ct.position.set(r * 0.72, r * 0.72)
+    // メダリオン部材のバッジ円の位置（右下）に合わせる
+    ct.position.set(r * 0.78, r * 0.72)
     m.addChild(ct)
-    m.alpha = 0.55
-    m.position.set(vw / 2 + (i - 1) * vw * 0.2, 0)
+    m.alpha = 0.6
+    m.position.set(vw / 2 + (i - 1) * vw * 0.21, 0)
     boosterBar.addChild(m)
   })
   boosterBar.position.set(0, vh * 0.19 + view.S * H + vw * 0.12)
@@ -303,11 +334,21 @@ async function boot() {
     dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0 })
     scene.addChild(dim)
     tw.tween(dim, { alpha: 0.45 }, 250)
-    const bt = new Text({
-      text: '大 発 見 ！',
-      style: { fill: UI.brass, fontSize: fs(0.1), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x2a1c0e, width: 6 } },
+    const bt = new Container()
+    const ribbonTex = spriteTexture('ui_ribbon')
+    if (ribbonTex) {
+      const rb = new Sprite(ribbonTex)
+      rb.anchor.set(0.5)
+      rb.scale.set((vw * 0.86) / ribbonTex.width)
+      bt.addChild(rb)
+    }
+    const btText = new Text({
+      text: '見事な探窟！',
+      style: { fill: 0xf6e7c6, fontSize: fs(0.062), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x4a1717, width: 4 } },
     })
-    bt.anchor.set(0.5)
+    btText.anchor.set(0.5)
+    btText.position.set(0, -vw * 0.035) // リボン本体の帯に載せる
+    bt.addChild(btText)
     bt.position.set(vw / 2, vh * 0.45)
     bt.scale.set(0)
     scene.addChild(bt)
@@ -345,21 +386,36 @@ async function boot() {
     const dim = new Graphics()
     dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0.55 })
     panel.addChild(dim)
-    const pw = vw * 0.78
+    const pw = vw * 0.82
     const ph = vh * 0.42
     const px0 = (vw - pw) / 2
     const py0 = vh * 0.24
-    const bg = new Graphics()
-    bg.roundRect(px0, py0, pw, ph, 14).fill(UI.paper).stroke({ width: 4, color: UI.woodLight })
-    // リボンバナー
-    bg.roundRect(px0 + pw * 0.12, py0 - vh * 0.035, pw * 0.76, vh * 0.07, 10).fill(0x7d4f3a).stroke({ width: 3, color: UI.brass })
-    panel.addChild(bg)
+    const parchTex = spriteTexture('ui_parchment')
+    if (parchTex) {
+      const sp = new Sprite(parchTex)
+      sp.width = pw
+      sp.height = ph
+      sp.position.set(px0, py0)
+      panel.addChild(sp)
+    } else {
+      const bg = new Graphics()
+      bg.roundRect(px0, py0, pw, ph, 14).fill(UI.paper).stroke({ width: 4, color: UI.woodLight })
+      panel.addChild(bg)
+    }
+    const ribbonTex2 = spriteTexture('ui_ribbon')
+    if (ribbonTex2) {
+      const rb = new Sprite(ribbonTex2)
+      rb.anchor.set(0.5)
+      rb.scale.set((pw * 0.8) / ribbonTex2.width)
+      rb.position.set(vw / 2, py0 + vh * 0.005)
+      panel.addChild(rb)
+    }
     const title = new Text({
       text: '探索成功！',
-      style: { fill: UI.badgeText, fontSize: fs(0.06), fontFamily: 'serif', fontWeight: 'bold' },
+      style: { fill: 0xf6e7c6, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x4a1717, width: 4 } },
     })
     title.anchor.set(0.5)
-    title.position.set(vw / 2, py0)
+    title.position.set(vw / 2, py0 - vw * 0.02)
     panel.addChild(title)
     // 星（1つずつバウンドで出す）
     const starY = py0 + ph * 0.24

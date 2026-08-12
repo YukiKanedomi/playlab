@@ -20,6 +20,13 @@ const SPRITE_URLS: Record<string, URL> = {
   // 盤素材
   tile: new URL('../../assets/board/tile_cell.png', import.meta.url),
   frame: new URL('../../assets/board/board_frame.png', import.meta.url),
+  // UI部材（ui_kit切り出し）
+  ui_ribbon: new URL('../../assets/ui/ribbon.png', import.meta.url),
+  ui_target: new URL('../../assets/ui/target_panel.png', import.meta.url),
+  ui_moves: new URL('../../assets/ui/moves_plaque.png', import.meta.url),
+  ui_medal: new URL('../../assets/ui/medallion.png', import.meta.url),
+  ui_gear: new URL('../../assets/ui/gear.png', import.meta.url),
+  ui_parchment: new URL('../../assets/ui/parchment.png', import.meta.url),
   // 層テーマ背景（Lv1-10 森 / 11-20 機械遺跡 / 21-30 結晶洞窟）
   bg_forest: new URL('../../assets/bg/bg_forest.png', import.meta.url),
   bg_machine: new URL('../../assets/bg/bg_machine.png', import.meta.url),
