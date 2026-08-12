@@ -250,10 +250,12 @@ async function boot() {
     bgDim.rect(0, 0, vw, vh).fill({ color: 0x0a1420, alpha: 0.22 })
     playRoot.addChild(bgDim)
 
-    const boardSize = Math.min(vw * 0.94, vh * 0.62)
+    // 盤はRM流に「親指の届く下側」へ。上1/4はHUD帯、下端にブースター帯
+    const boardSize = Math.min(vw * 0.94, vh * 0.58)
     view = new BoardView(board, app.renderer, boardSize)
     const bw = view.S * W
-    view.root.position.set((vw - bw) / 2, vh * 0.19)
+    const boardTop = vh * 0.27
+    view.root.position.set((vw - bw) / 2, boardTop)
     playRoot.addChild(view.root)
 
     // ---------- HUD ----------
@@ -300,7 +302,7 @@ async function boot() {
       g.circle(0, 0, gr).fill(UI.wood).stroke({ width: 3, color: UI.brass })
       gear = g
     }
-    gear.position.set(vw * 0.92, vh * 0.03 + gr)
+    gear.position.set(vw * 0.93, vh * 0.03 + gr)
     gear.eventMode = 'static'
     gear.cursor = 'pointer'
     gear.alpha = isMuted() ? 0.45 : 1
@@ -311,9 +313,9 @@ async function boot() {
 
     // マップへ戻る（左上の小さな札の下・青銅の矢印）
     const back = new Graphics()
-    back.roundRect(-vw * 0.045, -vh * 0.02, vw * 0.09, vh * 0.04, 8).fill(UI.wood).stroke({ width: 2, color: UI.brass })
-    back.moveTo(vw * 0.012, -vh * 0.011).lineTo(-vw * 0.015, 0).lineTo(vw * 0.012, vh * 0.011).stroke({ width: 3, color: UI.badgeText })
-    back.position.set(vw * 0.84, vh * 0.03 + gr)
+    back.roundRect(-vw * 0.035, -vh * 0.016, vw * 0.07, vh * 0.032, 8).fill(UI.wood).stroke({ width: 2, color: UI.brass })
+    back.moveTo(vw * 0.01, -vh * 0.009).lineTo(-vw * 0.012, 0).lineTo(vw * 0.01, vh * 0.009).stroke({ width: 3, color: UI.badgeText })
+    back.position.set(vw * 0.93, vh * 0.03 + gr * 2 + vh * 0.028) // 歯車の下に縦並び（重なり解消）
     back.eventMode = 'static'
     back.cursor = 'pointer'
     back.on('pointertap', () => showMap())
@@ -330,7 +332,7 @@ async function boot() {
       sp.height = tpH
       tp.addChild(sp)
     }
-    tp.position.set(vw * 0.3, vh * 0.015)
+    tp.position.set(vw * 0.27 + (vw * 0.62 - tpW) / 2, vh * 0.02) // 木札と右ボタン群の間で中央寄せ
     ui.addChild(tp)
 
     const goalItems: { icon: Container; count: Text }[] = []
@@ -416,7 +418,7 @@ async function boot() {
       m.position.set(vw / 2 + (i - 1) * vw * 0.21, 0)
       boosterBar.addChild(m)
     })
-    boosterBar.position.set(0, vh * 0.19 + view.S * H + vw * 0.12)
+    boosterBar.position.set(0, boardTop + view.S * H + vw * 0.11)
     ui.addChild(boosterBar)
 
     // ---------- 入力 ----------
