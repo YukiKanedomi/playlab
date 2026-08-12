@@ -3,7 +3,7 @@ import { Application, Container, Graphics, Sprite, Text } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS } from './core/levels'
 import { BoardView } from './view/BoardView'
-import { PAL, loadSprites, pieceTexture, spriteTexture } from './view/pieces'
+import { PAL, loadSprites, pieceTexture, spriteTexture, themeForLevel } from './view/pieces'
 import type { Goal } from './core/types'
 import * as tw from './juice/tween'
 
@@ -31,6 +31,23 @@ async function boot() {
 
   const vw = app.screen.width
   const vh = app.screen.height
+
+  // 層テーマ背景（cover-fit）＋可読性のための薄い暗幕
+  const bgSprite = new Sprite()
+  bgSprite.anchor.set(0.5)
+  bgSprite.position.set(vw / 2, vh / 2)
+  scene.addChild(bgSprite)
+  const bgDim = new Graphics()
+  bgDim.rect(0, 0, vw, vh).fill({ color: 0x0a1420, alpha: 0.22 })
+  scene.addChild(bgDim)
+  const applyTheme = () => {
+    const tex = spriteTexture(`bg_${themeForLevel(LEVELS[levelIdx].id)}`)
+    if (!tex) return
+    bgSprite.texture = tex
+    const s = Math.max(vw / tex.width, vh / tex.height)
+    bgSprite.scale.set(s)
+  }
+  applyTheme()
   const boardSize = Math.min(vw * 0.94, vh * 0.62)
   const view = new BoardView(board, app.renderer, boardSize)
   const bw = view.S * W
@@ -61,7 +78,10 @@ async function boot() {
   ui.addChild(badge, movesLabel, movesText)
 
   // スコア（バッジ下に小さく）
-  const scoreText = new Text({ text: '', style: { fill: 0x9fb3c4, fontSize: fs(0.032), fontFamily: 'serif' } })
+  const scoreText = new Text({
+    text: '',
+    style: { fill: UI.badgeText, fontSize: fs(0.032), fontFamily: 'serif', stroke: { color: 0x2a2013, width: 3 } },
+  })
   scoreText.position.set(vw * 0.03, vh * 0.03 + badgeH + 8)
   ui.addChild(scoreText)
 
@@ -252,6 +272,7 @@ async function boot() {
     board = new Board(LEVELS[levelIdx])
     view.board = board
     view.syncAll()
+    applyTheme()
     buildGoals()
     refreshHud()
     inputLocked = false
