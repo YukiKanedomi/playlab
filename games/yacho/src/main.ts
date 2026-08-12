@@ -61,7 +61,7 @@ async function boot() {
   const fs = (r: number) => Math.round(vw * r) // フォントスケール
 
   // 左上: MOVES 木札（生成UI部材。無ければコード描きにフォールバック）
-  const badgeW = vw * 0.17
+  const badgeW = vw * 0.2
   const plaqueTex = spriteTexture('ui_moves')
   let badgeH = vw * 0.19
   if (plaqueTex) {
@@ -77,16 +77,14 @@ async function boot() {
     badge.position.set(vw * 0.03, vh * 0.025)
     ui.addChild(badge)
   }
-  const movesLabel = new Text({ text: 'のこり', style: { fill: UI.badgeText, fontSize: fs(0.03), fontFamily: 'serif' } })
-  movesLabel.anchor.set(0.5)
-  movesLabel.position.set(vw * 0.03 + badgeW / 2, vh * 0.025 + badgeH * 0.17)
+  // 「のこり」ラベルは木札に焼き込み済み。数字だけコード描画
   const movesText = new Text({
     text: '',
     style: { fill: UI.badgeText, fontSize: fs(0.08), fontFamily: 'serif', fontWeight: 'bold' },
   })
   movesText.anchor.set(0.5)
-  movesText.position.set(vw * 0.03 + badgeW / 2, vh * 0.025 + badgeH * 0.58)
-  ui.addChild(movesLabel, movesText)
+  movesText.position.set(vw * 0.03 + badgeW / 2, vh * 0.025 + badgeH * 0.62)
+  ui.addChild(movesText)
 
   // スコア（バッジ下に小さく）
   const scoreText = new Text({
@@ -121,7 +119,7 @@ async function boot() {
   ui.addChild(gear)
 
   // 上中央〜右: ターゲット札（生成の羊皮紙パネル。タブ付き）
-  const tpW = vw * 0.55
+  const tpW = vw * 0.44
   const tpTex = spriteTexture('ui_target')
   const tpH = tpTex ? (tpW / tpTex.width) * tpTex.height : badgeH
   const tp = new Container()
@@ -135,11 +133,8 @@ async function boot() {
     tpBg.roundRect(0, 0, tpW, tpH, 10).fill(UI.paper).stroke({ width: 3, color: UI.woodLight })
     tp.addChild(tpBg)
   }
-  const tpLabel = new Text({ text: 'ターゲット', style: { fill: UI.badgeText, fontSize: fs(0.028), fontFamily: 'serif' } })
-  tpLabel.anchor.set(0.5)
-  tpLabel.position.set(tpW / 2, tpH * 0.1) // タブの帯に載せる
-  tp.addChild(tpLabel)
-  tp.position.set(vw * 0.26, vh * 0.02)
+  // 「ターゲット」ラベルはタブに焼き込み済み
+  tp.position.set(vw * 0.3, vh * 0.015)
   ui.addChild(tp)
 
   // ターゲット札の中身（ゴールごとにアイコン＋残数）
@@ -171,13 +166,13 @@ async function boot() {
     board.goals.forEach((g, i) => {
       const icon = goalIcon(g)
       const cx = tpW * (0.5 + (i - (board.goals.length - 1) / 2) * 0.3)
-      icon.position.set(cx - tpW * 0.08, tpH * 0.58)
+      icon.position.set(cx - tpW * 0.12, tpH * 0.58)
       const count = new Text({
         text: '',
         style: { fill: UI.paperInk, fontSize: fs(0.045), fontFamily: 'serif', fontWeight: 'bold' },
       })
       count.anchor.set(0, 0.5)
-      count.position.set(cx + tpW * 0.015, tpH * 0.58)
+      count.position.set(cx + tpW * 0.03, tpH * 0.58)
       tp.addChild(icon)
       tp.addChild(count)
       goalItems.push({ icon, count, idx: i })
@@ -335,20 +330,20 @@ async function boot() {
     scene.addChild(dim)
     tw.tween(dim, { alpha: 0.45 }, 250)
     const bt = new Container()
-    const ribbonTex = spriteTexture('ui_ribbon')
-    if (ribbonTex) {
-      const rb = new Sprite(ribbonTex)
+    const bannerTex = spriteTexture('ui_banner_word') ?? spriteTexture('ui_ribbon')
+    if (bannerTex) {
+      const rb = new Sprite(bannerTex)
       rb.anchor.set(0.5)
-      rb.scale.set((vw * 0.86) / ribbonTex.width)
+      rb.scale.set((vw * 0.86) / bannerTex.width)
       bt.addChild(rb)
+    } else {
+      const btText = new Text({
+        text: 'みつけた！',
+        style: { fill: UI.brass, fontSize: fs(0.08), fontFamily: 'serif', fontWeight: 'bold' },
+      })
+      btText.anchor.set(0.5)
+      bt.addChild(btText)
     }
-    const btText = new Text({
-      text: '見事な探窟！',
-      style: { fill: 0xf6e7c6, fontSize: fs(0.062), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x4a1717, width: 4 } },
-    })
-    btText.anchor.set(0.5)
-    btText.position.set(0, -vw * 0.035) // リボン本体の帯に載せる
-    bt.addChild(btText)
     bt.position.set(vw / 2, vh * 0.45)
     bt.scale.set(0)
     scene.addChild(bt)
@@ -402,23 +397,17 @@ async function boot() {
       bg.roundRect(px0, py0, pw, ph, 14).fill(UI.paper).stroke({ width: 4, color: UI.woodLight })
       panel.addChild(bg)
     }
-    const ribbonTex2 = spriteTexture('ui_ribbon')
+    // 「探索成功！」焼き込みリボン
+    const ribbonTex2 = spriteTexture('ui_ribbon_clear') ?? spriteTexture('ui_ribbon')
     if (ribbonTex2) {
       const rb = new Sprite(ribbonTex2)
       rb.anchor.set(0.5)
-      rb.scale.set((pw * 0.8) / ribbonTex2.width)
-      rb.position.set(vw / 2, py0 + vh * 0.005)
+      rb.scale.set((pw * 0.82) / ribbonTex2.width)
+      rb.position.set(vw / 2, py0 + vh * 0.002)
       panel.addChild(rb)
     }
-    const title = new Text({
-      text: '探索成功！',
-      style: { fill: 0xf6e7c6, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x4a1717, width: 4 } },
-    })
-    title.anchor.set(0.5)
-    title.position.set(vw / 2, py0 - vw * 0.02)
-    panel.addChild(title)
     // 星（1つずつバウンドで出す）
-    const starY = py0 + ph * 0.24
+    const starY = py0 + ph * 0.32
     for (let i = 0; i < 3; i++) {
       const filled = i < board.stars
       const st = new Text({
@@ -444,16 +433,24 @@ async function boot() {
     sc.anchor.set(0.5)
     sc.position.set(vw / 2, py0 + ph * 0.55)
     panel.addChild(sc)
-    // つぎへボタン
+    // つぎへボタン（文字焼き込み部材）
     const btn = new Container()
     const bw2 = pw * 0.6
     const bh2 = vh * 0.06
-    const bg2 = new Graphics()
-    bg2.roundRect(-bw2 / 2, -bh2 / 2, bw2, bh2, 12).fill(0x5d7a3f).stroke({ width: 3, color: 0x3f5429 })
-    btn.addChild(bg2)
-    const bt2 = new Text({ text: 'つぎへ', style: { fill: 0xf4f8ea, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold' } })
-    bt2.anchor.set(0.5)
-    btn.addChild(bt2)
+    const btnTex = spriteTexture('ui_button_next')
+    if (btnTex) {
+      const sp = new Sprite(btnTex)
+      sp.anchor.set(0.5)
+      sp.scale.set(bw2 / btnTex.width)
+      btn.addChild(sp)
+    } else {
+      const bg2 = new Graphics()
+      bg2.roundRect(-bw2 / 2, -bh2 / 2, bw2, bh2, 12).fill(0x5d7a3f).stroke({ width: 3, color: 0x3f5429 })
+      btn.addChild(bg2)
+      const bt2 = new Text({ text: 'つぎへ', style: { fill: 0xf4f8ea, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold' } })
+      bt2.anchor.set(0.5)
+      btn.addChild(bt2)
+    }
     btn.position.set(vw / 2, py0 + ph * 0.85)
     btn.eventMode = 'static'
     btn.cursor = 'pointer'
