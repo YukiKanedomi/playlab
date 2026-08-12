@@ -220,6 +220,7 @@ async function boot() {
   let view!: BoardView
   let inputLocked = false
   let currentLevelId = 1
+  let sceneEpoch = 0 // シーン再構築の世代。跨いだ遅延コールバックは無効化
 
   const startLevel = (id: number) => {
     currentLevelId = id
@@ -234,6 +235,8 @@ async function boot() {
   const buildPlayScene = (def: (typeof LEVELS)[0]) => {
     board = new Board(def)
     inputLocked = false
+    const epoch = ++sceneEpoch
+    const alive = () => epoch === sceneEpoch // このシーンがまだ生きているか
 
     // 背景
     const bgSprite = new Sprite()
@@ -477,10 +480,14 @@ async function boot() {
       refreshHud()
       if (board.won) {
         inputLocked = true
-        tw.delay(Math.min(dur, 1200), () => triggerWin())
+        tw.delay(Math.min(dur, 1200), () => {
+          if (alive()) triggerWin()
+        })
       } else if (board.lost) {
         inputLocked = true
-        tw.delay(900, () => showLoseOffer())
+        tw.delay(900, () => {
+          if (alive()) showLoseOffer()
+        })
       }
     })
 
@@ -504,6 +511,7 @@ async function boot() {
       playRoot.addChild(bt)
       tw.tween(bt.scale, { x: 1, y: 1 }, 320, { ease: tw.easeOutBack })
       tw.delay(1500, () => {
+        if (!alive()) return
         tw.tween(bt.scale, { x: 0, y: 0 }, 300, { ease: tw.easeInCubic, onDone: () => bt.destroy() })
         tw.tween(dim, { alpha: 0 }, 150, { onDone: () => dim.destroy() })
         const evs = board.finishWin()
@@ -511,13 +519,14 @@ async function boot() {
         const drains = evs.filter((e) => e.t === 'win-drain')
         drains.forEach((e, i) => {
           tw.delay(i * 45, () => {
-            if (e.t === 'win-drain') movesText.text = String(e.movesLeft)
+            if (alive() && e.t === 'win-drain' && !movesText.destroyed) movesText.text = String(e.movesLeft)
           })
         })
         tw.delay(dur * 0.5, () => {
-          scoreText.text = `スコア ${board.score.toLocaleString()}`
+          if (alive() && !scoreText.destroyed) scoreText.text = `スコア ${board.score.toLocaleString()}`
         })
         tw.delay(dur, () => {
+          if (!alive()) return
           refreshHud()
           showClearPanel()
         })
@@ -714,6 +723,7 @@ async function boot() {
         return view
       },
       metrics: () => ({ S: view.S, ox: view.root.position.x, oy: view.root.position.y, vw, vh }),
+      busy: () => tw.activeCount(),
       forceWin: () => {
         board.goals.forEach((g, i) => (board.goalDone[i] = g.count))
         refreshHud()

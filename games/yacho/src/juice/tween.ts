@@ -83,6 +83,11 @@ export function completeAll(): void {
   }
 }
 
+/** 実行中トゥイーン数（QA用：静止判定） */
+export function activeCount(): number {
+  return tweens.filter((t) => !t.dead).length
+}
+
 export function update(dtMs: number): void {
   for (const tw of tweens) {
     if (tw.dead) continue
