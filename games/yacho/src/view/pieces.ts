@@ -17,6 +17,9 @@ const SPRITE_URLS: Record<string, URL> = {
   spore: new URL('../../assets/sprites2/s_spore.png', import.meta.url),
   kokeishi: new URL('../../assets/sprites2/o_stone.png', import.meta.url),
   hako: new URL('../../assets/sprites2/o_crate.png', import.meta.url),
+  // 盤素材
+  tile: new URL('../../assets/board/tile_cell.png', import.meta.url),
+  frame: new URL('../../assets/board/board_frame.png', import.meta.url),
   // 層テーマ背景（Lv1-10 森 / 11-20 機械遺跡 / 21-30 結晶洞窟）
   bg_forest: new URL('../../assets/bg/bg_forest.png', import.meta.url),
   bg_machine: new URL('../../assets/bg/bg_machine.png', import.meta.url),

@@ -49,8 +49,36 @@ export class BoardView {
   }
 
   private drawStatic() {
+    const tileTex = spriteTexture('tile')
+    const frameTex = spriteTexture('frame')
+    if (tileTex) {
+      // 生成タイル：市松は微ティントで（整列はコード保証）
+      const base = new Graphics()
+      base.roundRect(-6, -6, W * this.S + 12, H * this.S + 12, 10).fill({ color: 0x0c161f, alpha: 0.85 })
+      this.cellLayer.addChild(base)
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          if (!this.board.at(x, y)) continue
+          const sp = new Sprite(tileTex)
+          sp.width = this.S
+          sp.height = this.S
+          sp.position.set(x * this.S, y * this.S)
+          sp.tint = (x + y) % 2 ? 0xffffff : 0xc9d2dd
+          this.cellLayer.addChild(sp)
+        }
+      if (frameTex) {
+        const fr = new Sprite(frameTex)
+        // 枠の帯 (~60/1024) が盤の外周に載るよう、少し外に広げて被せる
+        const pad = this.S * 0.42
+        fr.width = W * this.S + pad * 2
+        fr.height = H * this.S + pad * 2
+        fr.position.set(-pad, -pad)
+        this.cellLayer.addChild(fr)
+      }
+      return
+    }
     const g = new Graphics()
-    // 盤下地（市松2トーン。背景より暗く＝明度対比の生命線）
+    // フォールバック：市松2トーンのコード描き
     g.roundRect(-8, -8, W * this.S + 16, H * this.S + 16, 14).fill(PAL.boardBg)
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
