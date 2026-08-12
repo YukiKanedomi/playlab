@@ -212,7 +212,7 @@ export class Board {
       ca.piece = null
       cb.piece = null
       ev.push({ t: 'swap', a, b, illegal: false })
-      ev.push({ t: 'combo', at: b, kinds: `${pa.kind}+${pb.kind}` })
+      ev.push({ t: 'combo', at: b, from: a, kinds: `${pa.kind}+${pb.kind}` })
       this.movesLeft--
       this.chain = 0
       this.fireSpecial(b, pb, ev, pa)
@@ -458,7 +458,7 @@ export class Board {
         blast(at.x, at.y, 2)
         break
       case 'hamushi':
-        this.hamushiStrike(at, ev, 1)
+        this.hamushiStrike(at, ev, 1, cleared)
         break
       case 'seiju':
         this.seijuClear(at, ev, null)
@@ -477,7 +477,7 @@ export class Board {
         blast(at.x, at.y, 4)
         break
       case 'hamushi+hamushi':
-        this.hamushiStrike(at, ev, 3)
+        this.hamushiStrike(at, ev, 3, cleared)
         break
       case 'hamushi+harpoon':
       case 'hamushi+hitsubo': {
@@ -503,8 +503,8 @@ export class Board {
     ev.push({ t: 'special-fire', at, piece: p, cleared })
   }
 
-  /** 羽虫：残ゴールに効くマスを狙う（無ければランダムの通常駒） */
-  private hamushiStrike(from: XY, ev: BoardEvent[], count: number) {
+  /** 羽虫：残ゴールに効くマスを狙う（無ければランダムの通常駒）。消したマスは cleared に記録＝ビューへ通知 */
+  private hamushiStrike(from: XY, ev: BoardEvent[], count: number, cleared: XY[]) {
     // 離陸時に隣接1マスも消す（RM仕様）
     this.damageAround([from], ev)
     for (let i = 0; i < count; i++) {
@@ -515,6 +515,7 @@ export class Board {
       else if (c.piece?.kind === 'normal') {
         this.progressGoal({ type: 'color', color: c.piece.color }, ev)
         this.clearPieceAt(t, ev)
+        cleared.push(t)
       }
     }
   }

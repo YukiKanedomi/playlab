@@ -234,6 +234,7 @@ export class BoardView {
           break
         }
         case 'special-fire': {
+          this.popPieceAt(e.at, t, true) // 発動した特殊駒自身のスプライトを消す（描画残りバグ対策）
           for (const p of e.cleared) this.popPieceAt(p, t, true)
           this.fireFx(e.at, e.piece, t)
           sfx.fire(e.piece.kind, t / 1000)
@@ -253,6 +254,9 @@ export class BoardView {
           break
         }
         case 'combo': {
+          // 合成：両方の特殊駒スプライトを消費（描画残りバグ対策）
+          this.popPieceAt(e.from, t, true)
+          this.popPieceAt(e.at, t, true)
           this.flashFx(e.at, t)
           break
         }

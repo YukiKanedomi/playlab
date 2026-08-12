@@ -63,7 +63,7 @@ export type BoardEvent =
   | { t: 'match'; cells: XY[]; color: Color; chain: number }
   | { t: 'special-born'; at: XY; piece: Piece }
   | { t: 'special-fire'; at: XY; piece: Piece; cleared: XY[] }
-  | { t: 'combo'; at: XY; kinds: string }
+  | { t: 'combo'; at: XY; from: XY; kinds: string }
   | { t: 'block-hit'; at: XY; type: Block['type']; destroyed: boolean }
   | { t: 'ground-hit'; at: XY; left: number }
   | { t: 'spore-born'; at: XY }
