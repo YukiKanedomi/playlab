@@ -40,6 +40,7 @@ const SPRITE_URLS: Record<string, URL> = {
   ui_gear: new URL('../../assets/ui/gear2.png', import.meta.url),
   ui_back: new URL('../../assets/ui/back2.png', import.meta.url),
   ui_parchment: new URL('../../assets/ui/parchment.png', import.meta.url),
+  ui_panel: new URL('../../assets/ui/clear_panel.png', import.meta.url), // クリア画面用・四辺完全な縦2:3パネル
   // ブースター4種（モック準拠・盤内特殊駒とは別アセット）
   bst_pickaxe: new URL('../../assets/ui/bst_pickaxe.png', import.meta.url),
   bst_lantern: new URL('../../assets/ui/bst_lantern.png', import.meta.url),

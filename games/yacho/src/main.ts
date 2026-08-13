@@ -18,11 +18,20 @@ const UI = {
   badgeText: 0xfff4dc,
 } as const
 
+// 古い図鑑ふうの明朝（index.html で読み込み。未着ならserifへフォールバック）
+const FONT = '"Shippori Mincho", serif'
+
 const app = new Application()
 
 async function boot() {
   await app.init({ background: PAL.boardBg, resizeTo: window, antialias: true, resolution: Math.min(2, devicePixelRatio) })
   document.getElementById('app')!.appendChild(app.canvas)
+  // Webフォントを待ってから Text を作る（後着だと既定serifのまま固まる）
+  try {
+    await Promise.race([document.fonts.load('600 16px "Shippori Mincho"'), new Promise((r) => setTimeout(r, 2500))])
+  } catch {
+    /* オフライン等はフォールバック */
+  }
   await loadSprites()
 
   const vw = app.screen.width
@@ -131,7 +140,7 @@ async function boot() {
       }
       const num = new Text({
         text: String(i),
-        style: { fill: 0xf4e8cf, fontSize: fs(0.04), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x3a2c18, width: 3 } },
+        style: { fill: 0xf4e8cf, fontSize: fs(0.04), fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x3a2c18, width: 3 } },
       })
       num.anchor.set(0.5)
       node.addChild(num)
@@ -154,7 +163,7 @@ async function boot() {
           node.addChild(s2)
         }
       } else if (cleared && st > 0) {
-        const stt = new Text({ text: '★'.repeat(st), style: { fill: 0xf2c14e, fontSize: fs(0.03), fontFamily: 'serif' } })
+        const stt = new Text({ text: '★'.repeat(st), style: { fill: 0xf2c14e, fontSize: fs(0.03), fontFamily: FONT } })
         stt.anchor.set(0.5)
         stt.position.set(0, -r * 1.4)
         node.addChild(stt)
@@ -243,7 +252,7 @@ async function boot() {
     }
     const coinT = new Text({
       text: save.coins.toLocaleString(),
-      style: { fill: 0xe5d8bb, fontSize: fs(0.036), fontFamily: 'serif', fontWeight: 'bold' },
+      style: { fill: 0xe5d8bb, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
     })
     coinT.anchor.set(0, 0.5)
     coinT.position.set(vw * 0.11, vh * 0.0475)
@@ -251,7 +260,7 @@ async function boot() {
     const starTotal = save.stars.reduce((a, b) => a + (b || 0), 0)
     const starT = new Text({
       text: `★ ${starTotal}`,
-      style: { fill: 0xd8b855, fontSize: fs(0.036), fontFamily: 'serif', fontWeight: 'bold' },
+      style: { fill: 0xd8b855, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
     })
     starT.anchor.set(0.5)
     starT.position.set(vw * 0.86, vh * 0.0475)
@@ -377,7 +386,7 @@ async function boot() {
     }
     const movesText = new Text({
       text: '',
-      style: { fill: 0xe5d8bb, fontSize: fs(0.064), fontFamily: 'serif', fontWeight: 'bold' },
+      style: { fill: 0xe5d8bb, fontSize: fs(0.064), fontFamily: FONT, fontWeight: 'bold' },
     })
     movesText.anchor.set(0.5)
     // メダリオンの暗い中心（リボン下）に合わせる
@@ -400,7 +409,7 @@ async function boot() {
     }
     const scoreText = new Text({
       text: '',
-      style: { fill: 0xe5d8bb, fontSize: fs(0.031), fontFamily: 'serif', fontWeight: 'bold' },
+      style: { fill: 0xe5d8bb, fontSize: fs(0.031), fontFamily: FONT, fontWeight: 'bold' },
     })
     scoreText.anchor.set(1, 0.5)
     scoreText.position.set(sbX + sbW * 0.88, sbY + sbH * 0.5)
@@ -502,7 +511,7 @@ async function boot() {
         icon.position.set(cx, tpH * 0.52)
         const count = new Text({
           text: '',
-          style: { fill: UI.paperInk, fontSize: fs(n >= 3 ? 0.036 : 0.042), fontFamily: 'serif', fontWeight: 'bold' },
+          style: { fill: UI.paperInk, fontSize: fs(n >= 3 ? 0.036 : 0.042), fontFamily: FONT, fontWeight: 'bold' },
         })
         count.anchor.set(0.5)
         count.position.set(cx, tpH * 0.8)
@@ -554,7 +563,7 @@ async function boot() {
       const cbg = new Graphics()
       cbg.circle(r * 0.68, r * 0.62, r * 0.28).fill(0x3a2c1c).stroke({ width: 1.5, color: UI.brass })
       m.addChild(cbg)
-      const ct = new Text({ text: '0', style: { fill: 0xe5d8bb, fontSize: fs(0.028), fontFamily: 'serif', fontWeight: 'bold' } })
+      const ct = new Text({ text: '0', style: { fill: 0xe5d8bb, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
       ct.anchor.set(0.5)
       ct.position.set(r * 0.68, r * 0.62)
       m.addChild(ct)
@@ -685,15 +694,16 @@ async function boot() {
       dim.rect(0, 0, vw, vh).fill({ color: 0x1a130c, alpha: 0.28 }) // 背景テーマを見せる（正本③）
       panel.addChild(dim)
       const pw = vw * 0.9
-      const ph = vh * 0.62
+      const panelTex = spriteTexture('ui_panel') ?? spriteTexture('ui_parchment')
+      // 等比スケール（引き伸ばし禁止）。専用パネルは縦2:3で設計
+      const ph = panelTex ? Math.min(vh * 0.66, (pw / panelTex.width) * panelTex.height) : vh * 0.62
       const px0 = (vw - pw) / 2
       const py0 = vh * 0.13
-      const parchTex = spriteTexture('ui_parchment')
-      if (parchTex) {
-        const sp = new Sprite(parchTex)
-        sp.width = pw
-        sp.height = ph
-        sp.position.set(px0, py0)
+      if (panelTex) {
+        const sp = new Sprite(panelTex)
+        const s = Math.min(pw / panelTex.width, ph / panelTex.height)
+        sp.scale.set(s)
+        sp.position.set((vw - panelTex.width * s) / 2, py0)
         panel.addChild(sp)
       }
       const ribbonTex2 =
@@ -720,7 +730,7 @@ async function boot() {
           sp.scale.set(sw / tex3.width)
           stS = sp
         } else {
-          const t2 = new Text({ text: '★', style: { fill: filled ? 0xf2c14e : 0xcbc2ab, fontSize: fs(0.12), fontFamily: 'serif' } })
+          const t2 = new Text({ text: '★', style: { fill: filled ? 0xf2c14e : 0xcbc2ab, fontSize: fs(0.12), fontFamily: FONT } })
           t2.anchor.set(0.5)
           stS = t2
         }
@@ -752,7 +762,7 @@ async function boot() {
       }
       const sc = new Text({
         text: board.score.toLocaleString(),
-        style: { fill: 0xf4e8cf, fontSize: fs(0.046), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: 0xf4e8cf, fontSize: fs(0.046), fontFamily: FONT, fontWeight: 'bold' },
       })
       sc.anchor.set(0.5)
       sc.position.set(vw / 2 + scW * 0.15, scY) // 「スコア」焼き込みの右側・鋲を避けて中央寄せ
@@ -769,7 +779,7 @@ async function boot() {
       }
       const hs = new Text({
         text: Math.max(prevBest, board.score).toLocaleString(),
-        style: { fill: UI.paperInk, fontSize: fs(0.034), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: UI.paperInk, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' },
       })
       hs.anchor.set(0, 0.5)
       hs.position.set(vw / 2 + pw * 0.06, hsY)
@@ -786,33 +796,35 @@ async function boot() {
       }
       const rwT = new Text({
         text: `+${reward}`,
-        style: { fill: 0x8a6d1f, fontSize: fs(0.045), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: 0x8a6d1f, fontSize: fs(0.045), fontFamily: FONT, fontWeight: 'bold' },
       })
       rwT.anchor.set(0, 0.5)
       rwT.position.set(-fs(0.02), 0)
       rw.addChild(rwT)
       rw.position.set(vw / 2, py0 + ph * 0.69)
       panel.addChild(rw)
-      // 探窟家と相棒がパネル下端から覗く（正本③）
+      // 探窟家と相棒がパネル下端から覗く（正本③）。縦長端末でボタンに食い込まないよう横幅基準で上限
       const bustTex2 = spriteTexture(`bust_${themeForLevel(currentLevelId)}`)
       if (bustTex2) {
         const ch = new Sprite(bustTex2)
         ch.anchor.set(0.5, 1)
-        ch.scale.set((vh * 0.2) / bustTex2.height)
-        ch.position.set(px0 + pw * 0.16, py0 + ph + vh * 0.055)
+        const chH = Math.min(vh * 0.18, ((pw * 0.24) / bustTex2.width) * bustTex2.height)
+        ch.scale.set(chH / bustTex2.height)
+        ch.position.set(px0 + pw * 0.1, py0 + ph + vh * 0.05)
         panel.addChild(ch)
       }
       const mascotTex = spriteTexture('mascot')
       if (mascotTex) {
         const mo = new Sprite(mascotTex)
         mo.anchor.set(0.5, 1)
-        mo.scale.set((vh * 0.13) / mascotTex.height)
-        mo.position.set(px0 + pw * 0.84, py0 + ph + vh * 0.05)
+        const moH = Math.min(vh * 0.12, ((pw * 0.16) / mascotTex.width) * mascotTex.height)
+        mo.scale.set(moH / mascotTex.height)
+        mo.position.set(px0 + pw * 0.9, py0 + ph + vh * 0.045)
         panel.addChild(mo)
       }
       // つぎへ（→マップ）
       const btn = new Container()
-      const bw2 = pw * 0.6
+      const bw2 = pw * 0.52 // キャラと重ならない幅
       const btnTex = spriteTexture(`next_${themeForLevel(currentLevelId)}`) ?? spriteTexture('ui_button_next')
       if (btnTex) {
         const sp = new Sprite(btnTex)
@@ -856,7 +868,7 @@ async function boot() {
       }
       const t1 = new Text({
         text: '手数が尽きた…',
-        style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
       })
       t1.anchor.set(0.5)
       t1.position.set(vw / 2, py0 + ph * 0.2)
@@ -864,7 +876,7 @@ async function boot() {
       const goalLeft = board.goals.reduce((a, g, i) => a + Math.max(0, g.count - board.goalDone[i]), 0)
       const t2 = new Text({
         text: `のこり目標 ${goalLeft}。あと少し！`,
-        style: { fill: UI.paperInk, fontSize: fs(0.036), fontFamily: 'serif' },
+        style: { fill: UI.paperInk, fontSize: fs(0.036), fontFamily: FONT },
       })
       t2.anchor.set(0.5)
       t2.position.set(vw / 2, py0 + ph * 0.34)
@@ -877,7 +889,7 @@ async function boot() {
       buy.addChild(bg1)
       const buyT = new Text({
         text: `＋${EXTRA_MOVES}手  ${EXTRA_MOVES_COST}コイン`,
-        style: { fill: 0xf4f8ea, fontSize: fs(0.04), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: 0xf4f8ea, fontSize: fs(0.04), fontFamily: FONT, fontWeight: 'bold' },
       })
       buyT.anchor.set(0.5)
       buy.addChild(buyT)
@@ -898,7 +910,7 @@ async function boot() {
       // あきらめる
       const giveup = new Text({
         text: 'あきらめて戻る',
-        style: { fill: 0x6e6250, fontSize: fs(0.038), fontFamily: 'serif' },
+        style: { fill: 0x6e6250, fontSize: fs(0.038), fontFamily: FONT },
       })
       giveup.anchor.set(0.5)
       giveup.position.set(vw / 2, py0 + ph * 0.8)
