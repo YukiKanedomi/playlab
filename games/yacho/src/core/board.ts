@@ -40,6 +40,7 @@ export class Board {
   private hooksSuspended = false
   private resolveDestroyCount = 0 // 1解決あたりの破壊駒数（RunRecords.maxDestroyed用）
   private lastHookReplay: (() => void) | null = null // 模倣の粘菌(#14)用
+  private lastSpecialReplay: (() => void) | null = null // 模倣の粘菌(#14)：他の強化が1つも発動していない場合のフォールバック先（第5波）
   /** 第3波：Board構築（＝層開始）時に発生した初期イベント（予熱供給・スターター効果）。
    *  main.ts側のswap/tap経由イベントとは違い戻り値で受け取れないため、公開フィールドとして保持する。
    *  ビュー側は `new Board(...)` の直後にこれを読んで発動演出を出す想定（契約。実装はビュー側の役割）。 */
@@ -647,6 +648,13 @@ export class Board {
         this.spawnTokenAt(at, 'spore', ev)
         ev.push({ t: 'upgrade-fire', id: SPORE_BULLET_ID, at })
       }
+      // 模倣の粘菌(#14・第5波)：強化を1つも発動していなくても空振りしないためのフォールバック対象として、
+      // 直前に発動した特殊駒効果（種類・位置・コンボ相手）を覚えておく。replayLast()はlastHookReplayが
+      // 無いときだけこれを使う（makeCtx参照）。
+      const replayAt = at
+      const replayPiece: Piece = { ...p }
+      const replayCombo: Piece | undefined = combo ? { ...combo } : undefined
+      this.lastSpecialReplay = () => this.fireSpecial(replayAt, replayPiece, ev, replayCombo)
     }
     ev.push({ t: 'special-fire', at, piece: p, cleared })
   }
@@ -1094,7 +1102,14 @@ export class Board {
       this.clearPieceAt(p, ev, undefined, 'explode')
       destroyed.push(p)
     }
-    if (destroyed.length) ev.push({ t: 'explode', at, cells: destroyed })
+    if (destroyed.length) {
+      ev.push({ t: 'explode', at, cells: destroyed })
+      // 胞子弾(#18・第5波で再設計)：歯車爆弾(fireSpecial側)に加え、爆発鉱石の爆発でも発火させる（単体完結化）
+      if (this.run.upgrades.includes(SPORE_BULLET_ID)) {
+        this.spawnTokenAt(at, 'spore', ev)
+        ev.push({ t: 'upgrade-fire', id: SPORE_BULLET_ID, at })
+      }
+    }
   }
 
   /** 胞子トークンを設置（既存 spore 駒とは別物。隣接消滅で消費される） */
@@ -1105,7 +1120,11 @@ export class Board {
     ev.push({ t: 'token-spawn', at, kind })
   }
 
-  /** 破壊された駒の隣接4マスにある胞子トークンを「触れた」判定→消費し、sporeTouchフックを発火 */
+  /**
+   * 破壊された駒の隣接4マスにある胞子トークンを「触れた」判定→消費し、基礎効果→sporeTouchフックの順で発火。
+   * 基礎効果（第5波・コンサル[E]4）：胞子は強化が無くても「隣接する駒1つを植物へ変える」という土台の価値を持つ。
+   * 毒胞子/根食い鉱などのsporeTouchフックはこれに追加で乗る（併存）。
+   */
   private checkSporeTouch(at: XY, ev: BoardEvent[]) {
     if (!this.run) return
     for (const [dx, dy] of [
@@ -1119,7 +1138,37 @@ export class Board {
       if (!c?.sporeToken) continue
       c.sporeToken = false
       ev.push({ t: 'token-consumed', at: n, kind: 'spore' })
+      const beforeHook = ev.length
       this.fireSporeTouchHooks(n, at, ev)
+      this.applySporeBaseEffect(n, ev, beforeHook)
+    }
+  }
+
+  /**
+   * 胞子の基礎効果本体：胞子の隣接4マス（固定順＝右→左→下→上）を走査し、そのフックが今回変換しなかった
+   * 通常駒を1つだけ植物（葉=色1／キノコ=色4）に変える。フックが既に変換した駒（beforeHook以降に積まれた
+   * special-bornの座標）は対象から外し、根食い鉱の鉱物化などフック本体の効果を上書きしないようにする。
+   */
+  private applySporeBaseEffect(spore: XY, ev: BoardEvent[], beforeHook: number) {
+    const touchedByHook = new Set(
+      ev
+        .slice(beforeHook)
+        .filter((e): e is Extract<BoardEvent, { t: 'special-born' }> => e.t === 'special-born')
+        .map((e) => `${e.at.x},${e.at.y}`),
+    )
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const p = { x: spore.x + dx, y: spore.y + dy }
+      if (touchedByHook.has(`${p.x},${p.y}`)) continue
+      const c = this.at(p.x, p.y)
+      if (c?.piece?.kind === 'normal') {
+        this.transformPieceAt(p, { kind: 'normal', color: this.rng() < 0.5 ? 1 : 4 }, ev)
+        return
+      }
     }
   }
 
@@ -1218,7 +1267,15 @@ export class Board {
         if (self.run.upgrades.includes(RELIC_RESONANCE_ID)) self.run.progress[RELIC_RESONANCE_ID] = { cur: 0, max: 1 }
         return 2
       },
-      replayLast: () => self.lastHookReplay?.(),
+      // 模倣の粘菌(#14)：直前に発動した（自分以外の）フック効果があればそれを、無ければ直前に発動した
+      // 特殊駒効果を代わりに再現する（第5波：強化ゼロでも空振りしないためのフォールバック）
+      replayLast: () => {
+        if (self.lastHookReplay) {
+          self.lastHookReplay()
+          return
+        }
+        self.lastSpecialReplay?.()
+      },
     }
   }
 

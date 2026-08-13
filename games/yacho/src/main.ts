@@ -5,11 +5,22 @@ import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, type RunState } from './core/run'
 import { FLOORS } from './core/floors'
-import { UPGRADES, type UpgradeDef } from './core/upgrades'
+import {
+  UPGRADES,
+  type UpgradeDef,
+  AUTONOMOUS_MECHANISM_ID,
+  MECHANICAL_GARDEN_ID,
+  MIMIC_SLIME_ID,
+  PREHEAT_ID,
+  RELIC_RESONANCE_ID,
+  RESONANT_SHATTER_ID,
+  SPORE_BULLET_ID,
+  VINE_ROCKET_ID,
+} from './core/upgrades'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, randInt, type Rng } from './core/rng'
 import { BoardView } from './view/BoardView'
-import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel } from './view/pieces'
+import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
 import { enemyIntent, ENEMY_ATTACK_DAMAGE, SWARM_ATTACK_PERIOD, type EnemyInstance } from './core/enemies'
 import type { BoardEvent, EnemyKind, LevelDef, XY } from './core/types'
@@ -99,17 +110,120 @@ function splitDesc(desc: string): { condition: string | null; effect: string } {
   return { condition: desc.slice(0, hitIdx + hitMarker.length - 1), effect: desc.slice(hitIdx + hitMarker.length) }
 }
 
-/** 所持強化のうち、候補と系統一致 or フック種一致のものを最大2件返す（カード「相性」欄。[B]§カード構造） */
-function synergyPartners(owned: UpgradeDef[], candidate: UpgradeDef): UpgradeDef[] {
+// ---- 読めるシナジー表示（codex_consult_ui.md [D]：金文字の名前羅列をやめ、因果の一文にする） ----
+// 各強化が「盤面に何を供給し（produces）」「何を消費して発火するか（consumes）」を手作業でタグ付けする。
+// upgrades.ts の hooks は on種別のみで内容までは表せないため、この表は実装の実挙動（起動条件テキストと一致）を
+// 見て作った近似表。目的は「必ず正しい因果グラフ」ではなく「繋がりを説明できる一文」を機械的に組み立てること。
+const RESOURCE_LABEL: Record<string, string> = {
+  spore: '胞子',
+  ore: '爆発鉱石',
+  special: '特殊駒',
+  gearPiece: 'ギアの駒',
+  relicBoost: '遺物の共鳴',
+  plantPiece: '植物の駒',
+}
+const UPGRADE_PRODUCES: Record<string, string[]> = {
+  'spore-bloom': ['spore'],
+  'fungal-awakening': ['plantPiece'],
+  'deep-breath': ['plantPiece'],
+  'root-eating-ore': ['ore'],
+  'crystal-bud': ['ore'],
+  [AUTONOMOUS_MECHANISM_ID]: ['special'],
+  [PREHEAT_ID]: ['gearPiece'],
+  [RELIC_RESONANCE_ID]: ['relicBoost'],
+  'gamblers-pot': ['special'],
+  [VINE_ROCKET_ID]: ['plantPiece'],
+  [SPORE_BULLET_ID]: ['spore'],
+  [MECHANICAL_GARDEN_ID]: ['plantPiece'],
+  'relic-root': ['spore'],
+}
+const UPGRADE_CONSUMES: Record<string, string[]> = {
+  'spore-bloom': ['plantPiece'],
+  'fungal-awakening': ['plantPiece'],
+  'toxic-spore': ['spore'],
+  'deep-breath': ['plantPiece'],
+  'root-eating-ore': ['spore'],
+  [RESONANT_SHATTER_ID]: ['ore'],
+  'magnetic-mining': ['ore', 'gearPiece'],
+  [AUTONOMOUS_MECHANISM_ID]: ['gearPiece'],
+  overrev: ['gearPiece'],
+  [RELIC_RESONANCE_ID]: ['gearPiece'],
+  'transformation-furnace': ['relicBoost'],
+  [VINE_ROCKET_ID]: ['plantPiece'],
+  [SPORE_BULLET_ID]: ['special'],
+  [MECHANICAL_GARDEN_ID]: ['gearPiece'],
+}
+/** 発火のきっかけ（[D]接続の型③「同じきっかけで発動が重なる」用。produces/consumesで説明が付かない時のみ使う） */
+const UPGRADE_TRIGGER: Record<string, string> = {
+  'spore-bloom': '植物のマッチ',
+  'fungal-awakening': '植物のマッチ',
+  'toxic-spore': '胞子との接触',
+  'deep-breath': 'キノコのマッチ',
+  'root-eating-ore': '胞子との接触',
+  'mining-habit': '鉱物のマッチ',
+  'crystal-bud': '鉱物のマッチ',
+  'magnetic-mining': '爆発とギア',
+  [AUTONOMOUS_MECHANISM_ID]: 'ギア起動',
+  overrev: 'ギアのマッチ',
+  [PREHEAT_ID]: '層のはじめ',
+  [RELIC_RESONANCE_ID]: 'ギア起動',
+  [MIMIC_SLIME_ID]: '遺物のマッチ',
+  'transformation-furnace': '遺物のマッチ',
+  'gamblers-pot': '遺物のマッチ',
+  [VINE_ROCKET_ID]: 'レンチ銛の発射',
+  [SPORE_BULLET_ID]: '火壺の発動',
+  [MECHANICAL_GARDEN_ID]: 'ギア起動',
+  'relic-root': '遺物のマッチ',
+}
+/** カード本文「効果」の要約（接続一文に埋め込む短縮版。読点までを最大16字で切る） */
+function shortEffect(def: UpgradeDef): string {
+  const head = splitDesc(def.desc).effect.split('、')[0]
+  return head.length > 16 ? head.slice(0, 16) + '…' : head
+}
+interface ConnectionInfo {
+  count: number
+  sentence: string | null
+}
+/**
+ * 所持強化群 対 候補1枚の「読めるシナジー」（[D]：名前の羅列でなく因果の一文）。
+ * 型は優先度順に4種：①所持が作る資源を候補が使う ②候補が作る資源を所持が使う ③同じきっかけで発動が重なる
+ * ④同じ系統（フォールバック）。countは所持のうちどれか1つでも当てはまった数（バッジの「接続 N」）、
+ * sentenceは最も説明力の高い1件だけを代表として出す（複数を連結すると長くなりすぎるため）。
+ */
+function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): ConnectionInfo {
+  const candProduces = UPGRADE_PRODUCES[candidate.id] ?? []
+  const candConsumes = UPGRADE_CONSUMES[candidate.id] ?? []
+  const candTrigger = UPGRADE_TRIGGER[candidate.id]
   const candCat = UPGRADE_CATEGORY[candidate.id]
-  const out: UpgradeDef[] = []
+  const kindRank = { produce: 0, consume: 1, trigger: 2, category: 3 } as const
+  let best: { rank: number; sentence: string } | null = null
+  let count = 0
   for (const o of owned) {
-    if (out.length >= 2) break
-    const catMatch = UPGRADE_CATEGORY[o.id] === candCat
-    const hookMatch = o.hooks.some((oh) => candidate.hooks.some((ch) => oh.on === ch.on))
-    if (catMatch || hookMatch) out.push(o)
+    const oProduces = UPGRADE_PRODUCES[o.id] ?? []
+    const oConsumes = UPGRADE_CONSUMES[o.id] ?? []
+    const produced = oProduces.find((r) => candConsumes.includes(r))
+    const consumed = candProduces.find((r) => oConsumes.includes(r))
+    let kind: keyof typeof kindRank | null = null
+    let sentence = ''
+    if (produced) {
+      kind = 'produce'
+      sentence = `${o.name}で作る${RESOURCE_LABEL[produced]} → この強化で${shortEffect(candidate)}`
+    } else if (consumed) {
+      kind = 'consume'
+      sentence = `この強化が作る${RESOURCE_LABEL[consumed]} → ${o.name}が使う`
+    } else if (candTrigger && UPGRADE_TRIGGER[o.id] === candTrigger) {
+      kind = 'trigger'
+      sentence = `${o.name}と同じ「${candTrigger}」で発動が重なる`
+    } else if (UPGRADE_CATEGORY[o.id] === candCat) {
+      kind = 'category'
+      sentence = `${o.name}と同じ${CATEGORY_LABEL[candCat] ?? ''}系統`
+    }
+    if (!kind) continue
+    count++
+    const rank = kindRank[kind]
+    if (!best || rank < best.rank) best = { rank, sentence }
   }
-  return out
+  return { count, sentence: best?.sentence ?? null }
 }
 
 /**
@@ -347,6 +461,59 @@ function makeUpgradeIconContainer(id: string, size: number): Container {
   }
   return c
 }
+
+/**
+ * ドラフトv2の固有アイコン（codex_consult_ui.md [D]強化アイコン体系）。
+ * upgradeIconTexture(id) があれば専用グリフをそのまま描き、無ければ既存の系統駒テクスチャ表現
+ * （makeUpgradeIconContainer＝メダル台+系統色）へフォールバックする（基盤メモの指示どおり）。
+ */
+function makeUniqueUpgradeIcon(id: string, size: number): Container {
+  const tex = upgradeIconTexture(id)
+  if (!tex) return makeUpgradeIconContainer(id, size)
+  const c = new Container()
+  const sp = new Sprite(tex)
+  sp.anchor.set(0.5)
+  sp.scale.set(size / Math.max(tex.width, tex.height))
+  c.addChild(sp)
+  return c
+}
+
+// ---- 接続バッジの見た目（[D]：金文字をやめ、濃い深界ティール地×古紙色文字×鎖アイコン×枠線2pxへ） ----
+const CONN_BG = 0x1e4d5c
+const CONN_TEXT = 0xf4e8cf
+/** 鎖アイコン：連結した2つの角丸リング（絵文字を使わず、コード描画で個性を出す） */
+function chainGlyph(size: number): Graphics {
+  const g = new Graphics()
+  const w = size * 0.62
+  const h = size * 0.42
+  const lw = Math.max(1.4, size * 0.16)
+  g.roundRect(-w * 0.52, -h / 2, w * 0.58, h, h / 2).stroke({ width: lw, color: CONN_TEXT })
+  g.roundRect(-w * 0.06, -h / 2, w * 0.58, h, h / 2).stroke({ width: lw, color: CONN_TEXT })
+  return g
+}
+/** 接続バッジを host のローカル座標(x,y)を左上に描く。戻り値はバッジ下端のy（後続要素の積み上げ用） */
+function drawConnectionChip(host: Container, x: number, y: number, maxW: number, text: string, fontSize: number): number {
+  const padX = fontSize * 0.55
+  const padY = fontSize * 0.4
+  const iconSize = fontSize * 1.1
+  const textX = x + padX * 2 + iconSize
+  const textMaxW = Math.max(30, maxW - (textX - x) - padX)
+  const label = new Text({
+    text,
+    style: { fill: CONN_TEXT, fontSize, fontFamily: FONT, fontWeight: 'bold', wordWrap: true, wordWrapWidth: textMaxW, breakWords: true, lineHeight: fontSize * 1.35 },
+  })
+  const chipH = Math.max(iconSize + padY * 2, label.height + padY * 2)
+  const chipW = Math.min(maxW, textX - x + label.width + padX)
+  const bg = new Graphics()
+  bg.roundRect(x, y, chipW, chipH, chipH * 0.32).fill({ color: CONN_BG, alpha: 0.95 }).stroke({ width: 2, color: UI.brass, alpha: 0.9 })
+  host.addChild(bg)
+  const icon = chainGlyph(iconSize)
+  icon.position.set(x + padX + iconSize / 2, y + chipH / 2)
+  host.addChild(icon)
+  label.position.set(textX, y + (chipH - label.height) / 2)
+  host.addChild(label)
+  return y + chipH
+}
 const ENEMY_ICON_TEX: Partial<Record<EnemyKind, string>> = { rockshell: 'kokeishi', sporeling: 'subi', swarm: 'e_swarm', boss: 'hako' }
 function makeEnemyIconContainer(kind: EnemyKind, size: number): Container {
   const c = new Container()
@@ -451,6 +618,20 @@ function buildUpgradeEntry(def: UpgradeDef, run: RunState): FieldNoteEntry {
   if (progress) blocks.push({ kind: 'row', label: '進捗', text: `${Math.min(progress.cur, progress.max)} / ${progress.max}` })
   if (def.starterDesc) blocks.push({ kind: 'row', label: '獲得ボーナス', text: def.starterDesc.replace(/^おまけ[:：]\s*/, '') })
   return { noteKey: `upgrade:${def.id}`, kindLabel: '強化', title: def.name, icon: (size) => makeUpgradeIconContainer(def.id, size), blocks }
+}
+
+/** 所持強化 一覧：ドラフトv2の所持ストリップ「一覧」ボタンから開く（[D]：所持欄の`一覧`で全画面のビルド一覧） */
+function buildOwnedListEntry(owned: UpgradeDef[]): FieldNoteEntry {
+  const blocks: FieldNoteBlock[] = owned.length
+    ? [{ kind: 'items', items: owned.map((u) => ({ icon: (size: number) => makeUniqueUpgradeIcon(u.id, size), title: u.name, text: splitDesc(u.desc).effect })) }]
+    : [{ kind: 'text', text: 'まだ強化を所持していません。' }]
+  return {
+    noteKey: 'owned-list',
+    kindLabel: '所持強化',
+    title: `所持強化 一覧（${owned.length}）`,
+    icon: (size) => (owned[0] ? makeUniqueUpgradeIcon(owned[0].id, size) : makeTermIconContainer(size)),
+    blocks,
+  }
 }
 
 /** 特殊駒：野帳ボタンから開く一覧（[C]表：4種の早見。効果は board.ts fireSpecial の実挙動と一致） */
@@ -1844,141 +2025,308 @@ async function boot() {
       })
     }
 
-    // ドラフト3択：羊皮紙カード3枚（ROGUE.md §4/§8）。
-    // 情報設計はcodex_consult_rogue.md [B]（見出し帯=系統+強化名／本文=条件+効果／相性／獲得ボーナス帯）に準拠。
-    // 左切れ対策：生のvw比率でなく「安全矩形」からカード幅を決め、3枚が縦に収まる高さへ等比スケールで詰める。
+    // ドラフト3択 v2（codex_consult_ui.md [D]）：タップ即取得をやめ「選択→下部バーで確定」式にし、
+    // 所持強化ストリップと読めるシナジー（因果の一文バッジ）を追加する。縦バンド予算は[D]推奨表に固定で従う：
+    // 0-9%タイトル+野帳 / 9-20%所持ストリップ / 20-82%候補カード3枚(各18%・間4%) / 82-96%接続要約+確定 / 96-100%safe area
     const showDraftPanel = () => {
       const options = pickDraftOptions(run.upgrades, draftRng(floor))
       const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
+      const connections = options.map((opt) => computeConnection(owned, opt))
+      const padX = Math.max(20, vw * 0.05)
+
       const panel = new Container()
+      // プレイHUD（油槽・深度・残敵チップ・ビルドドック）は所持ストリップや候補カードと
+      // 位置が重なるため、ドラフト中は丸ごと隠す。半透明の暗幕だけでは透けて混線する
+      ui.visible = false
       const dimG = new Graphics()
-      dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 0.55 })
+      dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 0.82 })
+      dimG.eventMode = 'static' // 背面のタップを吸収（誤操作防止）
       panel.addChild(dimG)
+      playRoot.addChild(panel)
+
+      // ---- 0〜9%：タイトル＋野帳ボタン ----
+      const titleY = vh * 0.045
       const title = new Text({
-        text: 'そなえを ひとつ えらぶ',
-        style: { fill: 0xf4e8cf, fontSize: fs(0.044), fontFamily: FONT, fontWeight: 'bold' },
+        text: `深度${floor} 踏破 — 強化を1つ選ぶ`,
+        style: { fill: 0xf4e8cf, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
       })
-      title.anchor.set(0.5)
-      title.position.set(vw / 2, vh * 0.08)
+      title.anchor.set(0, 0.5)
+      title.position.set(padX, titleY)
       panel.addChild(title)
 
-      // 安全矩形：内容幅の基準を「画面幅」でなく min(vw, vh*0.62) に取り、そこから32px引いた分だけカードに使う
-      const aspect = 760 / 450 // ui_cardの縦横比（四辺完全・上部24%が見出し帯）
-      const top = vh * 0.14
-      const bottomPad = vh * 0.02
-      const gap = vh * 0.02
-      const cardHByHeight = (vh - top - bottomPad - gap * 2) / 3 // 3枚が縦に並んでもはみ出さない上限
-      const safeW = Math.min(vw, vh * 0.62)
-      const cardHByWidth = (safeW - 32) / aspect
-      const cardH = Math.max(60, Math.min(cardHByHeight, cardHByWidth))
-      const cardW = cardH * aspect
-      const cardTex = spriteTexture('ui_card')
-      const insetX = cardW * 0.1 // 本文はカード内側からさらに左右10%（>=6%指定を満たす）内側
-      // カード本文の用語リンク（[C]用語リンクの実装方針）：測定用Textは3枚で使い回し、パネル破棄時にまとめて片付ける
-      const cardMeasurer = new Text({ text: '', style: { fontFamily: FONT, fontSize: fs(0.024) } })
+      const noteBtnW = Math.min(vw * 0.22, fs(0.24))
+      const noteBtnH = fs(0.075)
+      const draftNoteBtn = new Container()
+      const draftNoteBg = new Graphics()
+      draftNoteBg
+        .roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.3)
+        .fill({ color: 0x2a1c10, alpha: 0.9 })
+        .stroke({ width: 2, color: UI.brass })
+      draftNoteBtn.addChild(draftNoteBg)
+      const draftNoteLabel = new Text({ text: '野帳', style: { fill: 0xf4e8cf, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+      draftNoteLabel.anchor.set(0.5)
+      draftNoteBtn.addChild(draftNoteLabel)
+      draftNoteBtn.position.set(vw - padX - noteBtnW / 2, titleY)
+      draftNoteBtn.eventMode = 'static'
+      draftNoteBtn.cursor = 'pointer'
+      draftNoteBtn.hitArea = { contains: (x: number, y: number) => x >= -noteBtnW / 2 && x <= noteBtnW / 2 && y >= -noteBtnH / 2 && y <= noteBtnH / 2 }
+      draftNoteBtn.on('pointertap', () => showFieldNote(buildSpecialPieceEntry()))
+      panel.addChild(draftNoteBtn)
 
-      options.forEach((opt, i) => {
-        const card = new Container()
-        const cy = top + i * (cardH + gap)
-        if (cardTex) {
-          const sp = new Sprite(cardTex)
-          sp.width = cardW
-          sp.height = cardH
-          card.addChild(sp)
-        } else {
-          const g = new Graphics()
-          g.roundRect(0, 0, cardW, cardH, cardH * 0.05).fill(UI.paper)
-          g.rect(0, 0, cardW, cardH * 0.24).fill(0x2a1c10)
-          card.addChild(g)
+      // ---- 9〜20%：所持強化ストリップ（[D]：40pxアイコン横スクロール、左に所持N、右に一覧、系統内訳） ----
+      const stripRowY = vh * 0.135
+      const stripIconSize = Math.max(30, Math.min(40, fs(0.1)))
+      const ownedLabel = new Text({ text: `所持 ${owned.length}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
+      ownedLabel.anchor.set(0, 0.5)
+      ownedLabel.position.set(padX, stripRowY)
+      panel.addChild(ownedLabel)
+
+      const listLabel = new Text({ text: '一覧', style: { fill: 0xd8b855, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
+      listLabel.anchor.set(1, 0.5)
+      listLabel.position.set(vw - padX, stripRowY)
+      panel.addChild(listLabel)
+      const listBtn = new Container()
+      listBtn.eventMode = 'static'
+      listBtn.cursor = 'pointer'
+      const listHitW = listLabel.width + fs(0.03)
+      listBtn.hitArea = { contains: (x: number, y: number) => x >= vw - padX - listHitW && x <= vw && y >= stripRowY - fs(0.045) && y <= stripRowY + fs(0.045) }
+      listBtn.on('pointertap', () => showFieldNote(buildOwnedListEntry(owned)))
+      panel.addChild(listBtn)
+
+      const stripX0 = padX + ownedLabel.width + fs(0.03)
+      const stripX1 = vw - padX - listLabel.width - fs(0.03)
+      const stripW = Math.max(stripIconSize, stripX1 - stripX0)
+      const stripMask = new Graphics()
+      stripMask.rect(stripX0, stripRowY - stripIconSize / 2 - 6, stripW, stripIconSize + 12).fill(0xffffff)
+      panel.addChild(stripMask)
+      const stripHost = new Container()
+      stripHost.position.set(stripX0, stripRowY)
+      stripHost.mask = stripMask
+      stripHost.eventMode = 'static'
+      stripHost.hitArea = { contains: (x: number, y: number) => x >= -4 && x <= stripW + 4 && y >= -stripIconSize / 2 - 6 && y <= stripIconSize / 2 + 6 }
+      panel.addChild(stripHost)
+      const stripGap = stripIconSize * 0.3
+      owned.forEach((u, i) => {
+        const ic = makeUniqueUpgradeIcon(u.id, stripIconSize)
+        ic.position.set(i * (stripIconSize + stripGap) + stripIconSize / 2, 0)
+        ic.eventMode = 'static'
+        ic.cursor = 'pointer'
+        const hr = stripIconSize * 0.6
+        ic.hitArea = { contains: (x: number, y: number) => x * x + y * y <= hr * hr }
+        // アイコンタップで野帳シートが開く。候補カードは消さず、閉じれば同じ選択状態のまま戻る（[D]）
+        ic.on('pointertap', (e) => {
+          e.stopPropagation()
+          showFieldNote(buildUpgradeEntry(u, run))
+        })
+        stripHost.addChild(ic)
+      })
+      const stripContentW = owned.length ? owned.length * (stripIconSize + stripGap) - stripGap : 0
+      if (stripContentW > stripW) {
+        // 7個を超えたら縮小せず横スクロール（[D]）。ドラッグはstripHostが子アイコンからのバブリングも拾う
+        const minX = stripW - stripContentW
+        let dragStartX: number | null = null
+        let dragStartHostX = 0
+        stripHost.on('pointerdown', (e) => {
+          dragStartX = e.global.x
+          dragStartHostX = stripHost.position.x
+        })
+        stripHost.on('pointermove', (e) => {
+          if (dragStartX === null) return
+          const dx = e.global.x - dragStartX
+          stripHost.position.x = Math.max(stripX0 + minX, Math.min(stripX0, dragStartHostX + dx))
+        })
+        const endStripDrag = () => {
+          dragStartX = null
+        }
+        stripHost.on('pointerup', endStripDrag)
+        stripHost.on('pointerupoutside', endStripDrag)
+      }
+
+      // 主系統の内訳（例：植物3・鉱物1・ギア1）
+      const counts: Partial<Record<UpgradeCategory, number>> = {}
+      for (const u of owned) {
+        const c = UPGRADE_CATEGORY[u.id]
+        counts[c] = (counts[c] ?? 0) + 1
+      }
+      const breakdownOrder: UpgradeCategory[] = ['plant', 'mineral', 'gear', 'relic', 'synergy']
+      const breakdownText = breakdownOrder
+        .filter((c) => counts[c])
+        .map((c) => `${CATEGORY_LABEL[c]}${counts[c]}`)
+        .join('・')
+      if (breakdownText) {
+        const bd = new Text({ text: breakdownText, style: { fill: 0x9a8968, fontSize: fs(0.021), fontFamily: FONT } })
+        bd.position.set(padX, stripRowY + fs(0.045))
+        panel.addChild(bd)
+      }
+
+      // ---- 20〜82%：候補カード3枚（各18%・間隔4%。[D]表のとおり固定） ----
+      const cardTop = vh * 0.2
+      const cardH = vh * 0.18
+      const cardGap = vh * 0.04
+      const safeW = Math.min(vw, vh * 0.62)
+      const cardW = safeW - 32
+      const cardInsetX = Math.max(cardW * 0.06, 12) // 本文はカード内側からさらに6%以上内側（必達）
+      const cardIconSize = Math.max(30, Math.min(40, fs(0.1)))
+      const bodyFont = fs(0.0265)
+      const labelFont = fs(0.024)
+      // カード本文の用語リンク（[C]用語リンクの実装方針）：測定用Textは3枚で使い回し、生成後まとめて片付ける
+      const cardMeasurer = new Text({ text: '', style: { fontFamily: FONT, fontSize: bodyFont } })
+
+      // ---- 82〜96%：接続要約＋確定ボタン（選択状態に応じてrenderBottomで描き直す） ----
+      const bottomTop = vh * 0.82
+      const bottomH = vh * 0.14
+      const bottomContainer = new Container()
+      bottomContainer.position.set(0, bottomTop)
+      panel.addChild(bottomContainer)
+
+      let selectedIndex: number | null = null
+      const cardContainers: Container[] = []
+      const cardGlows: Graphics[] = []
+
+      const confirmPick = (i: number) => {
+        run.upgrades.push(options[i].id)
+        const next = floor + 1
+        playRoot.removeAllListeners()
+        playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
+        buildFloorScene(next)
+        ensureBgm(themeFloorId(next))
+      }
+
+      const renderBottom = () => {
+        bottomContainer.removeChildren().forEach((c) => c.destroy({ children: true }))
+        const btnW = Math.min(cardW, vw * 0.7)
+        const btnH = bottomH * 0.42
+        const btnY = bottomH - btnH / 2 - vh * 0.008
+        const enabled = selectedIndex !== null
+
+        if (selectedIndex !== null) {
+          const conn = connections[selectedIndex]
+          const opt = options[selectedIndex]
+          const summaryTop = bottomH * 0.06
+          if (conn.sentence) {
+            // 選択時：因果の一文をカード内より広い幅でフルに見せる（[D]：カードで収まらない分はここで見せる）
+            drawConnectionChip(bottomContainer, padX, summaryTop, vw - padX * 2, `接続 ${conn.count}　${conn.sentence}`, fs(0.024))
+          } else {
+            // 相性なしは罰のように見せない：バッジは出さず、選択中の強化名だけ淡く添える（[D]）
+            const t = new Text({ text: opt.name, style: { fill: 0x9a8968, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+            t.position.set(padX, summaryTop)
+            bottomContainer.addChild(t)
+          }
         }
 
-        // ① 見出し帯：系統名（小・前置き）＋強化名（大）。系統は文字でも示す
-        const cat = UPGRADE_CATEGORY[opt.id]
-        const headerY = cardH * 0.135
-        const catT = new Text({
-          text: CATEGORY_LABEL[cat] ?? '',
-          style: { fill: 0xcbb98a, fontSize: cardH * 0.062, fontFamily: FONT, fontWeight: 'bold' },
+        const btn = new Container()
+        const btnBg = new Graphics()
+        if (enabled) {
+          btnBg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill(UI.wood).stroke({ width: 2.5, color: UI.brass })
+        } else {
+          btnBg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill({ color: 0x33291c, alpha: 0.75 }).stroke({ width: 2, color: 0x6b5f45 })
+        }
+        btn.addChild(btnBg)
+        const btnLabel = new Text({
+          text: enabled ? 'この強化を取る' : 'カードを選んで比較',
+          style: { fill: enabled ? 0xf4e8cf : 0x8a8270, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
         })
-        catT.anchor.set(0, 0.5)
-        catT.position.set(insetX, headerY)
+        btnLabel.anchor.set(0.5)
+        btn.addChild(btnLabel)
+        btn.position.set(vw / 2, btnY)
+        if (enabled) {
+          // 未選択時は無効化（タップ不可）＝「カードを選んで比較」のまま。選択後だけ確定できる（[D]）
+          btn.eventMode = 'static'
+          btn.cursor = 'pointer'
+          btn.hitArea = { contains: (x: number, y: number) => x >= -btnW / 2 && x <= btnW / 2 && y >= -btnH / 2 && y <= btnH / 2 }
+          btn.on('pointertap', () => confirmPick(selectedIndex!))
+        }
+        bottomContainer.addChild(btn)
+      }
+
+      const selectCard = (i: number) => {
+        // タップは選択状態にするだけ（再タップで解除）。取得は下部の確定ボタンでのみ行う（[D]）
+        selectedIndex = selectedIndex === i ? null : i
+        cardContainers.forEach((c, idx) => {
+          const on = idx === selectedIndex
+          cardGlows[idx].visible = on
+          tw.tween(c.scale, { x: on ? 1.035 : 1, y: on ? 1.035 : 1 }, 140, { ease: tw.easeOutBack })
+        })
+        renderBottom()
+      }
+
+      options.forEach((opt, i) => {
+        const cy = cardTop + i * (cardH + cardGap)
+        const card = new Container()
+        card.pivot.set(cardW / 2, cardH / 2) // 選択時の拡大が中心基準になるようpivotを中央に置く
+        card.position.set((vw - cardW) / 2 + cardW / 2, cy + cardH / 2)
+
+        // 背景：素材の9スライス化を試したが、見出し帯の位置が崩れて可読性が落ちたためコード描画を採用。
+        // 帯予算に対して素材の縦横比が合わないので、ラスターの伸縮は使わない
+        const bg = new Graphics()
+        bg.roundRect(0, 0, cardW, cardH, cardH * 0.09).fill({ color: UI.paper, alpha: 0.98 }).stroke({ width: 2, color: UI.brass, alpha: 0.85 })
+        card.addChild(bg)
+        // 選択ハイライト：未選択時は非表示、選択時だけ光る枠を出す（拡大はcard.scale側で行う）
+        const glow = new Graphics()
+        glow.roundRect(-3, -3, cardW + 6, cardH + 6, cardH * 0.1).stroke({ width: 4, color: 0xf2d98a, alpha: 0.95 })
+        glow.visible = false
+        card.addChild(glow)
+        cardGlows.push(glow)
+        cardContainers.push(card)
+
+        // ① 左に固有アイコン36〜40px、右に系統名（小）＋強化名（大）
+        const headerTop = cardH * 0.06
+        const textX = cardInsetX + cardIconSize + fs(0.018)
+        const catT = new Text({
+          text: CATEGORY_LABEL[UPGRADE_CATEGORY[opt.id]] ?? '',
+          style: { fill: 0x8a6a3f, fontSize: fs(0.02), fontFamily: FONT, fontWeight: 'bold' },
+        })
+        catT.position.set(textX, headerTop)
         card.addChild(catT)
         const nameT = new Text({
           text: opt.name,
           style: {
-            fill: UI.badgeText,
-            fontSize: cardH * 0.105,
+            fill: UI.paperInk,
+            fontSize: fs(0.032),
             fontFamily: FONT,
             fontWeight: 'bold',
             wordWrap: true,
-            wordWrapWidth: cardW - insetX * 2 - catT.width - cardW * 0.03,
+            wordWrapWidth: cardW - textX - cardInsetX,
             breakWords: true,
           },
         })
-        nameT.anchor.set(0, 0.5)
-        nameT.position.set(insetX + catT.width + cardW * 0.03, headerY)
+        nameT.position.set(textX, headerTop + catT.height + fs(0.002))
         card.addChild(nameT)
+        const headerBlockH = catT.height + fs(0.002) + nameT.height
+        const icon = makeUniqueUpgradeIcon(opt.id, cardIconSize)
+        icon.position.set(cardInsetX + cardIconSize / 2, headerTop + cardIconSize / 2)
+        card.addChild(icon)
 
-        // ② 本文：固定ラベル「条件」「効果」を左に、内容を右へ1行ずつ（[B]：1文1因果、24字目安・最大2行）
-        // 用語には点線下線＋「?」でリンクを張る（[C]用語リンクの実装方針）。カード全体タップの即取得と衝突しないよう、
-        // 用語タップは layoutRichText 側で必ず e.stopPropagation() する。「1つの本文」＝このカード1枚でusedTermsを共有
+        // ② 条件／効果（既存splitDescを流用）。用語には点線下線＋「?」でリンクを張る（[C]用語リンクの実装方針）。
+        // カード全体タップは選択トグルのみなので、用語タップは layoutRichText 側の stopPropagation で確実に分離する
         const { condition, effect } = splitDesc(opt.desc)
-        const labelW = cardW * 0.16
-        const contentX = insetX + labelW
-        const contentWrapW = Math.max(20, cardW - contentX - insetX)
-        const labelStyle = { fill: 0x8a6a3f, fontSize: cardH * 0.058, fontFamily: FONT, fontWeight: 'bold' as const }
-        const cardBodyFont = cardH * 0.068
+        const labelW = Math.max(fs(0.06), labelFont * 2.4)
+        const contentX = cardInsetX + labelW
+        const contentWrapW = Math.max(20, cardW - contentX - cardInsetX)
         const cardUsedTerms = new Set<string>()
-        let rowY = cardH * 0.29
+        let rowY = headerTop + Math.max(cardIconSize, headerBlockH) + cardH * 0.04
         const addRow = (label: string, content: string) => {
-          const l = new Text({ text: label, style: labelStyle })
-          l.position.set(insetX, rowY)
+          const l = new Text({ text: label, style: { fill: 0x8a6a3f, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
+          l.position.set(cardInsetX, rowY)
           card.addChild(l)
-          const bottom = layoutRichText(
-            card,
-            cardMeasurer,
-            tokenizeRich(content, cardUsedTerms),
-            contentX,
-            rowY,
-            contentWrapW,
-            cardBodyFont,
-            UI.paperInk,
-            0x7a5a1e, // 羊皮紙地でも読める、地の文より濃い褐色（金文字は明度が近く読みにくいため使わない）
-            openGlossaryTerm,
-          )
-          rowY = Math.max(rowY + l.height, bottom) + cardH * 0.03
+          const bottom = layoutRichText(card, cardMeasurer, tokenizeRich(content, cardUsedTerms), contentX, rowY, contentWrapW, bodyFont, UI.paperInk, 0x7a5a1e, openGlossaryTerm)
+          rowY = Math.max(rowY + l.height, bottom) + cardH * 0.025
         }
         if (condition) addRow('条件', condition)
         addRow('効果', effect)
 
-        // ③ 相性：所持強化のうち系統一致 or フック種一致を最大2件
-        // 金文字は羊皮紙に埋もれて読めなかったため、色に頼らず「濃色の錠剤に明色文字」で示す（可読性優先）
-        const partners = synergyPartners(owned, opt)
-        if (partners.length) {
-          const l = new Text({ text: '相性', style: labelStyle })
-          l.position.set(insetX, rowY)
-          card.addChild(l)
-          const txt = new Text({
-            text: '◆ ' + partners.map((p) => p.name).join('　◆ '),
-            style: { fill: 0xf6ecd4, fontSize: cardH * 0.06, fontFamily: FONT, wordWrap: true, wordWrapWidth: contentWrapW, breakWords: true },
-          })
-          const padX = cardH * 0.035
-          const padY2 = cardH * 0.018
-          const pill = new Graphics()
-          pill
-            .roundRect(contentX, rowY - padY2 * 0.4, txt.width + padX * 2, txt.height + padY2 * 1.4, cardH * 0.05)
-            .fill({ color: 0x4a3a1e, alpha: 0.92 })
-            .stroke({ width: 1.5, color: 0xd9a441 })
-          card.addChild(pill)
-          txt.position.set(contentX + padX, rowY + padY2 * 0.3)
-          card.addChild(txt)
-          rowY += Math.max(l.height, txt.height + padY2 * 2) + cardH * 0.03
+        // ③ 接続バッジ（あれば）：カード内は「接続 N」のみ。因果の一文は選択後に下部の比較欄で見せる（[D]）
+        const conn = connections[i]
+        if (conn.count > 0) {
+          rowY = drawConnectionChip(card, cardInsetX, rowY, cardW - cardInsetX * 2, `接続 ${conn.count}`, Math.max(10, fs(0.022))) + cardH * 0.02
         }
 
-        // ④ 獲得ボーナス（starterDeschありのみ）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
+        // ④ 獲得ボーナス（starterDescありのみ）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
         if (opt.starterDesc) {
-          const bandH = cardH * 0.135
-          const bandY = cardH - bandH - cardH * 0.045
-          const bandX = insetX * 0.7
+          const bandH = cardH * 0.16
+          // 下端固定だと接続バッジと重なることがあるため、本文の積み上げ位置(rowY)より必ず下へ置く
+          const bandY = Math.max(cardH - bandH - cardH * 0.04, rowY + cardH * 0.01)
+          const bandX = cardInsetX * 0.7
           const bandW = cardW - bandX * 2
           const band = new Graphics()
           band.roundRect(bandX, bandY, bandW, bandH, bandH * 0.28).fill({ color: 0xf4ecd8, alpha: 0.55 })
@@ -1992,38 +2340,25 @@ async function boot() {
           gift.rect(giftCx - giftSize / 2, giftCy - giftSize * 0.08, giftSize, giftSize * 0.16).fill(0x8a5a2a)
           card.addChild(gift)
           const bonusText = opt.starterDesc.replace(/^おまけ[:：]\s*/, '')
+          const bonusFont = Math.max(fs(0.019), bandH * 0.34)
           const bonusT = new Text({
             text: `獲得ボーナス　${bonusText}`,
-            style: {
-              fill: 0x6b5238,
-              fontSize: cardH * 0.05,
-              fontFamily: FONT,
-              wordWrap: true,
-              wordWrapWidth: bandW - giftSize * 1.9,
-              breakWords: true,
-            },
+            style: { fill: 0x6b5238, fontSize: bonusFont, fontFamily: FONT, wordWrap: true, wordWrapWidth: bandW - giftSize * 1.9, breakWords: true },
           })
           bonusT.anchor.set(0, 0.5)
           bonusT.position.set(giftCx + giftSize * 0.85, giftCy)
           card.addChild(bonusT)
         }
 
-        card.position.set((vw - cardW) / 2, cy)
         card.eventMode = 'static'
         card.cursor = 'pointer'
         card.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= cardW && y >= 0 && y <= cardH }
-        card.on('pointertap', () => {
-          run.upgrades.push(opt.id)
-          const next = floor + 1
-          playRoot.removeAllListeners()
-          playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
-          buildFloorScene(next)
-          ensureBgm(themeFloorId(next))
-        })
+        card.on('pointertap', () => selectCard(i))
         panel.addChild(card)
       })
       cardMeasurer.destroy()
-      playRoot.addChild(panel)
+
+      renderBottom() // 初期状態＝未選択（[D]：未選択時はボタンが「カードを選んで比較」のまま無効化）
     }
 
     // ---------- 記録画面（層10クリア or run-over。ROGUE.md §7/§8） ----------

@@ -261,7 +261,7 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: MIMIC_SLIME_ID,
     name: '模倣の粘菌',
-    desc: '遺物を3つ以上消すと、直前の強化効果がもう一度おきる',
+    desc: '遺物を3つ以上消すと、直前の強化か特殊駒の効果がもう一度おきる',
     starterDesc: 'おまけ: 遺物を2つ置く',
     hooks: [{ on: 'match', system: 'relic', minSize: 3, act: (_g, ctx) => ctx.replayLast() }],
     starter: (ctx) => {
@@ -332,14 +332,11 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: SPORE_BULLET_ID,
     name: '胞子弾',
-    desc: '歯車爆弾のあとに胞子が1つ残る',
-    starterDesc: 'おまけ: 歯車爆弾を1つ作る',
-    // 同上：特殊駒発動そのものへの介入のため board.ts の fireSpecial 内で直接処理する（理由は最終報告）。
+    desc: '爆発のあとに胞子が1つ残る',
+    // 第5波で再設計：胞子に基礎効果が付いたため単体で無価値ではなくなり、スターターは不要（削除）。
+    // 発動元は歯車爆弾（board.ts の fireSpecial）と爆発鉱石の爆発（board.ts の explodeAt）の両方。
+    // どちらも特殊駒発動・爆発そのものへの介入のため board.ts 側で直接処理する（理由は最終報告）。
     hooks: [],
-    starter: (ctx) => {
-      const spot = ctx.randomCell((c) => c.piece?.kind === 'normal')
-      if (spot) ctx.convertSpecial(spot, { kind: 'hitsubo' })
-    },
   },
   {
     id: MECHANICAL_GARDEN_ID,
