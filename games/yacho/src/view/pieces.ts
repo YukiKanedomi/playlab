@@ -48,6 +48,8 @@ const SPRITE_URLS: Record<string, URL> = {
   ui_back: new URL('../../assets/ui/back2.png', import.meta.url),
   ui_parchment: new URL('../../assets/ui/parchment.png', import.meta.url),
   ui_panel: new URL('../../assets/ui/clear_panel.png', import.meta.url), // クリア画面用・四辺完全な縦2:3パネル
+  // ドラフトカード（四辺完全・上部に見出し帯。帯の下端は高さの約24%＝実測107/450）
+  ui_card: new URL('../../assets/ui/draft_card.png', import.meta.url),
   // ブースター4種（モック準拠・盤内特殊駒とは別アセット）
   bst_pickaxe: new URL('../../assets/ui/bst_pickaxe.png', import.meta.url),
   bst_lantern: new URL('../../assets/ui/bst_lantern.png', import.meta.url),

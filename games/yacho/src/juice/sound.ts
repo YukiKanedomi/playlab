@@ -71,6 +71,8 @@ function thud(dur: number, opts: { gain?: number; low?: number; delay?: number }
 // ---- ゲームSE ----
 const PENTA = [0, 2, 4, 7, 9] // メジャーペンタ（連鎖の上昇に使う）
 const semitone = (base: number, n: number) => base * Math.pow(2, n / 12)
+// 特殊駒の種類別ピッチ（born()用）。歯車爆弾=低く重く、星珠=高く煌めく
+const BORN_PITCH: Record<string, number> = { harpoon: 720, hamushi: 980, hitsubo: 520, seiju: 1180 }
 
 export const sfx = {
   swap() {
@@ -88,9 +90,16 @@ export const sfx = {
   block(delay = 0) {
     thud(0.14, { gain: 0.28, low: 700, delay })
   },
-  born(delay = 0) {
-    tone(880, 0.12, { gain: 0.14, delay })
-    tone(1320, 0.16, { gain: 0.1, delay: delay + 0.06 })
+  /**
+   * 特殊駒「誕生イベント」の3拍SE（codex_consult [D]-1）。delay=閃光（70ms相当）の時刻。
+   * 閃光と同時に硬い高域アタック→35ms後に種類別の音程→180ms後（着地）に短い低域。
+   */
+  born(kind: string, delay = 0) {
+    tone(1800, 0.05, { type: 'square', gain: 0.12, delay })
+    const pitch = BORN_PITCH[kind] ?? 880
+    tone(pitch, 0.14, { gain: 0.16, delay: delay + 0.035 })
+    tone(pitch * 1.5, 0.12, { gain: 0.08, delay: delay + 0.035 })
+    thud(0.12, { gain: 0.16, low: 260, delay: delay + 0.18 })
   },
   fire(kind: string, delay = 0) {
     if (kind === 'harpoon') {

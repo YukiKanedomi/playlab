@@ -28,6 +28,7 @@ interface Tween {
   ease: Ease
   onDone?: () => void
   dead: boolean
+  channel: string
 }
 
 const tweens: Tween[] = []
@@ -36,7 +37,7 @@ export function tween(
   obj: unknown,
   to: Record<string, number>,
   dur: number,
-  opts: { delay?: number; ease?: Ease; onDone?: () => void } = {},
+  opts: { delay?: number; ease?: Ease; onDone?: () => void; channel?: string } = {},
 ): void {
   if (obj == null) return // 破棄済みPixiオブジェクトのgetterがnullを返すケース
   tweens.push({
@@ -49,6 +50,7 @@ export function tween(
     ease: opts.ease ?? easeOutCubic,
     onDone: opts.onDone,
     dead: false,
+    channel: opts.channel ?? 'board',
   })
 }
 
@@ -73,6 +75,25 @@ export function completeAll(): void {
   const list = tweens.slice()
   for (const tw of list) {
     if (tw.dead) continue
+    tw.dead = true
+    try {
+      for (const k of Object.keys(tw.to)) tw.obj[k] = tw.to[k]
+    } catch {
+      /* 破棄済みオブジェクトは無視 */
+    }
+    tw.onDone?.()
+  }
+}
+
+/**
+ * 指定チャンネルのトゥイーンだけを即時完了する（新タイムライン開始前のスナップ）。
+ * 盤面状態（駒位置・拍動等。既定チャンネル 'board'）とは別に、破棄可能な余韻FX（'fx'）を
+ * 分離するために追加。'fx' は次の入力が来ても打ち切らず自然にフェードさせたい場合に使う。
+ */
+export function completeChannel(channel: string): void {
+  const list = tweens.slice()
+  for (const tw of list) {
+    if (tw.dead || tw.channel !== channel) continue
     tw.dead = true
     try {
       for (const k of Object.keys(tw.to)) tw.obj[k] = tw.to[k]

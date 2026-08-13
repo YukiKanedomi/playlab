@@ -9,7 +9,7 @@ import { turnsUntilAction } from '../core/enemies'
 import * as EnemiesCore from '../core/enemies' // 可視化第二波②：enemyIntent は並行実装中。名前空間importで未着でもビルドを壊さない
 import { UPGRADES } from '../core/upgrades'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
-import { completeAll, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
+import { completeChannel, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
 import { sfx } from '../juice/sound'
 
 // ローグ拡張（ROGUE.md §5）：ダメージ数字は既存UI（main.ts）と合わせ明朝体
@@ -35,23 +35,70 @@ const ENEMY_INFO: Partial<Record<EnemyKind, { name: string; desc: string }>> = {
 type EnemyIntent = { kind: 'attack' | 'disrupt'; damage?: number; turns: number }
 const enemyIntentFn = (EnemiesCore as unknown as { enemyIntent?: (e: EnemyInstance) => EnemyIntent }).enemyIntent
 
+// 可視化第二波：特殊駒「誕生イベント」の系統色＋回転量（codex_consult [D]-1）。星珠は虹色のためcolorは代表色のみ
+const SPECIAL_BORN_STYLE: Record<string, { color: number; rotDeg: number }> = {
+  harpoon: { color: 0xfff1c4, rotDeg: 10 },
+  hamushi: { color: 0x9fd9ff, rotDeg: 15 },
+  hitsubo: { color: 0xffc978, rotDeg: 8 },
+  seiju: { color: 0xd7b5ec, rotDeg: 12 },
+  default: { color: 0xf4ead0, rotDeg: 10 },
+}
+
 // juice 実測値テーブル（ms）
 export const T = {
   swap: 130,
   pop: 200, // 消滅ポップ 170-230
   blockHit: 300, // 箱破壊 270-330
   fall: 380, // 落下 330-430
-  chainBeat: 650, // 連鎖ビート 600-800
+  chainBeat: 650, // 連鎖ビート 600-800（互換保持。実際の連鎖テンポは chainBeatFor() の加速カーブを使う）
   specialBorn: 240,
 } as const
+
+/** 演出パス「Reaction Director」：連鎖段ごとの開始間隔（codex_consult [D]-3）。10連鎖以降は220msで下げ止め */
+function chainBeatFor(chain: number): number {
+  if (chain <= 1) return 520
+  if (chain === 2) return 470
+  if (chain === 3) return 410
+  if (chain === 4) return 350
+  if (chain < 10) return 300
+  return 220
+}
+
+/** 600ms窓で最大80msに制限するヒットストップの累積予算（play()呼び出しごとにリセット） */
+class HitstopBudget {
+  private log: { t: number; ms: number }[] = []
+  /** 現在時刻tにdesiredMsぶんのヒットストップを申請し、実際に許可された量を返す */
+  request(t: number, desiredMs: number): number {
+    while (this.log.length && t - this.log[0].t > 600) this.log.shift()
+    const used = this.log.reduce((a, h) => a + h.ms, 0)
+    const applied = Math.max(0, Math.min(desiredMs, 80 - used))
+    if (applied > 0) this.log.push({ t, ms: applied })
+    return applied
+  }
+}
+
+/** 演出用の決定的乱数（QA比較の安定のため Math.random() を使わない。1手ごとに新しいseedを切る） */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0 || 1
+  return () => {
+    a |= 0
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
 
 export class BoardView {
   root = new Container()
   cellLayer = new Container()
   groundLayer = new Container()
   blockLayer = new Container()
+  underFxLayer = new Container() // 影・予兆・亀裂（駒の下）
   pieceLayer = new Container()
-  fxLayer = new Container()
+  overFxLayer = new Container() // 閃光・破片・衝撃波（駒の上）
+  uiFxLayer = new Container() // 連鎖数・強化名・ダメージ数字・ツールチップ・インテントバッジ（最前面）
+  fxLayer: Container // 既存呼び出しの後方互換エイリアス（= overFxLayer）
   S: number
   sprites = new Map<string, Sprite>() // "x,y" -> 駒スプライト
   blockG = new Map<string, Container>()
@@ -71,12 +118,28 @@ export class BoardView {
   private enemyCellsCache = new Map<number, XY[]>() // 直近の敵セル座標（enemy-damage等、座標を持たないイベント用）
 
   // ---- 可視化第一波：敵インテント・爆発鉱石の常時発光の帳簿 ----
-  private intentG = new Map<number, Container>() // enemyId -> インテントバッジ（fxLayer・セル内右上）
+  private intentG = new Map<number, Container>() // enemyId -> インテントバッジ（uiFxLayer・セル内右上）
   private volatileG = new Map<string, Graphics>() // "x,y" -> 爆発鉱石の常時ゆらぎオーバーレイ
   private tooltipG: Container | null = null // 敵タップの説明ツールチップ（同時に1個のみ）
+  private tooltipTarget: string | null = null // 現在開いているツールチップの対象キー（再タップ判定用）
+
+  // ---- 可視化第二波：連鎖数の常駐表示（同じコンテナを更新して鼓動させる。毎回新規Textを重ねない） ----
+  private chainCounterG: Container | null = null
+  private chainCounterText: Text | null = null
+  private chainCounterGlow: Graphics | null = null
+
+  // ---- 可視化第二波：Graphicsパーティクルのプール（同時粒子上限を超えたら最古の通常粒子から回収） ----
+  private fxPool: Graphics[] = []
+  private liveFx: { g: Graphics; priority: 'normal' | 'important' }[] = []
+  private rampageActive = false // 10連鎖以降など負荷の高い局面。粒子上限を通常80→暴走時120へ
+
+  // ---- 可視化第二波：演出専用の決定的乱数（1手ごとに再シードしQA比較を安定させる） ----
+  private fxSeed = 1
+  private fxRand: () => number = Math.random
 
   /** 所持強化バーへの発動アピール通知（main.ts が購読してアイコンをバウンスさせる。可視化第一波②） */
-  onUpgradeFire?: (id: string) => void
+  /** 強化の発動をHUDへ通知（at＝起点セル。main.ts が強化バーから盤面へ因果パルスを飛ばす） */
+  onUpgradeFire?: (id: string, at?: XY) => void
   /** 敵の攻撃通知（main.ts が購読して探窟隊HUDへの軌跡＋被弾演出を鳴らす。可視化第二波②） */
   onEnemyAttack?: (enemyId: number, damage: number) => void
 
@@ -86,9 +149,50 @@ export class BoardView {
     size: number,
   ) {
     this.S = Math.floor(size / W)
-    this.root.addChild(this.cellLayer, this.groundLayer, this.blockLayer, this.pieceLayer, this.fxLayer)
+    this.fxLayer = this.overFxLayer
+    this.root.addChild(
+      this.cellLayer,
+      this.groundLayer,
+      this.blockLayer,
+      this.underFxLayer,
+      this.pieceLayer,
+      this.overFxLayer,
+      this.uiFxLayer,
+    )
     this.drawStatic()
     this.syncAll()
+  }
+
+  /** 演出用乱数（0〜1）。play()冒頭で1手ごとに再シードする。Math.random() の代替 */
+  private rnd(): number {
+    return this.fxRand()
+  }
+
+  /** プール済みGraphicsを1つ確保して指定レイヤーへ追加。上限超過時は最古の 'normal' 粒子を回収する */
+  private acquireG(layer: Container, priority: 'normal' | 'important' = 'normal'): Graphics {
+    const cap = this.rampageActive ? 120 : 80
+    if (this.liveFx.length >= cap) {
+      const idx = this.liveFx.findIndex((f) => f.priority === 'normal')
+      if (idx >= 0) this.releaseG(this.liveFx[idx].g)
+    }
+    const g = this.fxPool.pop() ?? new Graphics()
+    g.clear()
+    g.alpha = 1
+    g.rotation = 0
+    g.scale.set(1)
+    layer.addChild(g)
+    this.liveFx.push({ g, priority })
+    return g
+  }
+
+  /** プールへ返却（destroyはしない。次のacquireGで再利用） */
+  private releaseG(g: Graphics): void {
+    if (g.destroyed) return
+    const idx = this.liveFx.findIndex((f) => f.g === g)
+    if (idx >= 0) this.liveFx.splice(idx, 1)
+    g.clear()
+    if (g.parent) g.parent.removeChild(g)
+    this.fxPool.push(g)
   }
 
   key(x: number, y: number) {
@@ -167,10 +271,15 @@ export class BoardView {
     this.enemyCellsCache.clear()
     for (const g of this.volatileG.values()) if (!g.destroyed) g.destroy()
     this.volatileG.clear()
+    if (this.chainCounterG && !this.chainCounterG.destroyed) this.chainCounterG.destroy()
+    this.chainCounterG = null
+    this.chainCounterText = null
+    this.chainCounterGlow = null
     for (const g of this.intentG.values()) if (!g.destroyed) g.destroy()
     this.intentG.clear()
     if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
     this.tooltipG = null
+    this.tooltipTarget = null
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const c = this.board.at(x, y)
@@ -567,7 +676,7 @@ export class BoardView {
       })
       txt.anchor.set(0.5)
       txt.position.set(this.px(p.x), this.px(p.y) - this.S * 0.1)
-      this.fxLayer.addChild(txt)
+      this.uiFxLayer.addChild(txt)
       tween(txt.position, { y: txt.position.y - this.S * 0.6 }, 500, { ease: easeOutCubic })
       tween(txt, { alpha: 0 }, 380, {
         delay: 120,
@@ -594,9 +703,13 @@ export class BoardView {
     this.damageNumberFx({ x: cx, y: cy }, amount, t)
   }
 
-  /** enemy-defeated：潰れて消えるポップ＋粒（ボスは行コンテナ＋顔も片付ける） */
-  private enemyDefeatedFx(id: number, cells: XY[], t: number) {
+  /**
+   * enemy-defeated：潰れて消えるポップ＋粒（ボスは行コンテナ＋顔も片付ける）。
+   * swarm連鎖のときは撃破地点から隣接個体への衝撃パルス＋予備膨張の「ドミノ」演出を追加する（codex_consult [D]-4）。
+   */
+  private enemyDefeatedFx(id: number, cells: XY[], t: number, swarm?: { pos: number; total: number; nextCells?: XY[] }) {
     const meta = this.enemyMeta.get(id)
+    const isSwarmChain = !!swarm && meta?.kind === 'swarm' && swarm.total > 1
     if (meta?.kind === 'boss') {
       const rows = new Set(cells.map((c) => c.y))
       for (const row of rows) {
@@ -634,34 +747,251 @@ export class BoardView {
         if (g) {
           this.blockG.delete(k)
           if (!g.destroyed) {
-            tween(g.scale, { x: 1.2, y: 1.2 }, 90, { delay: t })
-            tween(g.scale, { x: 0, y: 0 }, 160, {
-              delay: t + 90,
-              ease: easeInCubic,
-              onDone: () => {
-                if (!g.destroyed) g.destroy()
-              },
-            })
+            if (isSwarmChain && swarm!.pos > 1) {
+              // 隣からの衝撃パルスを受けた個体：潰れる前に1.15倍へ予備膨張してから通常のポップへ合流
+              tween(g.scale, { x: 1.15, y: 1.15 }, 40, { delay: t })
+              tween(g.scale, { x: 1.2, y: 1.2 }, 50, { delay: t + 40 })
+              tween(g.scale, { x: 0, y: 0 }, 160, {
+                delay: t + 90,
+                ease: easeInCubic,
+                onDone: () => {
+                  if (!g.destroyed) g.destroy()
+                },
+              })
+            } else {
+              tween(g.scale, { x: 1.2, y: 1.2 }, 90, { delay: t })
+              tween(g.scale, { x: 0, y: 0 }, 160, {
+                delay: t + 90,
+                ease: easeInCubic,
+                onDone: () => {
+                  if (!g.destroyed) g.destroy()
+                },
+              })
+            }
           }
         }
       }
     }
-    for (const p of cells) this.debrisFx(p, t, 0xd9c9a8)
+    if (isSwarmChain) {
+      const pos = swarm!.pos
+      const sparkN = pos === 1 ? 6 : pos <= 4 ? 8 : 12
+      for (const p of cells) this.swarmSparkFx(p, t, sparkN, pos >= 5)
+      if (swarm!.nextCells && swarm!.nextCells.length) this.dominoPulseFx(cells, swarm!.nextCells, t)
+      if (pos === swarm!.total) this.shakeRootDecay(t, 4, 140) // 最後の1体：4px揺れ（ヒットストップは呼び出し側=play()が申請）
+    } else {
+      for (const p of cells) this.debrisFx(p, t, 0xd9c9a8)
+    }
     this.enemyMeta.delete(id)
     this.enemyCellsCache.delete(id)
   }
 
-  /** 爆発鉱石：橙のフラッシュ円＋破片粒（既存 debrisFx を流用） */
-  private explodeFx(p: XY, t: number) {
+  /** swarmドミノの火花。1体目6・2〜4体目8・5体以上12＋金の紙片を混ぜる（codex_consult [D]-4） */
+  private swarmSparkFx(p: XY, t: number, count: number, gold: boolean) {
     delay(t, () => {
-      const ring = new Graphics()
-      ring.circle(0, 0, this.S * 0.3).fill({ color: 0xff8a3d, alpha: 0.85 })
-      ring.position.set(this.px(p.x), this.px(p.y))
-      this.fxLayer.addChild(ring)
-      tween(ring.scale, { x: 2.6, y: 2.6 }, 260, { ease: easeOutCubic })
-      tween(ring, { alpha: 0 }, 260, { onDone: () => ring.destroy() })
+      for (let i = 0; i < count; i++) {
+        const g = this.acquireG(this.overFxLayer)
+        const useGold = gold && i % 3 === 0
+        if (useGold) g.roundRect(-2.6, -1.6, 5.2, 3.2, 1).fill(0xf2c14e)
+        else g.circle(0, 0, 2.2).fill(0xf4ead0)
+        g.position.set(this.px(p.x), this.px(p.y))
+        const a = this.rnd() * Math.PI * 2
+        const d = this.S * (0.35 + this.rnd() * 0.55)
+        const dur = 260 + this.rnd() * 120
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, dur, { ease: easeOutCubic, channel: 'fx' })
+        tween(g, { alpha: 0, rotation: useGold ? (this.rnd() - 0.5) * 6 : 0 }, dur, { channel: 'fx', onDone: () => this.releaseG(g) })
+      }
     })
-    this.debrisFx(p, t, 0xff8a3d)
+  }
+
+  /** swarmドミノ：撃破地点から次に倒れる隣接個体へ渡る衝撃パルス（60-90ms） */
+  private dominoPulseFx(fromCells: XY[], toCells: XY[], t: number) {
+    const fx = Math.round(fromCells.reduce((a, p) => a + p.x, 0) / fromCells.length)
+    const fy = Math.round(fromCells.reduce((a, p) => a + p.y, 0) / fromCells.length)
+    const tx = Math.round(toCells.reduce((a, p) => a + p.x, 0) / toCells.length)
+    const ty = Math.round(toCells.reduce((a, p) => a + p.y, 0) / toCells.length)
+    delay(t, () => {
+      const g = this.acquireG(this.overFxLayer, 'important')
+      g.circle(0, 0, this.S * 0.14).fill({ color: 0xe8b33c, alpha: 0.9 })
+      g.position.set(this.px(fx), this.px(fy))
+      const dur = 75
+      tween(g.position, { x: this.px(tx), y: this.px(ty) }, dur, { ease: easeOutCubic, channel: 'fx' })
+      tween(g.scale, { x: 1.6, y: 1.6 }, dur, { channel: 'fx' })
+      tween(g, { alpha: 0 }, dur, {
+        delay: 10,
+        channel: 'fx',
+        onDone: () => this.releaseG(g),
+      })
+    })
+  }
+
+  /**
+   * swarm連鎖のドミノ段階を事前分類する（play()冒頭で一度だけ計算）。
+   * defeatEnemy→propagateSwarmDefeat の再帰で enemy-damage/enemy-defeated が連続して積まれる構造を利用し、
+   * 'enemy-defeated' の evsインデックス→{何体目/全体数/次に倒れる個体のcells} を求める（codex_consult [D]-4）。
+   */
+  private classifySwarmChain(evs: BoardEvent[]): Map<number, { pos: number; total: number; nextCells?: XY[] }> {
+    const info = new Map<number, { pos: number; total: number; nextCells?: XY[] }>()
+    const isSwarmStep = (ev: BoardEvent): ev is Extract<BoardEvent, { t: 'enemy-damage' } | { t: 'enemy-defeated' }> =>
+      (ev.t === 'enemy-damage' || ev.t === 'enemy-defeated') && this.enemyMeta.get(ev.id)?.kind === 'swarm'
+    let i = 0
+    while (i < evs.length) {
+      if (!isSwarmStep(evs[i])) {
+        i++
+        continue
+      }
+      const runIdx: number[] = []
+      let j = i
+      while (j < evs.length && isSwarmStep(evs[j])) {
+        if (evs[j].t === 'enemy-defeated') runIdx.push(j)
+        j++
+      }
+      const total = runIdx.length
+      runIdx.forEach((idx, k) => {
+        const nextIdx = runIdx[k + 1]
+        const nextCells = nextIdx !== undefined ? (evs[nextIdx] as Extract<BoardEvent, { t: 'enemy-defeated' }>).cells : undefined
+        info.set(idx, { pos: k + 1, total, nextCells })
+      })
+      i = j
+    }
+    return info
+  }
+
+  /** 爆発鉱石：3層爆発（下層=予兆円／中層=白橙コア+衝撃波2本／上層=火花・重量片・煙）。codex_consult [D]-2 */
+  private explodeFx(p: XY, t: number, big: boolean) {
+    this.layeredExplosionFx(p, t, {
+      big,
+      sparkColor: 0xffb066,
+      coreColor: 0xff8a3d,
+      ringColor: 0xff8a3d,
+      chunkColor: 0xd9773b,
+      sparkCount: big ? 24 : 18,
+      chunkCount: big ? 12 : 8,
+      smokeCount: big ? 6 : 4,
+      ringMaxScale: big ? 3.4 : 2.6,
+    })
+  }
+
+  /**
+   * 3層爆発の共通実装。爆発鉱石・歯車爆弾で規模と色だけを変えて呼び出す（codex_consult [D]-2）。
+   * 下層＝予兆円60ms収縮（駒の下）／中層＝白コア24ms＋色コア90ms＋衝撃波リング2本(180-260ms)／
+   * 上層＝火花(160-240ms)・重量片(420-600ms)・煙(380ms〜)。全粒子で寿命と速度を変える。
+   */
+  private layeredExplosionFx(
+    p: XY,
+    t: number,
+    opts: {
+      big: boolean
+      sparkColor: number
+      coreColor: number
+      ringColor: number
+      chunkColor: number
+      sparkCount: number
+      chunkCount: number
+      smokeCount: number
+      ringMaxScale: number
+    },
+  ) {
+    const S = this.S
+    // 下層：予兆円（駒の下で60ms収縮）
+    delay(t, () => {
+      const pre = new Graphics()
+      pre.circle(0, 0, S * 0.46).fill({ color: 0x2a1408, alpha: 0.55 })
+      pre.position.set(this.px(p.x), this.px(p.y))
+      this.underFxLayer.addChild(pre)
+      tween(pre.scale, { x: 0.1, y: 0.1 }, 60, { ease: easeInCubic, channel: 'fx' })
+      tween(pre, { alpha: 0 }, 60, {
+        channel: 'fx',
+        onDone: () => {
+          if (!pre.destroyed) pre.destroy()
+        },
+      })
+    })
+    // 中層：白コア24ms
+    delay(t, () => {
+      const core = this.acquireG(this.overFxLayer, 'important')
+      core.circle(0, 0, S * 0.24).fill({ color: 0xffffff, alpha: 0.95 })
+      core.position.set(this.px(p.x), this.px(p.y))
+      tween(core, { alpha: 0 }, 24, { channel: 'fx', onDone: () => this.releaseG(core) })
+    })
+    // 中層：色コア90ms
+    delay(t + 8, () => {
+      const oc = this.acquireG(this.overFxLayer, 'important')
+      oc.circle(0, 0, S * 0.3).fill({ color: opts.coreColor, alpha: 0.9 })
+      oc.position.set(this.px(p.x), this.px(p.y))
+      tween(oc.scale, { x: 1.6, y: 1.6 }, 90, { ease: easeOutCubic, channel: 'fx' })
+      tween(oc, { alpha: 0 }, 90, { channel: 'fx', onDone: () => this.releaseG(oc) })
+    })
+    // 中層：衝撃波リング（太い主波＋薄い副波の2本、180-260ms）
+    delay(t, () => {
+      const ringMain = this.acquireG(this.overFxLayer, 'important')
+      ringMain.circle(0, 0, S * 0.32).stroke({ width: S * 0.14, color: opts.ringColor, alpha: 0.92 })
+      ringMain.position.set(this.px(p.x), this.px(p.y))
+      tween(ringMain.scale, { x: opts.ringMaxScale, y: opts.ringMaxScale }, 220, { ease: easeOutCubic, channel: 'fx' })
+      tween(ringMain, { alpha: 0 }, 220, { channel: 'fx', onDone: () => this.releaseG(ringMain) })
+      const ringSub = this.acquireG(this.overFxLayer)
+      ringSub.circle(0, 0, S * 0.28).stroke({ width: S * 0.05, color: 0xffe3b0, alpha: 0.55 })
+      ringSub.position.set(this.px(p.x), this.px(p.y))
+      tween(ringSub.scale, { x: opts.ringMaxScale * 1.25, y: opts.ringMaxScale * 1.25 }, 260, { ease: easeOutCubic, channel: 'fx' })
+      tween(ringSub, { alpha: 0 }, 260, { channel: 'fx', onDone: () => this.releaseG(ringSub) })
+    })
+    // 上層：火花（160-240ms）
+    delay(t + 10, () => {
+      for (let i = 0; i < opts.sparkCount; i++) {
+        const g = this.acquireG(this.overFxLayer)
+        g.circle(0, 0, 2.2 + this.rnd() * 1.6).fill(opts.sparkColor)
+        g.position.set(this.px(p.x), this.px(p.y))
+        const a = this.rnd() * Math.PI * 2
+        const d = S * (0.5 + this.rnd() * (opts.big ? 0.9 : 0.6))
+        const dur = 160 + this.rnd() * 80
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, dur, { ease: easeOutCubic, channel: 'fx' })
+        tween(g, { alpha: 0 }, dur, { channel: 'fx', onDone: () => this.releaseG(g) })
+      }
+    })
+    // 上層：重量片（420-600ms、重力落ち）
+    delay(t + 20, () => {
+      for (let i = 0; i < opts.chunkCount; i++) {
+        const g = this.acquireG(this.overFxLayer)
+        g.roundRect(-3.2, -3.2, 6.4, 6.4, 1.4).fill(opts.chunkColor)
+        g.position.set(this.px(p.x), this.px(p.y))
+        const a = this.rnd() * Math.PI * 2
+        const d = S * (0.5 + this.rnd() * (opts.big ? 1.1 : 0.8))
+        const dur = 420 + this.rnd() * 180
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d + S * 0.5 }, dur, {
+          ease: easeOutCubic,
+          channel: 'fx',
+        })
+        tween(g, { alpha: 0, rotation: (this.rnd() - 0.5) * 5 }, dur, { channel: 'fx', onDone: () => this.releaseG(g) })
+      }
+    })
+    // 上層：煙（下層に薄く漂わせる）
+    delay(t + 40, () => {
+      for (let i = 0; i < opts.smokeCount; i++) {
+        const g = this.acquireG(this.underFxLayer)
+        g.circle(0, 0, S * (0.16 + this.rnd() * 0.08)).fill({ color: 0x4a3a2a, alpha: 0.32 })
+        g.position.set(this.px(p.x) + (this.rnd() - 0.5) * S * 0.3, this.px(p.y) + (this.rnd() - 0.5) * S * 0.3)
+        const dur = 380 + this.rnd() * 200
+        tween(g.position, { y: g.position.y - S * (0.3 + this.rnd() * 0.3) }, dur, { ease: easeOutCubic, channel: 'fx' })
+        tween(g.scale, { x: 1.6, y: 1.6 }, dur, { channel: 'fx' })
+        tween(g, { alpha: 0 }, dur, { channel: 'fx', onDone: () => this.releaseG(g) })
+      }
+    })
+  }
+
+  /**
+   * 爆発／コンボ／swarmドミノ最後の一撃で使う root の減衰揺れ。初撃最大→0.6→0.3、x:y=1:0.35（codex_consult [D]-2/4）。
+   * 画面全体ではなく root のみを揺らし、HUDの可読性を守る。
+   */
+  private shakeRootDecay(t: number, amp: number, totalDur: number) {
+    const c = this.root
+    const bx = c.position.x
+    const by = c.position.y
+    const steps = [1, -0.6, 0.6, -0.3, 0]
+    const stepDur = totalDur / (steps.length - 1)
+    let d = t
+    for (const k of steps) {
+      tween(c.position, { x: bx + amp * k, y: by + amp * 0.35 * k }, stepDur, { delay: d, channel: 'fx' })
+      d += stepDur
+    }
   }
 
   /** ギア起動：金の回転リング一瞬 */
@@ -677,18 +1007,95 @@ export class BoardView {
     })
   }
 
+  /** 誕生イベント 0-70ms：周囲4-8駒を中心へ2-3px吸引＋局所減光（codex_consult [D]-1） */
+  private birthPullFx(at: XY, t: number) {
+    delay(t, () => {
+      const S = this.S
+      const dim = new Graphics()
+      dim.circle(0, 0, S * 0.62).fill({ color: 0x000000, alpha: 0.2 })
+      dim.position.set(this.px(at.x), this.px(at.y))
+      dim.alpha = 0
+      this.underFxLayer.addChild(dim)
+      tween(dim, { alpha: 1 }, 30, { channel: 'fx' })
+      tween(dim, { alpha: 0 }, 40, {
+        delay: 30,
+        channel: 'fx',
+        onDone: () => {
+          if (!dim.destroyed) dim.destroy()
+        },
+      })
+      const neighbors: XY[] = [
+        { x: at.x - 1, y: at.y },
+        { x: at.x + 1, y: at.y },
+        { x: at.x, y: at.y - 1 },
+        { x: at.x, y: at.y + 1 },
+        { x: at.x - 1, y: at.y - 1 },
+        { x: at.x + 1, y: at.y - 1 },
+        { x: at.x - 1, y: at.y + 1 },
+        { x: at.x + 1, y: at.y + 1 },
+      ]
+      for (const n of neighbors) {
+        const sp = this.sprites.get(this.key(n.x, n.y))
+        if (!sp || sp.destroyed) continue
+        const bx = sp.position.x
+        const by = sp.position.y
+        const ang = Math.atan2(this.px(at.y) - by, this.px(at.x) - bx)
+        const pull = S * (0.02 + this.rnd() * 0.015) // 2-3px相当（セル比率換算）
+        tween(sp.position, { x: bx + Math.cos(ang) * pull, y: by + Math.sin(ang) * pull }, 70, { ease: easeOutCubic, channel: 'fx' })
+        tween(sp.position, { x: bx, y: by }, 90, { delay: 70, channel: 'fx' })
+      }
+    })
+  }
+
+  /** 誕生イベント 105-250ms：星片8-12＋放射線6-8（系統色。通常消去の火花とは専用色/形にする） */
+  private birthBurstFx(at: XY, t: number, color: number) {
+    const S = this.S
+    delay(t, () => {
+      const starN = 8 + Math.floor(this.rnd() * 5) // 8-12
+      for (let i = 0; i < starN; i++) {
+        const g = this.acquireG(this.overFxLayer)
+        const r = 3.2
+        g.moveTo(0, -r)
+          .lineTo(r * 0.32, -r * 0.32)
+          .lineTo(r, 0)
+          .lineTo(r * 0.32, r * 0.32)
+          .lineTo(0, r)
+          .lineTo(-r * 0.32, r * 0.32)
+          .lineTo(-r, 0)
+          .lineTo(-r * 0.32, -r * 0.32)
+          .closePath()
+          .fill(color)
+        g.position.set(this.px(at.x), this.px(at.y))
+        const a = (i / starN) * Math.PI * 2 + this.rnd() * 0.4
+        const d = S * (0.45 + this.rnd() * 0.5)
+        const dur = 260 + this.rnd() * 140
+        tween(g.position, { x: this.px(at.x) + Math.cos(a) * d, y: this.px(at.y) + Math.sin(a) * d }, dur, { ease: easeOutCubic, channel: 'fx' })
+        tween(g, { alpha: 0, rotation: (this.rnd() - 0.5) * 4 }, dur, { channel: 'fx', onDone: () => this.releaseG(g) })
+      }
+      const rayN = 6 + Math.floor(this.rnd() * 3) // 6-8
+      for (let i = 0; i < rayN; i++) {
+        const ray = this.acquireG(this.overFxLayer)
+        ray.roundRect(0, -S * 0.03, S * 0.5, S * 0.06, S * 0.03).fill({ color, alpha: 0.85 })
+        ray.position.set(this.px(at.x), this.px(at.y))
+        ray.rotation = (i / rayN) * Math.PI * 2
+        ray.scale.set(0.15, 1)
+        tween(ray.scale, { x: 1 }, 180, { ease: easeOutCubic, channel: 'fx' })
+        tween(ray, { alpha: 0 }, 220, { delay: 80, channel: 'fx', onDone: () => this.releaseG(ray) })
+      }
+    })
+  }
+
   /** 毒胞子発動：紫の小バースト */
   private violetBurstFx(p: XY, t: number) {
     delay(t, () => {
       for (let i = 0; i < 6; i++) {
-        const g = new Graphics()
+        const g = this.acquireG(this.overFxLayer)
         g.circle(0, 0, 2.6).fill(0xb98be0)
         g.position.set(this.px(p.x), this.px(p.y))
-        this.fxLayer.addChild(g)
-        const a = Math.random() * Math.PI * 2
-        const d = this.S * (0.35 + Math.random() * 0.45)
-        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 300, { ease: easeOutCubic })
-        tween(g, { alpha: 0 }, 300, { onDone: () => g.destroy() })
+        const a = this.rnd() * Math.PI * 2
+        const d = this.S * (0.35 + this.rnd() * 0.45)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 300, { ease: easeOutCubic, channel: 'fx' })
+        tween(g, { alpha: 0 }, 300, { channel: 'fx', onDone: () => this.releaseG(g) })
       }
     })
   }
@@ -698,14 +1105,13 @@ export class BoardView {
     delay(t, () => {
       const color = kind === 'plant' ? 0x8fb05a : 0x6fb6e8
       for (let i = 0; i < 5; i++) {
-        const g = new Graphics()
+        const g = this.acquireG(this.overFxLayer)
         g.circle(0, 0, 2.6).fill(color)
         g.position.set(this.px(p.x), this.px(p.y))
-        this.fxLayer.addChild(g)
-        const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6
-        const d = this.S * (0.3 + Math.random() * 0.4)
-        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 380, { ease: easeOutCubic })
-        tween(g, { alpha: 0 }, 380, { onDone: () => g.destroy() })
+        const a = -Math.PI / 2 + (this.rnd() - 0.5) * 1.6
+        const d = this.S * (0.3 + this.rnd() * 0.4)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 380, { ease: easeOutCubic, channel: 'fx' })
+        tween(g, { alpha: 0 }, 380, { channel: 'fx', onDone: () => this.releaseG(g) })
       }
     })
   }
@@ -810,7 +1216,7 @@ export class BoardView {
     const isNew = !host || host.destroyed
     if (isNew) {
       host = new Container()
-      this.fxLayer.addChild(host)
+      this.uiFxLayer.addChild(host)
       this.intentG.set(en.id, host)
     }
     const h = host!
@@ -890,12 +1296,36 @@ export class BoardView {
     })
   }
 
-  /** 敵ブロック/ボスの顔タップ：名前+行動の説明を羊皮紙の小片で2.5秒表示 */
-  private showEnemyTooltip(kind: EnemyKind, cellX: number, cellY: number) {
+  /** ツールチップを閉じる（背景タップ・×・同一対象の再タップ・他対象タップの共通経路） */
+  private closeTooltip(): void {
     if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
+    this.tooltipG = null
+    this.tooltipTarget = null
+  }
+
+  /**
+   * 敵ブロック/ボスの顔タップ：名前+行動の説明を羊皮紙の小片で表示する固定ボトムシート方式（codex_consult [D]-6）。
+   * オーナー指摘：時間で消えるのは不便 → 時間切れタイムアウトを廃止し、背景タップ／×／同一対象の再タップでのみ閉じる。単一インスタンス。
+   */
+  private showEnemyTooltip(kind: EnemyKind, cellX: number, cellY: number) {
+    const targetKey = `${kind}:${cellX},${cellY}`
+    if (this.tooltipTarget === targetKey) {
+      this.closeTooltip() // 同じ対象の再タップ→即時閉じる
+      return
+    }
+    this.closeTooltip()
+    this.tooltipTarget = targetKey
     const info = ENEMY_INFO[kind] ?? { name: kind, desc: '' } // core未着の新種でも汎用表示にフォールバック
     const S = this.S
     const w = Math.min(W * S * 0.86, S * 6.4) // 盤幅基準（Sは盤セル寸法でありビュー全体の比率には小さすぎるため）
+    const root = new Container()
+    // 盤外タップで閉じる透明スクリム（盤全面を覆う。ボックスより下に描く）
+    const scrim = new Graphics()
+    scrim.rect(0, 0, W * S, H * S).fill({ color: 0x000000, alpha: 0.001 })
+    scrim.eventMode = 'static'
+    scrim.cursor = 'pointer'
+    scrim.on('pointertap', () => this.closeTooltip())
+    root.addChild(scrim)
     const name = new Text({ text: info.name, style: { fill: 0x4a3a24, fontSize: S * 0.32, fontFamily: FONT, fontWeight: 'bold' } })
     const desc = new Text({
       text: info.desc,
@@ -908,6 +1338,7 @@ export class BoardView {
     bg.roundRect(-w / 2, -h / 2, w, h, h * 0.16)
       .fill({ color: 0xe8d9b0, alpha: 0.96 })
       .stroke({ width: 1.6, color: 0x8a6f45 })
+    bg.eventMode = 'static' // パネル自体へのタップは背景スクリムへ抜けさせない（誤閉じ防止）
     box.addChild(bg)
     name.anchor.set(0.5, 0)
     name.position.set(0, -h / 2 + padY)
@@ -915,22 +1346,29 @@ export class BoardView {
     desc.anchor.set(0.5, 0)
     desc.position.set(0, -h / 2 + padY * 2 + name.height)
     box.addChild(desc)
+    // 右上の× 閉じるボタン
+    const closeR = S * 0.15
+    const closeBtn = new Container()
+    closeBtn.position.set(w / 2 - closeR - S * 0.06, -h / 2 + closeR + S * 0.06)
+    const closeBg = new Graphics()
+    closeBg.circle(0, 0, closeR).fill({ color: 0x4a3a24, alpha: 0.14 })
+    closeBtn.addChild(closeBg)
+    const closeX = new Text({ text: '×', style: { fill: 0x4a3a24, fontSize: closeR * 1.6, fontFamily: FONT, fontWeight: 'bold' } })
+    closeX.anchor.set(0.5)
+    closeBtn.addChild(closeX)
+    closeBtn.eventMode = 'static'
+    closeBtn.cursor = 'pointer'
+    closeBtn.hitArea = { contains: (lx: number, ly: number) => lx * lx + ly * ly <= closeR * closeR * 2.2 }
+    closeBtn.on('pointertap', () => this.closeTooltip())
+    box.addChild(closeBtn)
     const px = Math.max(w / 2 + 2, Math.min(W * S - w / 2 - 2, this.px(cellX)))
     const py = Math.max(h / 2 + 2, this.px(cellY) - S * 0.78)
     box.position.set(px, py)
-    box.alpha = 0
-    this.fxLayer.addChild(box)
-    this.tooltipG = box
-    tween(box, { alpha: 1 }, 140)
-    const ep = this.epoch
-    delay(2500, () => {
-      if (ep !== this.epoch || box.destroyed) return
-      tween(box, { alpha: 0 }, 220, {
-        onDone: () => {
-          if (!box.destroyed) box.destroy()
-        },
-      })
-    })
+    root.addChild(box)
+    root.alpha = 0
+    this.uiFxLayer.addChild(root)
+    this.tooltipG = root
+    tween(root, { alpha: 1 }, 140)
   }
 
   // ---- 可視化第一波③：爆発鉱石の常時発光 ----
@@ -985,7 +1423,7 @@ export class BoardView {
       })
       txt.anchor.set(0.5)
       txt.position.set(this.px(p.x), this.px(p.y) + this.S * yOffset)
-      this.fxLayer.addChild(txt)
+      this.uiFxLayer.addChild(txt)
       tween(txt.position, { y: txt.position.y - this.S * 0.5 }, 520, { ease: easeOutCubic })
       tween(txt, { alpha: 0 }, 360, {
         delay: 200,
@@ -1063,18 +1501,81 @@ export class BoardView {
     this.groundG.set(this.key(x, y), g)
   }
 
+  // ---- 可視化第二波：連鎖数の常駐表示（codex_consult [D]-3。同じコンテナを更新して鼓動させる） ----
+
+  /** 連鎖数表示コンテナを確保（初回のみ生成。以後は使い回す） */
+  private ensureChainCounter(): { host: Container; text: Text; glow: Graphics } {
+    if (this.chainCounterG && !this.chainCounterG.destroyed && this.chainCounterText && this.chainCounterGlow) {
+      return { host: this.chainCounterG, text: this.chainCounterText, glow: this.chainCounterGlow }
+    }
+    const host = new Container()
+    host.position.set((W * this.S) / 2, this.S * 0.56)
+    const glow = new Graphics()
+    host.addChild(glow)
+    const text = new Text({
+      text: '',
+      style: { fill: 0xfff1d0, fontSize: this.S * 0.46, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 5 } },
+    })
+    text.anchor.set(0.5)
+    host.addChild(text)
+    host.alpha = 0
+    this.uiFxLayer.addChild(host)
+    this.chainCounterG = host
+    this.chainCounterText = text
+    this.chainCounterGlow = glow
+    return { host, text, glow }
+  }
+
+  /** 連鎖数表示を更新して鼓動させる。5連鎖から金縁、8連鎖から常時微発光（新規Textは重ねない） */
+  private updateChainCounter(chain: number, t: number) {
+    if (chain < 2) return
+    const { host, text, glow } = this.ensureChainCounter()
+    const ep = this.epoch
+    delay(t, () => {
+      if (ep !== this.epoch || host.destroyed) return
+      text.text = `${chain} 連鎖`
+      text.style.stroke = { color: chain >= 5 ? 0xe8b33c : 0x2a1c10, width: 5 }
+      glow.clear()
+      if (chain >= 8) glow.circle(0, 0, this.S * 0.9).fill({ color: 0xf2c14e, alpha: 0.22 })
+      host.alpha = 1
+      host.scale.set(1.14)
+      tween(host.scale, { x: 1, y: 1 }, 160, { ease: easeOutBack, channel: 'fx' })
+    })
+  }
+
+  /** 連鎖数表示をフェードアウト（このplay()呼び出しの終端で。次の一手までに消す） */
+  private fadeChainCounter(t: number) {
+    const host = this.chainCounterG
+    if (!host) return
+    const ep = this.epoch
+    delay(t, () => {
+      if (ep !== this.epoch || host.destroyed) return
+      tween(host, { alpha: 0 }, 260, { channel: 'fx' })
+    })
+  }
+
   // ---- イベント→タイムライン ----
 
   /** イベント列をアニメ予約。所要合計msを返す */
   play(evs: BoardEvent[]): number {
-    completeAll() // 進行中の演出を終端までスナップ（入力割込・連続タイムラインの整合）
+    // codex_consult [D]-6：盤面状態のトゥイーン（'board'チャンネル・既定）だけを終端までスナップし、
+    // 破棄可能な余韻FX（'fx'チャンネル：火花・破片・爆発演出等）は打ち切らず次の入力とも共存させる
+    completeChannel('board')
+    // 可視化第二波：演出用の決定的乱数を1手ごとに再シード（QA比較の安定のため Math.random() は使わない）
+    this.fxSeed = (this.fxSeed * 48271 + 12345) % 0x7fffffff || 1
+    this.fxRand = mulberry32(this.fxSeed)
     let t = 0
     let chainSeen = 0
-    let chainStartT = 0 // 連鎖セグメントの開始時刻（ビートはここから650ms刻み＝落下完了を待つ）
+    let chainStartT = 0 // 連鎖セグメントの開始時刻（ビートはここから加速カーブで刻む＝落下完了を待つ）
     const upgradeFireCounts = new Map<string, number>() // 可視化第一波②：このタイムライン内での強化ごとの発動回数
     let disruptLabelCount = 0 // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
+    const hitstop = new HitstopBudget() // 600ms窓で最大80msに制限するヒットストップ予算（codex_consult [D]-2/4）
+    const swarmChain = this.classifySwarmChain(evs) // swarm連鎖ドミノの段階付け（codex_consult [D]-4）
+    // 10連鎖以上を含む手は「暴走時」扱いにし、粒子の同時上限を80→120へ緩める（codex_consult [D]-6）
+    this.rampageActive = evs.some((ev) => ev.t === 'match' && ev.chain >= 10)
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
-    for (const e of evs) {
+    for (let ei = 0; ei < evs.length; ei++) {
+      const e = evs[ei]
       // 可視化第二波②：core契約の新イベント 'enemy-attack' は BoardEvent 型に未着の可能性があるため、
       // switch（判別可能ユニオン）の外・any経由で先取りして処理する（型が来ても来なくても安全）
       const raw = e as unknown as { t: string; id?: number; damage?: number }
@@ -1129,13 +1630,17 @@ export class BoardView {
         }
         case 'match': {
           if (e.chain > chainSeen) {
-            // 連鎖ビート＝前セグメント開始から650ms（落下がt+pop+fallで終わるのを跨がない）Codexレビュー#2
-            if (e.chain > 1) t = Math.max(t, chainStartT + T.chainBeat)
+            // 連鎖ビート＝前セグメント開始からのテンポ。固定650msではなく加速カーブ（codex_consult [D]-3）
+            // chainBeatFor は「到達する連鎖段」で引く（2連鎖目470ms・3連鎖目410ms…）
+            if (e.chain > 1) t = Math.max(t, chainStartT + chainBeatFor(e.chain))
             chainSeen = e.chain
             chainStartT = t
             sfx.pop(e.chain, t / 1000)
+            this.updateChainCounter(e.chain, t)
           }
-          for (const p of e.cells) this.popPieceAt(p, t)
+          // 10連鎖以降は通常消去の火花を50%間引き、爆発・特殊生成・敵撃破の粒子だけを残す
+          const skipChance = e.chain >= 10 ? 0.5 : 0
+          for (const p of e.cells) this.popPieceAt(p, t, false, skipChance)
           break
         }
         case 'special-fire': {
@@ -1143,8 +1648,12 @@ export class BoardView {
           for (const p of e.cleared) this.popPieceAt(p, t, true)
           this.fireFx(e.at, e.piece, t)
           sfx.fire(e.piece.kind, t / 1000)
+          if (e.piece.kind === 'hitsubo') {
+            this.shakeRootDecay(t, 4, 160) // 歯車爆弾：3×3相当の揺れ
+            t += hitstop.request(t, 45)
+          }
           t += 160 // 起爆ごとのビート（連発時に畳み掛ける間隔）
-          chainSeen = 0
+          // codex_consult [D]-3：特殊駒発火では連鎖段を0に戻さない。同じ解決内なら連鎖を維持し、音階/低域を積み上げる
           break
         }
         case 'win-drain': {
@@ -1159,24 +1668,50 @@ export class BoardView {
           break
         }
         case 'combo': {
-          // 合成：両方の特殊駒スプライトを消費（描画残りバグ対策）
+          // 合成：両方の特殊駒スプライトを消費（描画残りバグ対策）。特殊駒コンボは65msヒットストップ＋root揺れ
           this.popPieceAt(e.from, t, true)
           this.popPieceAt(e.at, t, true)
           this.flashFx(e.at, t)
+          this.shakeRootDecay(t, 6, 220)
+          t += hitstop.request(t, 65)
           break
         }
         case 'special-born': {
+          // 特殊駒生成を「誕生イベント」として演出する（codex_consult [D]-1。最優先＝基準品質のコア）
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
           const b = this.bs(sp)
+          const style = SPECIAL_BORN_STYLE[e.piece.kind] ?? SPECIAL_BORN_STYLE.default
+          const born0 = t + T.pop
           sp.scale.set(0)
           sp.alpha = 0
-          tween(sp, { alpha: 1 }, 80, { delay: t + T.pop })
-          tween(sp.scale, { x: b, y: b }, T.specialBorn, { delay: t + T.pop, ease: easeOutBack })
+          // 0-70ms：周囲の駒を中心へ2-3px吸引＋局所減光（消滅ポップと同時並行）
+          this.birthPullFx(e.at, born0)
+          // 70-105ms：白コア1フレーム相当＋35msの表示上のヒットストップ（以後の予約時刻を後ろへずらす）
+          const stop = hitstop.request(born0 + 70, 35)
+          delay(born0 + 70, () => {
+            const core = this.acquireG(this.overFxLayer, 'important')
+            core.circle(0, 0, this.S * 0.36).fill({ color: 0xffffff, alpha: 0.95 })
+            core.position.set(this.px(e.at.x), this.px(e.at.y))
+            tween(core, { alpha: 0 }, 20, { channel: 'fx', onDone: () => this.releaseG(core) })
+          })
+          const scaleUpStart = born0 + 70 + stop
+          const rotSign = (e.at.x + e.at.y) % 2 === 0 ? 1 : -1 // 決定的な回転方向（座標由来）
+          const rotAmt = ((style.rotDeg * Math.PI) / 180) * rotSign
+          sp.rotation = -rotAmt
+          tween(sp, { alpha: 1 }, 60, { delay: scaleUpStart })
+          tween(sp, { rotation: rotAmt }, 145, { delay: scaleUpStart, ease: easeOutBack })
+          tween(sp, { rotation: 0 }, 90, { delay: scaleUpStart + 145, ease: easeOutCubic })
+          sp.scale.set(b * 0.55)
+          tween(sp.scale, { x: b * 1.18, y: b * 1.18 }, 145, { delay: scaleUpStart, ease: easeOutBack })
+          tween(sp.scale, { x: b, y: b }, 90, { delay: scaleUpStart + 145 })
+          this.birthBurstFx(e.at, scaleUpStart, style.color)
+          sfx.born(e.piece.kind, (born0 + 70) / 1000)
           // 可視化第一波③：爆発鉱石への変換（特殊駒生成イベントを共用）は一瞬明滅+ラベルで因果を示す
           if (e.piece.kind === 'normal' && e.piece.volatile) {
-            this.makeVolatileOverlay(e.at.x, e.at.y, t + T.pop)
-            this.floatLabelFx(e.at, '爆発鉱石！', 0xff8a3d, t + T.pop, -0.2)
+            this.makeVolatileOverlay(e.at.x, e.at.y, scaleUpStart)
+            this.floatLabelFx(e.at, '爆発鉱石！', 0xff8a3d, scaleUpStart, -0.2)
           }
+          t += stop
           break
         }
         case 'block-hit': {
@@ -1294,7 +1829,11 @@ export class BoardView {
         }
         case 'explode': {
           for (const p of e.cells) this.popPieceAt(p, t, true)
-          this.explodeFx(e.at, t)
+          // 十字(通常5マス以下)か3x3(共振破砕)かをcells数から推定し、規模で見た目/揺れを変える
+          const big = e.cells.length >= 6
+          this.explodeFx(e.at, t, big)
+          this.shakeRootDecay(t, big ? 4 : 2.5, big ? 160 : 120)
+          t += hitstop.request(t, 30) // 爆発鉱石：30msヒットストップ
           t += 200
           break
         }
@@ -1312,7 +1851,8 @@ export class BoardView {
             this.upgradeFlashFx(e.at, t)
           }
           const id = e.id
-          delay(t, () => this.onUpgradeFire?.(id)) // バー側のバウンス演出は毎回（アイコンは常に反応させる）
+          const src = { ...e.at }
+          delay(t, () => this.onUpgradeFire?.(id, src)) // バー側のバウンス演出は毎回（アイコンは常に反応させる）
           break
         }
         case 'obstacle-spawn': {
@@ -1330,8 +1870,15 @@ export class BoardView {
           break
         }
         case 'enemy-defeated': {
-          this.enemyDefeatedFx(e.id, e.cells, t)
-          t += 200
+          const swarmInfo = swarmChain.get(ei)
+          this.enemyDefeatedFx(e.id, e.cells, t, swarmInfo)
+          if (swarmInfo && swarmInfo.total > 1) {
+            // swarmドミノ：連鎖ごとに20ms短縮し80msを下限。最後の1体だけ50msヒットストップ
+            if (swarmInfo.pos === swarmInfo.total) t += hitstop.request(t, 50)
+            t += Math.max(80, 160 - (swarmInfo.pos - 1) * 20)
+          } else {
+            t += 200
+          }
           break
         }
         case 'armor-applied': {
@@ -1460,6 +2007,10 @@ export class BoardView {
     delay(total, () => {
       if (ep !== this.epoch) return
       this.updateIntentBadges()
+    })
+    this.fadeChainCounter(total + 120) // 連鎖数表示は次の一手までに消す
+    delay(total + 200, () => {
+      if (ep === this.epoch) this.rampageActive = false // 暴走時フラグは手の終端で解除
     })
     // タイムライン終端で必ず照合修復：稀な競合で残る位置ズレ/孤児を吸収し、描画=エンジンを保証
     delay(total + 80, () => this.reconcile())
@@ -1599,7 +2150,7 @@ export class BoardView {
     this.updateIntentBadges() // 可視化第一波①：撃破・生成の取りこぼしをここでも吸収
   }
 
-  private popPieceAt(p: XY, t: number, byFire = false) {
+  private popPieceAt(p: XY, t: number, byFire = false, sparkSkipChance = 0) {
     const k = this.key(p.x, p.y)
     const sp = this.sprites.get(k)
     if (!sp) return
@@ -1609,20 +2160,21 @@ export class BoardView {
     tween(sp.scale, { x: b * 1.25, y: b * 1.25 }, T.pop * 0.35, { delay: t })
     tween(sp.scale, { x: 0, y: 0 }, T.pop * 0.65, { delay: t + T.pop * 0.35, ease: easeInCubic })
     tween(sp, { alpha: byFire ? 0.4 : 0.9 }, T.pop, { delay: t, onDone: () => sp.destroy() })
-    this.sparkFx(p, t)
+    this.sparkFx(p, t, sparkSkipChance)
   }
 
-  private sparkFx(p: XY, t: number) {
+  /** 通常消去の火花。skipChance>0 なら1粒ずつ確率的に間引く（10連鎖以降の負荷対策。codex_consult [D]-3） */
+  private sparkFx(p: XY, t: number, skipChance = 0) {
     delay(t, () => {
+      if (skipChance > 0 && this.rnd() < skipChance) return
       for (let i = 0; i < 6; i++) {
-        const g = new Graphics()
+        const g = this.acquireG(this.overFxLayer)
         g.circle(0, 0, 2.4).fill(0xfff2c8)
         g.position.set(this.px(p.x), this.px(p.y))
-        this.fxLayer.addChild(g)
-        const a = Math.random() * Math.PI * 2
-        const d = this.S * (0.4 + Math.random() * 0.5)
-        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 320, { ease: easeOutCubic })
-        tween(g, { alpha: 0 }, 320, { onDone: () => g.destroy() })
+        const a = this.rnd() * Math.PI * 2
+        const d = this.S * (0.4 + this.rnd() * 0.5)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 320, { ease: easeOutCubic, channel: 'fx' })
+        tween(g, { alpha: 0 }, 320, { channel: 'fx', onDone: () => this.releaseG(g) })
       }
     })
   }
@@ -1630,16 +2182,16 @@ export class BoardView {
   private debrisFx(p: XY, t: number, color: number) {
     delay(t, () => {
       for (let i = 0; i < 8; i++) {
-        const g = new Graphics()
+        const g = this.acquireG(this.overFxLayer)
         g.roundRect(-3, -3, 6, 6, 1.5).fill(color)
         g.position.set(this.px(p.x), this.px(p.y))
-        this.fxLayer.addChild(g)
-        const a = Math.random() * Math.PI * 2
-        const d = this.S * (0.5 + Math.random() * 0.7)
+        const a = this.rnd() * Math.PI * 2
+        const d = this.S * (0.5 + this.rnd() * 0.7)
         tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d + this.S * 0.4 }, 420, {
           ease: easeOutCubic,
+          channel: 'fx',
         })
-        tween(g, { alpha: 0, rotation: (Math.random() - 0.5) * 4 }, 420, { onDone: () => g.destroy() })
+        tween(g, { alpha: 0, rotation: (this.rnd() - 0.5) * 4 }, 420, { channel: 'fx', onDone: () => this.releaseG(g) })
       }
     })
   }
@@ -1671,16 +2223,31 @@ export class BoardView {
         tween(g, { alpha: 0 }, 260, { delay: 120, onDone: () => g.destroy() })
       })
     } else if (piece.kind === 'hitsubo') {
-      // 衝撃波リング＋閃光
+      // 歯車爆弾：3層爆発（爆発鉱石と共通実装だが色/規模を変えて別物にする）＋広域の衝撃波スイープ
+      this.layeredExplosionFx(at, t, {
+        big: true,
+        sparkColor: 0xfff1c4,
+        coreColor: 0xffc978,
+        ringColor: 0xffc978,
+        chunkColor: 0x8a7048,
+        sparkCount: 22,
+        chunkCount: 10,
+        smokeCount: 5,
+        ringMaxScale: 2.8,
+      })
       delay(t, () => {
         const ring = new Graphics()
         ring.circle(0, 0, S * 0.5).stroke({ width: S * 0.16, color: 0xffc978, alpha: 0.9 })
         ring.position.set(this.px(at.x), this.px(at.y))
-        this.fxLayer.addChild(ring)
-        tween(ring.scale, { x: 5.2, y: 5.2 }, 340, { ease: easeOutCubic })
-        tween(ring, { alpha: 0 }, 340, { onDone: () => ring.destroy() })
+        this.overFxLayer.addChild(ring)
+        tween(ring.scale, { x: 5.2, y: 5.2 }, 340, { ease: easeOutCubic, channel: 'fx' })
+        tween(ring, { alpha: 0 }, 340, {
+          channel: 'fx',
+          onDone: () => {
+            if (!ring.destroyed) ring.destroy()
+          },
+        })
       })
-      this.flashFx(at, t)
     } else if (piece.kind === 'seiju') {
       // ランタンの虹色放射
       delay(t, () => {

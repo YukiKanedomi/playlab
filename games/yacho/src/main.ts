@@ -6,12 +6,12 @@ import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, type RunState } from './core/run'
 import { FLOORS } from './core/floors'
 import { UPGRADES, type UpgradeDef } from './core/upgrades'
-import { buildRunName, UPGRADE_CATEGORY } from './core/runname'
+import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, randInt, type Rng } from './core/rng'
 import { BoardView } from './view/BoardView'
 import { PAL, loadSprites, spriteTexture, themeForLevel } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
-import type { BoardEvent, LevelDef } from './core/types'
+import type { BoardEvent, LevelDef, XY } from './core/types'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
 
@@ -71,6 +71,43 @@ function isSynergyWith(owned: UpgradeDef[], candidate: UpgradeDef): boolean {
     for (const oh of o.hooks) for (const ch of candidate.hooks) if (oh.on === ch.on) return true
   }
   return false
+}
+
+// ---- ドラフトカード情報設計（codex_consult_rogue.md [B]。left切れ修正の第4波で全面差し替え） ----
+
+/** ドラフトカード見出し帯の系統ラベル（色だけに頼らず文字でも示す。UPGRADE_CATEGORYのカテゴリ→日本語1〜2字） */
+const CATEGORY_LABEL: Record<UpgradeCategory, string> = { plant: '植物', mineral: '鉱物', gear: 'ギア', relic: '遺物', synergy: '異種' }
+
+/**
+ * upgrades.tsのdescを「条件」「効果」に機械的に分割する（[B]：〜すると、〜を2行へ。割れない場合は効果1行のみ）。
+ * 接続語+読点の位置で切るだけで、文言そのものは変更しない（分割不能なら condition は null）。
+ */
+const COND_MARKERS = ['とき、', 'たび、', 'たら、', 'なら、', '時、', 'と、']
+function splitDesc(desc: string): { condition: string | null; effect: string } {
+  let hitIdx = -1
+  let hitMarker = ''
+  for (const marker of COND_MARKERS) {
+    const idx = desc.indexOf(marker)
+    if (idx >= 0 && (hitIdx === -1 || idx < hitIdx)) {
+      hitIdx = idx
+      hitMarker = marker
+    }
+  }
+  if (hitIdx === -1) return { condition: null, effect: desc }
+  return { condition: desc.slice(0, hitIdx + hitMarker.length - 1), effect: desc.slice(hitIdx + hitMarker.length) }
+}
+
+/** 所持強化のうち、候補と系統一致 or フック種一致のものを最大2件返す（カード「相性」欄。[B]§カード構造） */
+function synergyPartners(owned: UpgradeDef[], candidate: UpgradeDef): UpgradeDef[] {
+  const candCat = UPGRADE_CATEGORY[candidate.id]
+  const out: UpgradeDef[] = []
+  for (const o of owned) {
+    if (out.length >= 2) break
+    const catMatch = UPGRADE_CATEGORY[o.id] === candCat
+    const hookMatch = o.hooks.some((oh) => candidate.hooks.some((ch) => oh.on === ch.on))
+    if (catMatch || hookMatch) out.push(o)
+  }
+  return out
 }
 
 /**
@@ -704,14 +741,36 @@ async function boot() {
     const ownedUpgrades = run.upgrades.slice(0, UPGRADE_ICON_MAX)
     const iconSpacing = Math.min(vw * 0.19, (vw * 0.86) / Math.max(1, ownedUpgrades.length))
     const iconR = Math.min(vw * 0.055, iconSpacing * 0.4)
-    let upgradePopup: Container | null = null
+    // 強化説明ポップ：時間で消さず、同じアイコン再タップ／パネル外タップ／右上×のいずれかで即閉じる固定パネルへ
+    // （プレイテスト指摘「すぐ消えるのが微妙」「押し直すことになる」への対応。codex_consult_rogue.md [B]）。
+    let upgradePopupOverlay: Container | null = null
+    let upgradePopupBox: Container | null = null
+    let upgradePopupId: string | null = null
+    let popupPrevInputLocked = false
+    /** パネルの見た目だけ片付ける（差し替え時に閉じ処理のinputLocked復帰を挟まないための下請け） */
+    const destroyUpgradePopupVisuals = () => {
+      if (upgradePopupOverlay && !upgradePopupOverlay.destroyed) upgradePopupOverlay.destroy()
+      if (upgradePopupBox && !upgradePopupBox.destroyed) upgradePopupBox.destroy({ children: true })
+      upgradePopupOverlay = null
+      upgradePopupBox = null
+    }
+    const closeUpgradePopup = () => {
+      destroyUpgradePopupVisuals()
+      if (upgradePopupId !== null) inputLocked = popupPrevInputLocked
+      upgradePopupId = null
+    }
     const showUpgradePopup = (def: UpgradeDef) => {
-      if (upgradePopup && !upgradePopup.destroyed) upgradePopup.destroy()
+      if (upgradePopupId === def.id) {
+        closeUpgradePopup() // 同じアイコンの再タップ＝閉じる
+        return
+      }
+      if (upgradePopupId === null) popupPrevInputLocked = inputLocked // 新規オープン時だけ元のロック状態を記憶
+      destroyUpgradePopupVisuals() // 単一インスタンス：別アイコンなら差し替え
       const w = vw * 0.72
       const nameT = new Text({ text: def.name, style: { fill: UI.paperInk, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' } })
       const descT = new Text({
         text: def.desc,
-        style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.88, breakWords: true },
+        style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.8, breakWords: true },
       })
       const padY = vh * 0.014
       const h = fs(0.05) + descT.height + padY * 3
@@ -730,19 +789,37 @@ async function boot() {
       nameT.position.set(w * 0.06, padY)
       descT.position.set(w * 0.06, fs(0.05) + padY)
       box.addChild(nameT, descT)
+      // 右上の閉じる×（GraphicsはPixi v8でaddChild非推奨のためContainerに包む）
+      const closeR = Math.max(fs(0.028), 16)
+      const closeBtn = new Container()
+      const closeCircle = new Graphics()
+      closeCircle.circle(0, 0, closeR).fill({ color: 0x2a1c10, alpha: 0.85 }).stroke({ width: 1.5, color: UI.brass })
+      closeBtn.addChild(closeCircle)
+      const closeX = new Text({ text: '×', style: { fill: 0xf4e8cf, fontSize: closeR * 1.1, fontFamily: FONT, fontWeight: 'bold' } })
+      closeX.anchor.set(0.5)
+      closeBtn.addChild(closeX)
+      closeBtn.position.set(w - closeR * 0.9, closeR * 0.9)
+      closeBtn.eventMode = 'static'
+      closeBtn.cursor = 'pointer'
+      closeBtn.hitArea = { contains: (x: number, y: number) => x * x + y * y <= closeR * closeR * 1.6 }
+      closeBtn.on('pointertap', () => closeUpgradePopup())
+      box.addChild(closeBtn)
       box.position.set((vw - w) / 2, boosterBar.position.y - h - vh * 0.012)
-      box.alpha = 0
+      // box自身も当たり判定を持たせ、内側タップが下のoverlayへ抜けて誤って閉じないようにする
+      box.eventMode = 'static'
+      box.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= w && y >= 0 && y <= h }
       ui.addChild(box)
-      upgradePopup = box
-      tw.tween(box, { alpha: 1 }, 140)
-      tw.delay(2500, () => {
-        if (!alive() || box.destroyed) return
-        tw.tween(box, { alpha: 0 }, 220, {
-          onDone: () => {
-            if (!box.destroyed) box.destroy()
-          },
-        })
-      })
+      // パネル外タップで閉じる透明な全画面当たり判定。boosterBarより背面に挿し、
+      // アイコンの再タップ／差し替えタップは先にアイコン自身が拾えるようにする
+      const overlay = new Container()
+      overlay.eventMode = 'static'
+      overlay.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= vw && y >= 0 && y <= vh }
+      overlay.on('pointertap', () => closeUpgradePopup())
+      ui.addChildAt(overlay, ui.getChildIndex(boosterBar))
+      upgradePopupOverlay = overlay
+      upgradePopupBox = box
+      upgradePopupId = def.id
+      inputLocked = true
     }
     // 可視化第二波④：強化アイコンの回数条件バッジ（run.progress は並行実装中。無ければ何も描かない）
     type UpgradeProgress = Record<string, { cur: number; max: number }>
@@ -872,7 +949,51 @@ async function boot() {
         },
       })
     }
-    view.onUpgradeFire = (id) => bounceUpgradeIcon(id)
+    /**
+     * 因果パルス：強化バーの発火アイコンから盤面の起点セルへ金のパルスを飛ばす（codex_consult_rogue.md [B]④）。
+     * 「自分のビルドが盤面を動かした」を見せる。同じ強化の連発は最初の2回までパルス、以降はbounceUpgradeIconの
+     * バウンス＋発光のみに留める（うるささ対策、BoardView.tsの upgrade-fire ラベル間引きと同じ方針）。
+     * at座標はBoardEvent側に既にあるが、onUpgradeFireのシグネチャ拡張はBoardView.ts（並行編集中）側の変更が要る。
+     * 呼び出し側が旧シグネチャ（idのみ）のままなら at は undefined になり、自然にバウンスのみへフォールバックする。
+     */
+    const upgradeFirePulseCount = new Map<string, number>()
+    const upgradeFirePulseFx = (id: string, at: XY) => {
+      const icon = upgradeIconG.get(id)
+      if (!icon || icon.destroyed) return
+      const n = (upgradeFirePulseCount.get(id) ?? 0) + 1
+      upgradeFirePulseCount.set(id, n)
+      if (n > 2) return
+      const fromX = icon.position.x
+      const fromY = boosterBar.position.y + icon.position.y
+      const toX = view.root.position.x + (at.x + 0.5) * view.S
+      const toY = view.root.position.y + (at.y + 0.5) * view.S
+      const line = new Graphics()
+      line.moveTo(fromX, fromY).lineTo(toX, toY).stroke({ width: Math.max(1.5, fs(0.0035)), color: 0xf2c14e, alpha: 0.75 })
+      playRoot.addChild(line)
+      tw.tween(line, { alpha: 0 }, 170, {
+        onDone: () => {
+          if (!line.destroyed) line.destroy()
+        },
+      })
+      const spark = new Graphics()
+      spark.circle(0, 0, fs(0.009)).fill({ color: 0xfff2c0, alpha: 0.95 })
+      spark.position.set(fromX, fromY)
+      playRoot.addChild(spark)
+      tw.tween(spark.position, { x: toX, y: toY }, 150, {
+        ease: tw.easeOutCubic,
+        onDone: () => {
+          tw.tween(spark, { alpha: 0 }, 80, {
+            onDone: () => {
+              if (!spark.destroyed) spark.destroy()
+            },
+          })
+        },
+      })
+    }
+    view.onUpgradeFire = (id: string, at?: XY) => {
+      bounceUpgradeIcon(id)
+      if (at) upgradeFirePulseFx(id, at)
+    }
     /** 可視化第二波②：「どの敵が殴ったか」を軌跡で示してから被弾演出（既存flashHp/hpDamageFx）へ繋ぐ */
     view.onEnemyAttack = (enemyId, damage) => {
       const en = board.enemies.find((e) => e.id === enemyId)
@@ -1008,9 +1129,12 @@ async function boot() {
       })
     }
 
-    // ドラフト3択：羊皮紙カード3枚（ROGUE.md §4/§8）
+    // ドラフト3択：羊皮紙カード3枚（ROGUE.md §4/§8）。
+    // 情報設計はcodex_consult_rogue.md [B]（見出し帯=系統+強化名／本文=条件+効果／相性／獲得ボーナス帯）に準拠。
+    // 左切れ対策：生のvw比率でなく「安全矩形」からカード幅を決め、3枚が縦に収まる高さへ等比スケールで詰める。
     const showDraftPanel = () => {
       const options = pickDraftOptions(run.upgrades, draftRng(floor))
+      const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
       const panel = new Container()
       const dimG = new Graphics()
       dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 0.55 })
@@ -1020,13 +1144,22 @@ async function boot() {
         style: { fill: 0xf4e8cf, fontSize: fs(0.044), fontFamily: FONT, fontWeight: 'bold' },
       })
       title.anchor.set(0.5)
-      title.position.set(vw / 2, vh * 0.1)
+      title.position.set(vw / 2, vh * 0.08)
       panel.addChild(title)
-      const cardW = vw * 0.86
-      const cardTex = spriteTexture('ui_parchment')
-      const cardH = cardTex ? Math.min(vh * 0.2, (cardW / cardTex.width) * cardTex.height) : vh * 0.18
-      const gap = vh * 0.025
-      const top = vh * 0.16
+
+      // 安全矩形：内容幅の基準を「画面幅」でなく min(vw, vh*0.62) に取り、そこから32px引いた分だけカードに使う
+      const aspect = 760 / 450 // ui_cardの縦横比（四辺完全・上部24%が見出し帯）
+      const top = vh * 0.14
+      const bottomPad = vh * 0.02
+      const gap = vh * 0.02
+      const cardHByHeight = (vh - top - bottomPad - gap * 2) / 3 // 3枚が縦に並んでもはみ出さない上限
+      const safeW = Math.min(vw, vh * 0.62)
+      const cardHByWidth = (safeW - 32) / aspect
+      const cardH = Math.max(60, Math.min(cardHByHeight, cardHByWidth))
+      const cardW = cardH * aspect
+      const cardTex = spriteTexture('ui_card')
+      const insetX = cardW * 0.1 // 本文はカード内側からさらに左右10%（>=6%指定を満たす）内側
+
       options.forEach((opt, i) => {
         const card = new Container()
         const cy = top + i * (cardH + gap)
@@ -1037,21 +1170,102 @@ async function boot() {
           card.addChild(sp)
         } else {
           const g = new Graphics()
-          g.roundRect(0, 0, cardW, cardH, 14).fill(UI.paper)
+          g.roundRect(0, 0, cardW, cardH, cardH * 0.05).fill(UI.paper)
+          g.rect(0, 0, cardW, cardH * 0.24).fill(0x2a1c10)
           card.addChild(g)
         }
-        const name = new Text({
+
+        // ① 見出し帯：系統名（小・前置き）＋強化名（大）。系統は文字でも示す
+        const cat = UPGRADE_CATEGORY[opt.id]
+        const headerY = cardH * 0.135
+        const catT = new Text({
+          text: CATEGORY_LABEL[cat] ?? '',
+          style: { fill: 0xcbb98a, fontSize: cardH * 0.062, fontFamily: FONT, fontWeight: 'bold' },
+        })
+        catT.anchor.set(0, 0.5)
+        catT.position.set(insetX, headerY)
+        card.addChild(catT)
+        const nameT = new Text({
           text: opt.name,
-          style: { fill: UI.paperInk, fontSize: fs(0.038), fontFamily: FONT, fontWeight: 'bold' },
+          style: {
+            fill: UI.badgeText,
+            fontSize: cardH * 0.105,
+            fontFamily: FONT,
+            fontWeight: 'bold',
+            wordWrap: true,
+            wordWrapWidth: cardW - insetX * 2 - catT.width - cardW * 0.03,
+            breakWords: true,
+          },
         })
-        name.position.set(cardW * 0.08, cardH * 0.16)
-        card.addChild(name)
-        const desc = new Text({
-          text: opt.desc,
-          style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: cardW * 0.84, breakWords: true },
-        })
-        desc.position.set(cardW * 0.08, cardH * 0.44)
-        card.addChild(desc)
+        nameT.anchor.set(0, 0.5)
+        nameT.position.set(insetX + catT.width + cardW * 0.03, headerY)
+        card.addChild(nameT)
+
+        // ② 本文：固定ラベル「条件」「効果」を左に、内容を右へ1行ずつ（[B]：1文1因果、24字目安・最大2行）
+        const { condition, effect } = splitDesc(opt.desc)
+        const labelW = cardW * 0.16
+        const contentX = insetX + labelW
+        const contentWrapW = Math.max(20, cardW - contentX - insetX)
+        const labelStyle = { fill: 0x8a6a3f, fontSize: cardH * 0.058, fontFamily: FONT, fontWeight: 'bold' as const }
+        const contentStyle = {
+          fill: UI.paperInk,
+          fontSize: cardH * 0.068,
+          fontFamily: FONT,
+          wordWrap: true,
+          wordWrapWidth: contentWrapW,
+          breakWords: true,
+        }
+        let rowY = cardH * 0.29
+        const addRow = (label: string, content: string, contentFill: number = UI.paperInk) => {
+          const l = new Text({ text: label, style: labelStyle })
+          l.position.set(insetX, rowY)
+          card.addChild(l)
+          const c = new Text({ text: content, style: { ...contentStyle, fill: contentFill } })
+          c.position.set(contentX, rowY)
+          card.addChild(c)
+          rowY += Math.max(l.height, c.height) + cardH * 0.03
+        }
+        if (condition) addRow('条件', condition)
+        addRow('効果', effect)
+
+        // ③ 相性：所持強化のうち系統一致 or フック種一致を最大2件（所持済みのみを見せるため常に金）
+        const partners = synergyPartners(owned, opt)
+        if (partners.length) addRow('相性', partners.map((p) => p.name).join('／'), 0xd9a441)
+
+        // ④ 獲得ボーナス（starterDeschありのみ）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
+        if (opt.starterDesc) {
+          const bandH = cardH * 0.135
+          const bandY = cardH - bandH - cardH * 0.045
+          const bandX = insetX * 0.7
+          const bandW = cardW - bandX * 2
+          const band = new Graphics()
+          band.roundRect(bandX, bandY, bandW, bandH, bandH * 0.28).fill({ color: 0xf4ecd8, alpha: 0.55 })
+          card.addChild(band)
+          const giftSize = bandH * 0.5
+          const giftCx = bandX + bandH * 0.55
+          const giftCy = bandY + bandH / 2
+          const gift = new Graphics()
+          gift.roundRect(giftCx - giftSize / 2, giftCy - giftSize * 0.32, giftSize, giftSize * 0.64, giftSize * 0.08).fill(UI.brass)
+          gift.rect(giftCx - giftSize * 0.09, giftCy - giftSize * 0.32, giftSize * 0.18, giftSize * 0.64).fill(0x8a5a2a)
+          gift.rect(giftCx - giftSize / 2, giftCy - giftSize * 0.08, giftSize, giftSize * 0.16).fill(0x8a5a2a)
+          card.addChild(gift)
+          const bonusText = opt.starterDesc.replace(/^おまけ[:：]\s*/, '')
+          const bonusT = new Text({
+            text: `獲得ボーナス　${bonusText}`,
+            style: {
+              fill: 0x6b5238,
+              fontSize: cardH * 0.05,
+              fontFamily: FONT,
+              wordWrap: true,
+              wordWrapWidth: bandW - giftSize * 1.9,
+              breakWords: true,
+            },
+          })
+          bonusT.anchor.set(0, 0.5)
+          bonusT.position.set(giftCx + giftSize * 0.85, giftCy)
+          card.addChild(bonusT)
+        }
+
         card.position.set((vw - cardW) / 2, cy)
         card.eventMode = 'static'
         card.cursor = 'pointer'

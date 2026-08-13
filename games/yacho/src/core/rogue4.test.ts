@@ -23,30 +23,33 @@ const priv = (b: Board) => b as unknown as Priv
 
 describe('スターター効果（原則2）', () => {
   it('取得済み強化のスターターはBoard構築（層開始）直後に発火し、盤面が変わる', () => {
-    // 胞子繁殖(spore-bloom)：取得時に胞子トークンを2個生成
-    const run = createRunState(['spore-bloom'])
+    // 毒胞子(toxic-spore)：本体が胞子前提のため、スターターは胞子トークンを2個設置する（第4波でスターターを
+    // 条件付き強化のみに絞った際、意図に合う形へ差し替え。spore-bloomはstarter廃止のため対象から外れた）
+    const run = createRunState(['toxic-spore'])
     const b = new Board(plain(), run)
     let tokenCells = 0
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b.at(x, y)?.sporeToken) tokenCells++
     expect(tokenCells).toBe(2)
-    expect(b.initEvents.some((e) => e.t === 'upgrade-fire' && e.id === 'spore-bloom')).toBe(true)
-    expect(run.startersApplied).toContain('spore-bloom')
+    expect(b.initEvents.some((e) => e.t === 'upgrade-fire' && e.id === 'toxic-spore')).toBe(true)
+    expect(run.startersApplied).toContain('toxic-spore')
   })
 
   it('同じ強化のスターターは次の層開始でも二重発火しない（RunStateを層間で引き継ぐ）', () => {
-    const run = createRunState(['spore-bloom'])
+    const run = createRunState(['toxic-spore'])
     new Board(plain(), run) // 層1開始
-    expect(run.startersApplied).toEqual(['spore-bloom'])
+    expect(run.startersApplied).toEqual(['toxic-spore'])
     const b2 = new Board(plain({ seed: 99 }), run) // 層2開始（同じrunを引き継ぐ）
-    expect(run.startersApplied).toEqual(['spore-bloom']) // 増えない＝二重適用されない
-    expect(b2.initEvents.some((e) => e.t === 'upgrade-fire' && e.id === 'spore-bloom')).toBe(false)
+    expect(run.startersApplied).toEqual(['toxic-spore']) // 増えない＝二重適用されない
+    expect(b2.initEvents.some((e) => e.t === 'upgrade-fire' && e.id === 'toxic-spore')).toBe(false)
   })
 
   it('複数の強化を同時所持していれば、Board構築1回で複数のスターターがまとめて発火する', () => {
-    const run = createRunState(['mining-habit', 'overrev'])
+    // resonant-shatter/relic-resonanceは条件付き強化としてstarterが残る8種に含まれる
+    // （mining-habit/overrevは第4波でstarterを外したためこのテストの対象から外れた）
+    const run = createRunState(['resonant-shatter', 'relic-resonance'])
     const b = new Board(plain(), run)
     const ids = new Set(b.initEvents.filter((e) => e.t === 'upgrade-fire').map((e) => (e.t === 'upgrade-fire' ? e.id : '')))
-    expect(ids).toEqual(new Set(['mining-habit', 'overrev']))
+    expect(ids).toEqual(new Set(['resonant-shatter', 'relic-resonance']))
   })
 })
 
