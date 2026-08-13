@@ -9,8 +9,9 @@ import { UPGRADES, type UpgradeDef } from './core/upgrades'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, randInt, type Rng } from './core/rng'
 import { BoardView } from './view/BoardView'
-import { PAL, loadSprites, spriteTexture, themeForLevel } from './view/pieces'
+import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
+import { enemyIntent, type EnemyInstance } from './core/enemies'
 import type { BoardEvent, LevelDef, XY } from './core/types'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
@@ -138,6 +139,27 @@ function pickDraftOptions(ownedIds: string[], rng: Rng): UpgradeDef[] {
     ;[picks[i], picks[j]] = [picks[j], picks[i]]
   }
   return picks
+}
+
+// ボスの表示名（BoardView.ts の ENEMY_INFO と同一の呼称。ボス以外はチップに個体名を出さないため他は複製しない）
+const BOSS_NAME = '巨大深層生物'
+
+/**
+ * 遭遇帯の「状態の語り手」に必要な最小限の集計（codex_consult_ui.md [A]：残敵/次行動、[B]：被弾予告）。
+ * enemyIntent（core/enemies.ts）を読むだけで、敵AIの判定そのものには踏み込まない（core非改変の方針）。
+ */
+function computeEncounterInfo(board: Board): { aliveCount: number; boss: EnemyInstance | null; pendingDamage: number; minAttackTurns: number | null } {
+  const aliveEnemies = board.enemies.filter((e) => e.hp > 0)
+  const boss = aliveEnemies.find((e) => e.kind === 'boss') ?? null
+  let pendingDamage = 0
+  let minAttackTurns: number | null = null
+  for (const e of aliveEnemies) {
+    const intent = enemyIntent(e)
+    if (intent.kind !== 'attack') continue
+    if (intent.turns === 1) pendingDamage += intent.damage ?? 0
+    if (minAttackTurns === null || intent.turns < minAttackTurns) minAttackTurns = intent.turns
+  }
+  return { aliveCount: aliveEnemies.length, boss, pendingDamage, minAttackTurns }
 }
 
 const app = new Application()
@@ -489,227 +511,364 @@ async function boot() {
     bgDim.rect(0, 0, vw, vh).fill({ color: 0x2b2118, alpha: 0.1 }) // 暖色の沈め（青黒で潰さない）
     playRoot.addChild(bgDim)
 
-    // 4帯レイアウト（AD v3.1流用）: HUD帯(〜0.20) / キャラ帯(0.20〜0.35) / 盤(0.35〜0.78) / ブースター帯(〜0.90)
-    const boardSize = Math.min(vw * 0.9, vh * 0.48)
+    // ---------- 縦バンド予算（codex_consult_ui.md [A]：プレイ画面の再設計。旧4帯レイアウトから全面差し替え） ----------
+    // 0-3%=上端safe area / 3-12%=ランHUD / 12-38%(短尺機は34%)=遭遇帯 / 38-84%=盤面 / 84-92%=ビルドドック / 92-100%=下端
+    const shortScreen = vh < 700 // 700px未満は遭遇帯を22%へ縮め、盤面上端を34%へ繰り上げる（[A]表の注記）
+    const hudTop = vh * 0.03
+    const hudBottom = vh * 0.12
+    const encTop = hudBottom
+    const boardTop = shortScreen ? vh * 0.34 : vh * 0.38
+    const boardSize = Math.min(vw * 0.92, vh * 0.44)
     view = new BoardView(board, app.renderer, boardSize)
-    const bw = view.S * W
-    const boardTop = vh * 0.35
-    view.root.position.set((vw - bw) / 2, boardTop)
+    const boardPix = view.S * W
+    view.root.position.set((vw - boardPix) / 2, boardTop)
     playRoot.addChild(view.root)
+    // 盤面とビルドドックの間隔（[A]必達の下限は8px。BoardView側の盤面フレーム下端の飾りに視覚的に食い込まないよう
+    // 実際には少し広めに取る。92%帯の下端safe areaまでは十分な余白があるため詰める必要はない）
+    const dockGap = Math.max(8, vh * 0.035)
+    const dockTop = boardTop + boardPix + dockGap
 
-    // ---------- 探窟家バスト ----------
-    const bustTex = spriteTexture(`bust_${theme}`)
-    if (bustTex) {
-      const bust = new Sprite(bustTex)
-      bust.anchor.set(0.5, 1)
-      const bh = vh * 0.19 // キャラ帯（0.20〜0.35vh）に顔全体が収まる
-      bust.scale.set(bh / bustTex.height)
-      bust.position.set(vw * 0.5, boardTop + vh * 0.01)
-      playRoot.addChildAt(bust, playRoot.getChildIndex(view.root))
-    }
-
-    // ---------- HUD ----------
+    // ---------- HUD/遭遇帯の共通レイヤー ----------
     const ui = new Container()
     playRoot.addChild(ui)
 
-    // 探窟隊HP（左上メダリオン。可視化第二波①：「たいりょく」焼き込み済みの新アセットへ差し替え。ROGUE.md §5）
-    const badgeW = vw * 0.16
-    const plaqueTex = spriteTexture('ui_hp') ?? spriteTexture('ui_moves') // 新アセット未ロード時は旧メダリオンへ
-    let badgeH = badgeW
-    let badgeX = vw * 0.035
-    let badgeY = vh * 0.022
-    if (plaqueTex) {
-      const sp = new Sprite(plaqueTex)
-      sp.width = badgeW
-      sp.height = (badgeW / plaqueTex.width) * plaqueTex.height
-      badgeH = sp.height
-      sp.position.set(badgeX, badgeY)
-      ui.addChild(sp)
-    }
-    const hpText = new Text({
-      text: '',
-      style: { fill: 0xe5d8bb, fontSize: fs(0.058), fontFamily: FONT, fontWeight: 'bold' },
-    })
-    hpText.anchor.set(0.5)
-    hpText.position.set(badgeX + badgeW / 2, badgeY + badgeH * 0.52)
-    ui.addChild(hpText)
-    // 「20 / 20」併記（HP制であることを一目で伝える。可視化第二波①）
-    const hpMaxText = new Text({
-      text: '',
-      style: { fill: 0xcbb98a, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' },
-    })
-    hpMaxText.anchor.set(0.5)
-    hpMaxText.position.set(badgeX + badgeW / 2, badgeY + badgeH * 0.72)
-    ui.addChild(hpMaxText)
-    // HP危険域（残5以下）の常時演出：文字を薄赤に染めゆっくり明滅させる（scaleはflashHpと競合するのでalphaのみ使う）
-    const HP_DANGER = 5
-    const HP_COLOR_NORMAL = 0xe5d8bb
-    const HP_COLOR_DANGER = 0xe0a89c
-    let hpDanger = false
-    const pulseHpDanger = () => {
-      if (!hpDanger || hpText.destroyed) return
-      tw.tween(hpText, { alpha: 0.62 }, 700, {
-        onDone: () => {
-          if (!hpDanger || hpText.destroyed) return
-          tw.tween(hpText, { alpha: 1 }, 700, { onDone: pulseHpDanger })
+    // ---------- 遭遇帯：探窟家バスト＋残敵/次行動チップ（[A]「状態の語り手」） ----------
+    const bustGlow = new Graphics() // 被弾予告時にバストへ出す赤い縁光（常時は非表示）
+    bustGlow.visible = false
+    playRoot.addChild(bustGlow)
+    const bustTex = spriteTexture(`bust_${theme}`)
+    const chipW = vw * 0.3
+    const chipTex = spriteTexture('ui_chip')
+    const chipH = chipTex ? chipW * (chipTex.height / chipTex.width) : chipW * 0.46
+    const chipY = encTop + vh * 0.02
+    const buildChip = (x: number) => {
+      const c = new Container()
+      if (chipTex) {
+        const sp = new Sprite(chipTex)
+        sp.width = chipW
+        sp.height = chipH
+        c.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.roundRect(0, 0, chipW, chipH, chipH * 0.3).fill({ color: 0x2e2416, alpha: 0.85 }).stroke({ width: 1.5, color: UI.brass })
+        c.addChild(g)
+      }
+      const t = new Text({
+        text: '',
+        style: {
+          fill: UI.badgeText,
+          fontSize: chipH * 0.3,
+          fontFamily: FONT,
+          fontWeight: 'bold',
+          align: 'center',
+          wordWrap: true,
+          wordWrapWidth: chipW * 0.86,
+          breakWords: true,
         },
       })
+      t.anchor.set(0.5)
+      t.position.set(chipW / 2, chipH / 2)
+      c.addChild(t)
+      c.position.set(x, chipY)
+      ui.addChild(c)
+      return { root: c, text: t }
     }
-    const updateHpDangerState = () => {
-      const danger = run.playerHp > 0 && run.playerHp <= HP_DANGER
-      hpText.style.fill = danger ? HP_COLOR_DANGER : HP_COLOR_NORMAL
-      if (danger === hpDanger) return
-      hpDanger = danger
-      if (danger) pulseHpDanger()
-      else hpText.alpha = 1
+    const enemyChip = buildChip(vw * 0.04)
+    const actionChip = buildChip(vw * 0.96 - chipW)
+
+    let bust: Sprite | null = null
+    if (bustTex) {
+      bust = new Sprite(bustTex)
+      bust.anchor.set(0.5, 1)
+      const bustAreaTop = chipY + chipH + vh * 0.015
+      const bustH = Math.min((boardTop - bustAreaTop) * 0.98, vh * 0.26)
+      bust.scale.set(Math.max(1, bustH) / bustTex.height)
+      bust.position.set(vw * 0.5, boardTop + vh * 0.006)
+      playRoot.addChildAt(bust, playRoot.getChildIndex(view.root))
+      bustGlow.circle(vw * 0.5, boardTop - bust.height * 0.42, bust.width * 0.62).stroke({ width: vw * 0.018, color: 0xd6432f, alpha: 0.75 })
     }
 
-    // スコアバッジ（現状のまま）
-    const scoreBadgeTex = spriteTexture('ui_score')
-    const sbW = vw * 0.24
-    let sbH = sbW * 0.39
-    const sbX = vw * 0.02
-    const sbY = vh * 0.145
-    if (scoreBadgeTex) {
-      const sp = new Sprite(scoreBadgeTex)
-      sp.width = sbW
-      sp.height = (sbW / scoreBadgeTex.width) * scoreBadgeTex.height
-      sbH = sp.height
-      sp.position.set(sbX, sbY)
-      ui.addChild(sp)
-    }
-    const scoreText = new Text({
-      text: '',
-      style: { fill: 0xe5d8bb, fontSize: fs(0.031), fontFamily: FONT, fontWeight: 'bold' },
-    })
-    scoreText.anchor.set(1, 0.5)
-    scoreText.position.set(sbX + sbW * 0.88, sbY + sbH * 0.5)
-    ui.addChild(scoreText)
+    // ---------- HUD（ランHUD1行：左=深度／中央=HPゲージ／右=メニュー。[A]） ----------
+    const hudRowH = hudBottom - hudTop
+    const hudCenterY = hudTop + hudRowH / 2
+    const hudIconD = Math.min(hudRowH * 0.9, vw * 0.11)
 
-    // 歯車（ミュート）と戻る（現状のまま。戻る=ラン放棄で拠点へ）
-    const gearTex = spriteTexture('ui_gear')
-    const gr = vw * 0.042
-    const hitR = Math.max(gr, 22) // 最低44px相当のタップ領域
-    let gear: Container
-    if (gearTex) {
-      const sp = new Sprite(gearTex)
+    // 深度バッジ（左。旧HPメダリオンの意匠は円形深度バッジ ui_depth へ転用。[B]末尾の指示）
+    const depthTex = depthBadgeTexture()
+    const depthBadge = new Container()
+    if (depthTex) {
+      const sp = new Sprite(depthTex)
       sp.anchor.set(0.5)
-      sp.scale.set((gr * 2) / Math.max(gearTex.width, gearTex.height))
-      gear = sp
+      sp.scale.set(hudIconD / Math.max(depthTex.width, depthTex.height))
+      depthBadge.addChild(sp)
     } else {
       const g = new Graphics()
-      g.circle(0, 0, gr).fill(UI.wood).stroke({ width: 3, color: UI.brass })
-      gear = g
+      g.circle(0, 0, hudIconD / 2).fill(UI.wood).stroke({ width: 3, color: UI.brass })
+      depthBadge.addChild(g)
     }
-    gear.position.set(vw * 0.935, vh * 0.03 + gr)
-    gear.eventMode = 'static'
-    gear.cursor = 'pointer'
-    gear.hitArea = { contains: (x: number, y: number) => x * x + y * y <= hitR * hitR }
-    gear.alpha = isMuted() ? 0.45 : 1
-    gear.on('pointertap', () => {
-      gear.alpha = toggleMute() ? 0.45 : 1
+    const depthText = new Text({
+      text: `${floor} / ${FLOORS.length}`,
+      style: { fill: 0xf4e8cf, fontSize: hudIconD * 0.3, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
     })
-    ui.addChild(gear)
+    depthText.anchor.set(0.5)
+    depthText.position.set(0, hudIconD * 0.15)
+    depthBadge.addChild(depthText)
+    depthBadge.position.set(vw * 0.04 + hudIconD / 2, hudCenterY)
+    ui.addChild(depthBadge)
 
-    const backTex = spriteTexture('ui_back')
-    let back: Container
-    if (backTex) {
-      const sp = new Sprite(backTex)
-      sp.anchor.set(0.5)
-      sp.scale.set((gr * 2) / Math.max(backTex.width, backTex.height))
-      back = sp
+    // HPゲージ「探窟灯の油槽」（[B]）：幅優先で素材アスペクトを保ち、HUD行の高さに収まらなければ縮める
+    const oilTex = spriteTexture('ui_oil')
+    let gaugeW = Math.min(248, Math.max(190, vw * 0.54))
+    let gaugeH = gaugeW * (241 / 640)
+    const gaugeMaxH = hudRowH * 0.98
+    if (gaugeH > gaugeMaxH) {
+      gaugeH = gaugeMaxH
+      gaugeW = gaugeH * (640 / 241)
+    }
+    const gaugeRoot = new Container()
+    const gaugeBaseX = (vw - gaugeW) / 2
+    gaugeRoot.position.set(gaugeBaseX, hudCenterY - gaugeH / 2)
+    ui.addChild(gaugeRoot)
+    // 内側チャンネル比率：素材ありは実測値、無ければコード描画用に広めの仮想チャンネルを使う
+    const chX0 = gaugeW * (oilTex ? 0.2156 : 0.14)
+    const chX1 = gaugeW * (oilTex ? 0.9984 : 0.98)
+    const chY0 = gaugeH * (oilTex ? 0.4979 : 0.26)
+    const chY1 = gaugeH * (oilTex ? 0.8299 : 0.74)
+    const chW = chX1 - chX0
+    const chH = chY1 - chY0
+    const backingG = new Graphics()
+    gaugeRoot.addChild(backingG)
+    const fillG = new Graphics()
+    gaugeRoot.addChild(fillG)
+    const hatchLayer = new Container()
+    gaugeRoot.addChild(hatchLayer)
+    if (oilTex) {
+      const sp = new Sprite(oilTex)
+      sp.width = gaugeW
+      sp.height = gaugeH
+      gaugeRoot.addChild(sp)
     } else {
-      const g = new Graphics()
-      g.circle(0, 0, gr).fill(UI.wood).stroke({ width: 2, color: UI.brass })
-      back = g
+      const frameG = new Graphics()
+      frameG.roundRect(0, 0, gaugeW, gaugeH, gaugeH * 0.3).stroke({ width: 3, color: UI.brass })
+      for (let i = 1; i < 5; i++) {
+        const tx = chX0 + chW * (i / 5)
+        frameG.moveTo(tx, chY0).lineTo(tx, chY1).stroke({ width: 1.5, color: 0x8a6a3f, alpha: 0.7 })
+      }
+      gaugeRoot.addChild(frameG)
     }
-    back.position.set(vw * 0.935, vh * 0.03 + gr * 3.45)
-    back.eventMode = 'static'
-    back.cursor = 'pointer'
-    back.hitArea = { contains: (x: number, y: number) => x * x + y * y <= hitR * hitR }
-    back.on('pointertap', () => showMap())
-    ui.addChild(back)
-
-    // 残り敵数（画面中央上・旧ターゲット札を差し替え。ROGUE.md §5）
-    const tpW = vw * 0.42
-    const tpTex = spriteTexture('ui_target')
-    const tpH = tpTex ? (tpW / tpTex.width) * tpTex.height : badgeH
-    const tp = new Container()
-    if (tpTex) {
-      const sp = new Sprite(tpTex)
-      sp.width = tpW
-      sp.height = tpH
-      tp.addChild(sp)
+    // 低HP時のランタン炎ゆらぎ（素材の炎位置＝左端付近への簡易オーバーレイ。周期1.4〜1.8秒でランダムに小さくなる）
+    const flameFlicker = new Graphics()
+    flameFlicker.circle(gaugeW * 0.095, gaugeH * 0.3, gaugeH * 0.3).fill({ color: 0xffb347, alpha: 0.55 })
+    flameFlicker.visible = false
+    gaugeRoot.addChild(flameFlicker)
+    let flameFlickerActive = false
+    const flameFlickerLoop = () => {
+      if (!flameFlickerActive || flameFlicker.destroyed) return
+      const dur = 700 + Math.random() * 200 // 半周期0.7〜0.9秒＝全体1.4〜1.8秒（高速点滅は禁止。[B]低HP注記）
+      const scale = 0.65 + Math.random() * 0.5
+      tw.tween(flameFlicker.scale, { x: scale, y: scale }, dur, { onDone: flameFlickerLoop })
+      tw.tween(flameFlicker, { alpha: 0.3 + Math.random() * 0.45 }, dur)
     }
-    tp.position.set((vw - tpW) / 2, vh * 0.025)
-    ui.addChild(tp)
-
-    const enemyRow = new Container()
-    const enemyIconTex = spriteTexture('e_swarm') ?? spriteTexture('kokeishi') // 主力はサンドバッグ敵なのでその顔を出す
-    if (enemyIconTex) {
-      const sp = new Sprite(enemyIconTex)
-      sp.anchor.set(0.5)
-      sp.scale.set((tpH * 0.32) / Math.max(sp.texture.width, sp.texture.height))
-      sp.position.set(-tpW * 0.05, 0)
-      enemyRow.addChild(sp)
-    }
-    const enemyCountText = new Text({
+    const hpNumText = new Text({
       text: '',
-      style: { fill: UI.paperInk, fontSize: fs(0.048), fontFamily: FONT, fontWeight: 'bold' },
+      style: { fill: 0xf4e8cf, fontSize: gaugeH * 0.4, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
     })
-    enemyCountText.anchor.set(0, 0.5)
-    enemyCountText.position.set(tpW * 0.02, 0)
-    enemyRow.addChild(enemyCountText)
-    enemyRow.position.set(tpW * 0.5, tpH * 0.58)
-    tp.addChild(enemyRow)
+    hpNumText.anchor.set(1, 0.5)
+    hpNumText.position.set(chX1 - gaugeW * 0.015, (chY0 + chY1) / 2)
+    gaugeRoot.addChild(hpNumText)
 
-    const refreshFloorHud = () => {
-      hpText.text = String(Math.max(0, run.playerHp))
-      hpMaxText.text = `${Math.max(0, run.playerHp)} / ${runMaxHp}`
-      scoreText.text = board.score.toLocaleString()
-      enemyCountText.text = String(board.enemies.length)
-      updateHpDangerState()
+    /** ゲージの塗り＋被弾予告の斜線オーバーレイを最新化する（HP実数はrefreshFloorHudが都度渡す） */
+    const drawGauge = (hp: number, maxHp: number, pendingDamage: number) => {
+      const ratio = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 0
+      const lowHp = hp > 0 && ratio <= 0.25
+      backingG.clear()
+      backingG.roundRect(chX0, chY0, chW, chH, chH * 0.22).fill(0x2a1c10)
+      fillG.clear()
+      hatchLayer.removeChildren().forEach((c) => c.destroy())
+      let fillW = 0
+      if (hp > 0) {
+        fillW = lowHp ? chW / 5 : ratio * chW // 低HP：5区画中「最後の1区画」だけを塗る（[B]低HP注記1）
+        fillW = Math.max(0, Math.min(chW, fillW))
+        fillG.roundRect(chX0, chY0, fillW, chH, chH * 0.22).fill(0xd9922e)
+        fillG.roundRect(chX0, chY0, fillW, chH * 0.42, chH * 0.18).fill({ color: 0xf2c96a, alpha: 0.8 })
+        const pendW = Math.min(fillW, (Math.min(hp, pendingDamage) / maxHp) * chW)
+        if (pendW > 0.5) {
+          const px0 = chX0 + fillW - pendW
+          const mask = new Graphics()
+          mask.rect(px0, chY0, pendW, chH).fill(0xffffff)
+          const hatch = new Graphics()
+          const spacing = Math.max(3, chH * 0.4)
+          for (let x = px0 - chH; x < px0 + pendW + chH; x += spacing) hatch.moveTo(x, chY1).lineTo(x + chH, chY0)
+          hatch.stroke({ width: Math.max(1, chH * 0.14), color: 0x7a2c1c, alpha: 0.7 })
+          hatch.mask = mask
+          hatchLayer.addChild(mask, hatch)
+        }
+      }
+      hpNumText.text = `${Math.max(0, hp)} / ${maxHp}`
+      if (lowHp !== flameFlickerActive) {
+        flameFlickerActive = lowHp
+        flameFlicker.visible = lowHp
+        if (lowHp) flameFlickerLoop()
+        else {
+          flameFlicker.scale.set(1)
+          flameFlicker.alpha = 1
+        }
+      }
     }
-    refreshFloorHud()
-    /** メダリオンの数字を赤くフラッシュ→通常色（または危険域の薄赤）へ戻す */
-    const flashHp = () => {
-      hpText.style.fill = 0xff6b5a
-      tw.tween(hpText.scale, { x: 1.3, y: 1.3 }, 90, { onDone: () => tw.tween(hpText.scale, { x: 1, y: 1 }, 140) })
-      tw.delay(260, () => {
-        if (!hpText.destroyed) hpText.style.fill = hpDanger ? HP_COLOR_DANGER : HP_COLOR_NORMAL
+
+    /** 被弾の実況：80msの白い芯→180msの油揺れ（2px横揺れ）→数値わきに「-N」が浮かぶ（[B]被弾時の指示） */
+    const hpHitFx = (amount: number) => {
+      const flash = new Graphics()
+      flash.roundRect(chX0, chY0, chW, chH, chH * 0.22).fill({ color: 0xffffff, alpha: 0.95 })
+      gaugeRoot.addChild(flash)
+      tw.tween(flash, { alpha: 0 }, 80, { onDone: () => { if (!flash.destroyed) flash.destroy() } })
+      tw.delay(70, () => {
+        if (!alive() || gaugeRoot.destroyed) return
+        const bx = gaugeBaseX
+        tw.tween(gaugeRoot, { x: bx - 2 }, 45, {
+          onDone: () =>
+            tw.tween(gaugeRoot, { x: bx + 2 }, 45, {
+              onDone: () => tw.tween(gaugeRoot, { x: bx - 1 }, 45, { onDone: () => tw.tween(gaugeRoot, { x: bx }, 45) }),
+            }),
+        })
       })
-    }
-    /** プレイヤー被弾の実況：画面縁の赤ビネット短フラッシュ＋HPメダリオンから「-N」が落ちる（ROGUE.md 可視化第一波③） */
-    const hpDamageFx = (amount: number) => {
+      const dmgT = new Text({
+        text: `-${amount}`,
+        style: { fill: 0xff6b5a, fontSize: gaugeH * 0.42, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1208, width: 3 } },
+      })
+      dmgT.anchor.set(0.5)
+      dmgT.position.set(gaugeBaseX + hpNumText.position.x - hpNumText.width * 0.5, gaugeRoot.position.y - gaugeH * 0.3)
+      ui.addChild(dmgT)
+      tw.tween(dmgT.position, { y: dmgT.position.y - fs(0.05) }, 500, { ease: tw.easeInCubic })
+      tw.tween(dmgT, { alpha: 0 }, 380, { delay: 150, onDone: () => { if (!dmgT.destroyed) dmgT.destroy() } })
+      // 画面縁の赤ビネット短フラッシュ（旧実装から継続。被弾の実況として維持）
       const vignette = new Graphics()
       vignette.rect(0, 0, vw, vh).stroke({ width: vw * 0.05, color: 0xd6432f, alpha: 1 })
       vignette.alpha = 0
       playRoot.addChild(vignette)
       tw.tween(vignette, { alpha: 0.6 }, 90, {
-        onDone: () =>
-          tw.tween(vignette, { alpha: 0 }, 260, {
-            onDone: () => {
-              if (!vignette.destroyed) vignette.destroy()
-            },
-          }),
-      })
-      const dmgT = new Text({
-        text: `-${amount}`,
-        style: { fill: 0xff6b5a, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1208, width: 3 } },
-      })
-      dmgT.anchor.set(0.5)
-      dmgT.position.set(hpText.position.x, hpText.position.y)
-      ui.addChild(dmgT)
-      tw.tween(dmgT.position, { y: dmgT.position.y + fs(0.09) }, 500, { ease: tw.easeInCubic })
-      tw.tween(dmgT, { alpha: 0 }, 380, {
-        delay: 150,
-        onDone: () => {
-          if (!dmgT.destroyed) dmgT.destroy()
-        },
+        onDone: () => tw.tween(vignette, { alpha: 0 }, 260, { onDone: () => { if (!vignette.destroyed) vignette.destroy() } }),
       })
     }
 
-    /** 可視化第二波②：敵→探窟隊HUDへ飛ぶ赤い弧（軌跡＋着弾の小玉）。着弾点でHPメダリオンのフラッシュ演出に繋ぐ */
+    // メニューボタン（右。歯車/戻るを統合。[A]「歯車1個のメニュー内へ設定／ランを中断／マップ確認を格納」）
+    const menuTex = spriteTexture('ui_menu') ?? spriteTexture('ui_gear')
+    const menuBtn = new Container()
+    if (menuTex) {
+      const sp = new Sprite(menuTex)
+      sp.anchor.set(0.5)
+      sp.scale.set(hudIconD / Math.max(menuTex.width, menuTex.height))
+      menuBtn.addChild(sp)
+    } else {
+      const g = new Graphics()
+      g.roundRect(-hudIconD / 2, -hudIconD / 2, hudIconD, hudIconD, hudIconD * 0.22).fill(UI.wood).stroke({ width: 3, color: UI.brass })
+      menuBtn.addChild(g)
+    }
+    const menuHitR = Math.max(hudIconD / 2, 22) // 最低44px相当のタップ領域
+    menuBtn.position.set(vw * 0.96 - hudIconD / 2, hudCenterY)
+    menuBtn.eventMode = 'static'
+    menuBtn.cursor = 'pointer'
+    menuBtn.hitArea = { contains: (x: number, y: number) => x * x + y * y <= menuHitR * menuHitR }
+    let menuOpen = false
+    let menuOverlay: Container | null = null
+    let menuPanel: Container | null = null
+    let menuPrevInputLocked = false
+    const closeRunMenu = () => {
+      if (menuOverlay && !menuOverlay.destroyed) menuOverlay.destroy()
+      if (menuPanel && !menuPanel.destroyed) menuPanel.destroy({ children: true })
+      menuOverlay = null
+      menuPanel = null
+      if (menuOpen) inputLocked = menuPrevInputLocked
+      menuOpen = false
+    }
+    const openRunMenu = () => {
+      menuPrevInputLocked = inputLocked
+      menuOpen = true
+      inputLocked = true
+      const overlay = new Container()
+      overlay.eventMode = 'static'
+      overlay.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= vw && y >= 0 && y <= vh }
+      overlay.on('pointertap', () => closeRunMenu())
+      ui.addChild(overlay)
+      menuOverlay = overlay
+
+      const panelW = vw * 0.58
+      const rowH = Math.max(44, vh * 0.06)
+      const panelH = rowH * 2
+      const panel = new Container()
+      const bg = new Graphics()
+      bg.roundRect(0, 0, panelW, panelH, 12).fill({ color: 0x241a10, alpha: 0.97 }).stroke({ width: 2, color: UI.brass })
+      panel.addChild(bg)
+      const muteLabel = () => (isMuted() ? '設定（ミュート：オン）' : '設定（ミュート：オフ）')
+      const muteRow = new Text({ text: muteLabel(), style: { fill: 0xf4e8cf, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' } })
+      muteRow.anchor.set(0, 0.5)
+      muteRow.position.set(panelW * 0.08, rowH * 0.5)
+      panel.addChild(muteRow)
+      const muteHit = new Container()
+      muteHit.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= panelW && y >= 0 && y <= rowH }
+      muteHit.eventMode = 'static'
+      muteHit.cursor = 'pointer'
+      muteHit.on('pointertap', () => {
+        toggleMute()
+        muteRow.text = muteLabel()
+      })
+      panel.addChild(muteHit)
+      const divider = new Graphics()
+      divider.moveTo(panelW * 0.06, rowH).lineTo(panelW * 0.94, rowH).stroke({ width: 1.5, color: UI.brass, alpha: 0.5 })
+      panel.addChild(divider)
+      const abandonRow = new Text({
+        text: 'ランを中断して拠点へ',
+        style: { fill: 0xe0a89c, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' },
+      })
+      abandonRow.anchor.set(0, 0.5)
+      abandonRow.position.set(panelW * 0.08, rowH * 1.5)
+      panel.addChild(abandonRow)
+      const abandonHit = new Container()
+      abandonHit.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= panelW && y >= rowH && y <= rowH * 2 }
+      abandonHit.eventMode = 'static'
+      abandonHit.cursor = 'pointer'
+      abandonHit.on('pointertap', () => {
+        closeRunMenu()
+        showMap()
+      })
+      panel.addChild(abandonHit)
+      panel.position.set(vw * 0.96 - panelW, hudBottom + vh * 0.012)
+      ui.addChild(panel)
+      menuPanel = panel
+    }
+    menuBtn.on('pointertap', () => (menuOpen ? closeRunMenu() : openRunMenu()))
+    ui.addChild(menuBtn)
+
+    /** 遭遇帯の更新：残敵/ボス情報＋次行動の要約、被弾予告の合計ダメージを返す（HPゲージへ渡す） */
+    const refreshEncounter = (): number => {
+      const info = computeEncounterInfo(board)
+      if (info.boss) {
+        enemyChip.text.text = `${BOSS_NAME}\nHP ${Math.max(0, info.boss.hp)} / ${info.boss.maxHp}`
+      } else {
+        enemyChip.text.text = `残敵 ${info.aliveCount}`
+      }
+      const lethal = run.playerHp > 0 && info.pendingDamage > 0 && run.playerHp - info.pendingDamage <= 0
+      if (lethal) {
+        actionChip.text.text = '次の攻撃で倒れる'
+        actionChip.text.style.fill = 0xff8a70
+      } else if (info.minAttackTurns !== null) {
+        actionChip.text.text = `次の攻撃まで あと${info.minAttackTurns}手`
+        actionChip.text.style.fill = UI.badgeText
+      } else {
+        actionChip.text.text = '静観中'
+        actionChip.text.style.fill = UI.badgeText
+      }
+      bustGlow.visible = info.pendingDamage > 0
+      return info.pendingDamage
+    }
+
+    const refreshFloorHud = () => {
+      const pendingDamage = refreshEncounter()
+      drawGauge(Math.max(0, run.playerHp), runMaxHp, pendingDamage)
+    }
+    refreshFloorHud()
+
+    /** 可視化第二波②：敵→探窟隊HUDへ飛ぶ赤い弧（軌跡＋着弾の小玉）。着弾点でHPゲージのフラッシュ演出に繋ぐ */
     const enemyAttackTrailFx = (fromX: number, fromY: number, toX: number, toY: number) => {
       const g = new Graphics()
       const midX = (fromX + toX) / 2
@@ -773,9 +932,12 @@ async function boot() {
         style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.8, breakWords: true },
       })
       const padY = vh * 0.014
-      const h = fs(0.05) + descT.height + padY * 3
+      // 四辺が完全なカード素材を使う（旧 ui_parchment は左縁が欠けており、実機で切れて見えた）
+      const ptex = spriteTexture('ui_card') ?? spriteTexture('ui_panel')
+      // 見出し帯（上24%）に名前、その下の羊皮紙に本文を置く。素材比率を保つため高さは内容から決めて等比で使わずスライス的に伸ばす
+      const bandH = ptex ? w * (0.24 * (450 / 760)) : fs(0.05)
+      const h = bandH + descT.height + padY * 3
       const box = new Container()
-      const ptex = spriteTexture('ui_parchment')
       if (ptex) {
         const sp = new Sprite(ptex)
         sp.width = w
@@ -786,8 +948,9 @@ async function boot() {
         bg.roundRect(0, 0, w, h, 12).fill(UI.paper)
         box.addChild(bg)
       }
-      nameT.position.set(w * 0.06, padY)
-      descT.position.set(w * 0.06, fs(0.05) + padY)
+      nameT.style.fill = 0xf4e8cf // 濃色の見出し帯に載るので明色に
+      nameT.position.set(w * 0.09, bandH * 0.5 - fs(0.036) * 0.6)
+      descT.position.set(w * 0.09, bandH + padY)
       box.addChild(nameT, descT)
       // 右上の閉じる×（GraphicsはPixi v8でaddChild非推奨のためContainerに包む）
       const closeR = Math.max(fs(0.028), 16)
@@ -927,7 +1090,7 @@ async function boot() {
       boosterBar.addChild(m)
       upgradeIconG.set(id, m)
     })
-    boosterBar.position.set(0, boardTop + view.S * H + Math.min(vw * 0.1, vh * 0.05))
+    boosterBar.position.set(0, dockTop) // 盤面との間はdockGap（>=8px）確保済み（[A]ビルドドック必達条件）
     ui.addChild(boosterBar)
     refreshProgressBadges() // 可視化第二波④：層開始時点の進捗（あれば）を反映
 
@@ -994,25 +1157,23 @@ async function boot() {
       bounceUpgradeIcon(id)
       if (at) upgradeFirePulseFx(id, at)
     }
-    /** 可視化第二波②：「どの敵が殴ったか」を軌跡で示してから被弾演出（既存flashHp/hpDamageFx）へ繋ぐ */
+    /** 可視化第二波②：「どの敵が殴ったか」を軌跡で示してからHPゲージの被弾演出（hpHitFx）へ繋ぐ */
     view.onEnemyAttack = (enemyId, damage) => {
       const en = board.enemies.find((e) => e.id === enemyId)
       const cell = en ? (en.kind === 'boss' ? { x: W - 1, y: en.bossFrontRow } : en.cells[0]) : null
+      const toX = gaugeRoot.position.x + (chX0 + chX1) / 2
+      const toY = gaugeRoot.position.y + (chY0 + chY1) / 2
       if (cell) {
         const fromX = view.root.position.x + (cell.x + 0.5) * view.S
         const fromY = view.root.position.y + (cell.y + 0.5) * view.S
-        const toX = hpText.position.x
-        const toY = hpText.position.y
         enemyAttackTrailFx(fromX, fromY, toX, toY)
         tw.delay(220, () => {
           if (!alive()) return
-          flashHp()
-          hpDamageFx(damage)
+          hpHitFx(damage)
         })
       } else {
         // 敵の位置が特定できない（撃破直後など）場合も被弾演出自体は必ず出す
-        flashHp()
-        hpDamageFx(damage)
+        hpHitFx(damage)
       }
     }
 
@@ -1070,11 +1231,9 @@ async function boot() {
       refreshProgressBadges() // 可視化第二波④：1手ごとに進捗（あれば）を反映
       for (const e of evs) {
         if (e.t === 'poison-triggered') {
-          flashHp()
-          hpDamageFx(1)
+          hpHitFx(1)
         } else if (e.t === 'boss-slam') {
-          flashHp()
-          hpDamageFx(e.damage)
+          hpHitFx(e.damage)
         }
       }
       const cleared = evs.some((e) => e.t === 'floor-clear')
@@ -1228,9 +1387,29 @@ async function boot() {
         if (condition) addRow('条件', condition)
         addRow('効果', effect)
 
-        // ③ 相性：所持強化のうち系統一致 or フック種一致を最大2件（所持済みのみを見せるため常に金）
+        // ③ 相性：所持強化のうち系統一致 or フック種一致を最大2件
+        // 金文字は羊皮紙に埋もれて読めなかったため、色に頼らず「濃色の錠剤に明色文字」で示す（可読性優先）
         const partners = synergyPartners(owned, opt)
-        if (partners.length) addRow('相性', partners.map((p) => p.name).join('／'), 0xd9a441)
+        if (partners.length) {
+          const l = new Text({ text: '相性', style: labelStyle })
+          l.position.set(insetX, rowY)
+          card.addChild(l)
+          const txt = new Text({
+            text: '◆ ' + partners.map((p) => p.name).join('　◆ '),
+            style: { ...contentStyle, fill: 0xf6ecd4, fontSize: cardH * 0.06 },
+          })
+          const padX = cardH * 0.035
+          const padY2 = cardH * 0.018
+          const pill = new Graphics()
+          pill
+            .roundRect(contentX, rowY - padY2 * 0.4, txt.width + padX * 2, txt.height + padY2 * 1.4, cardH * 0.05)
+            .fill({ color: 0x4a3a1e, alpha: 0.92 })
+            .stroke({ width: 1.5, color: 0xd9a441 })
+          card.addChild(pill)
+          txt.position.set(contentX + padX, rowY + padY2 * 0.3)
+          card.addChild(txt)
+          rowY += Math.max(l.height, txt.height + padY2 * 2) + cardH * 0.03
+        }
 
         // ④ 獲得ボーナス（starterDeschありのみ）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
         if (opt.starterDesc) {
