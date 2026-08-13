@@ -607,10 +607,13 @@ async function boot() {
       depthBadge.addChild(g)
     }
     const depthText = new Text({
-      text: `${floor} / ${FLOORS.length}`,
+      text: `${floor}/${FLOORS.length}`, // 空白入りだと円内に収まらない
       style: { fill: 0xf4e8cf, fontSize: hudIconD * 0.3, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
     })
     depthText.anchor.set(0.5)
+    // 円内の空欄に必ず収める（層が2桁になっても溢れないよう実測して縮める）
+    const depthFitW = hudIconD * 0.6
+    if (depthText.width > depthFitW) depthText.scale.set(depthFitW / depthText.width)
     depthText.position.set(0, hudIconD * 0.15)
     depthBadge.addChild(depthText)
     depthBadge.position.set(vw * 0.04 + hudIconD / 2, hudCenterY)
@@ -619,7 +622,7 @@ async function boot() {
     // HPゲージ「探窟灯の油槽」（[B]）：幅優先で素材アスペクトを保ち、HUD行の高さに収まらなければ縮める
     const oilTex = spriteTexture('ui_oil')
     let gaugeW = Math.min(248, Math.max(190, vw * 0.54))
-    let gaugeH = gaugeW * (241 / 640)
+    let gaugeH = gaugeW * (196 / 640) // 素材の実寸比（切り直し後 640x196）
     const gaugeMaxH = hudRowH * 0.98
     if (gaugeH > gaugeMaxH) {
       gaugeH = gaugeMaxH
@@ -630,10 +633,10 @@ async function boot() {
     gaugeRoot.position.set(gaugeBaseX, hudCenterY - gaugeH / 2)
     ui.addChild(gaugeRoot)
     // 内側チャンネル比率：素材ありは実測値、無ければコード描画用に広めの仮想チャンネルを使う
-    const chX0 = gaugeW * (oilTex ? 0.2156 : 0.14)
-    const chX1 = gaugeW * (oilTex ? 0.9984 : 0.98)
-    const chY0 = gaugeH * (oilTex ? 0.4979 : 0.26)
-    const chY1 = gaugeH * (oilTex ? 0.8299 : 0.74)
+    const chX0 = gaugeW * (oilTex ? 0.175 : 0.14)
+    const chX1 = gaugeW * (oilTex ? 0.9375 : 0.98)
+    const chY0 = gaugeH * (oilTex ? 0.4949 : 0.26)
+    const chY1 = gaugeH * (oilTex ? 0.8214 : 0.74)
     const chW = chX1 - chX0
     const chH = chY1 - chY0
     const backingG = new Graphics()

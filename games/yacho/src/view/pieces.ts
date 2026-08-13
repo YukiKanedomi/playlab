@@ -1,5 +1,5 @@
 // 駒テクスチャ供給。生成アセット（assets/sprites）優先、無ければプレースホルダー（Graphics）。
-import { Assets, Container, Graphics, Rectangle, RenderTexture, Renderer, Texture } from 'pixi.js'
+import { Assets, Container, Graphics, RenderTexture, Renderer, Texture } from 'pixi.js'
 import type { Piece } from '../core/types'
 
 // 生成アセット AD v3（user_v3 モック参照・256px透過）。vite が URL 解決する
@@ -47,7 +47,7 @@ const SPRITE_URLS: Record<string, URL> = {
   // ドラフトカード（四辺完全・上部に見出し帯。帯の下端は高さの約24%＝実測107/450）
   ui_card: new URL('../../assets/ui/draft_card.png', import.meta.url),
   // ランHUD v5（codex_consult_ui.md [A][B]）。油槽ゲージは内側が透過で、油量はコード描画する。
-  // 実測: 640x241 / 内側チャンネル x=0.2156〜0.9984, y=0.4979〜0.8299（この比率で塗る）
+  // 実測: 640x196 / 内側チャンネル x=0.1750〜0.9375, y=0.4949〜0.8214（この比率で塗る）
   ui_oil: new URL('../../assets/ui/hud_oil.png', import.meta.url),
   ui_depth: new URL('../../assets/ui/hud_depth.png', import.meta.url),
   ui_menu: new URL('../../assets/ui/hud_menu.png', import.meta.url),
@@ -112,17 +112,12 @@ export function spriteTexture(key: string): Texture | null {
   return loaded.get(key) ?? null
 }
 
-let depthBadgeTexCache: Texture | null | undefined
 /**
- * hud_depth.png は左右2アイコンの簡易シート（左＝予備・未使用、右＝下向き矢印つきの円形深度バッジ）。
- * 右半分だけを切り出して使う（ROGUE UI再設計：深度バッジ用。codex_consult_ui.md [A]）。
+ * 深度バッジ。素材は内容ベースで切り直したため単体アイコン1枚になっている
+ * （旧版は横長ゲージが隣セルへはみ出したまま切っていたため2アイコン混在だった）。
  */
 export function depthBadgeTexture(): Texture | null {
-  if (depthBadgeTexCache !== undefined) return depthBadgeTexCache
-  const base = loaded.get('ui_depth')
-  if (!base) return (depthBadgeTexCache = null)
-  const half = base.width / 2
-  return (depthBadgeTexCache = new Texture({ source: base.source, frame: new Rectangle(half, 0, half, base.height) }))
+  return loaded.get('ui_depth') ?? null
 }
 
 // ART.md §2 パレット
