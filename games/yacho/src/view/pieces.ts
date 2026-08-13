@@ -5,10 +5,11 @@ import type { Piece } from '../core/types'
 // 生成アセット AD v3（user_v3 モック参照・256px透過）。vite が URL 解決する
 // 色スロット: 0=鉱石(黄) 1=葉(緑) 2=結晶(青) 3=花(紫) 4=キノコ(赤)
 const SPRITE_URLS: Record<string, URL> = {
-  n0: new URL('../../assets/sprites3/p0_ore.png', import.meta.url),
+  // ローグ4系統（ROGUE.md §2）: 0=ギア 1=葉(植物) 2=結晶(鉱物) 3=遺物 4=キノコ(植物)
+  n0: new URL('../../assets/sprites3/p0_gear.png', import.meta.url),
   n1: new URL('../../assets/sprites3/p1_leaf.png', import.meta.url),
   n2: new URL('../../assets/sprites3/p2_crystal.png', import.meta.url),
-  n3: new URL('../../assets/sprites3/p3_flower.png', import.meta.url),
+  n3: new URL('../../assets/sprites3/p3_relic.png', import.meta.url),
   n4: new URL('../../assets/sprites3/p4_mushroom.png', import.meta.url),
   harpoon: new URL('../../assets/sprites3/s_wrench.png', import.meta.url),
   hamushi: new URL('../../assets/sprites3/s_compass.png', import.meta.url),

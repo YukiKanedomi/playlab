@@ -1,11 +1,17 @@
-// 『そろえて、しるす。』エントリ。マップ（縦断面図）⇄ プレイの2シーン構成。
+// 『そろえて、しるす。』ローグライク・エントリ。拠点（旧・縦断面図マップ流用）⇄ 層プレイの2シーン構成。
+// ROGUE.md 準拠（第3弾b＝ラン進行の実装）。旧30レベル制の画面遷移は廃止。
 import { Application, Container, Graphics, Sprite, Text } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
+import { createRunState, type RunState } from './core/run'
+import { FLOORS } from './core/floors'
+import { UPGRADES, type UpgradeDef } from './core/upgrades'
+import { buildRunName, UPGRADE_CATEGORY } from './core/runname'
+import { makeRng, randInt, type Rng } from './core/rng'
 import { BoardView } from './view/BoardView'
-import { PAL, loadSprites, pieceTexture, spriteTexture, themeForLevel } from './view/pieces'
-import { loadSave, persistSave, clearReward, EXTRA_MOVES, EXTRA_MOVES_COST, type SaveData } from './core/save'
-import type { Goal } from './core/types'
+import { PAL, loadSprites, spriteTexture, themeForLevel } from './view/pieces'
+import { loadSave, type SaveData } from './core/save'
+import type { BoardEvent, LevelDef } from './core/types'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
 
@@ -20,6 +26,72 @@ const UI = {
 
 // 古い図鑑ふうの明朝（index.html で読み込み。未着ならserifへフォールバック）
 const FONT = '"Shippori Mincho", serif'
+
+// ---- ラン記録（拠点の「さいこう とうたつ」表示。ROGUE.md §8） ----
+const ROGUE_BEST_KEY = 'yacho-rogue-best'
+const loadRogueBest = (): number => {
+  const n = Number(localStorage.getItem(ROGUE_BEST_KEY) ?? '0')
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+}
+const saveRogueBest = (floor: number) => {
+  if (floor > loadRogueBest()) localStorage.setItem(ROGUE_BEST_KEY, String(floor))
+}
+
+/** 層番号→テーマ疑似ID（themeForLevel流用。1-4=森/5-8=機械/9-10=結晶。ROGUE.md §6/§9） */
+const themeFloorId = (floor: number) => (floor <= 4 ? floor : floor <= 8 ? floor + 10 : floor + 20)
+
+/**
+ * 層1つぶんの盤面定義。ローグは手数制・ゴール駒を廃止（ROGUE.md §6：勝敗は敵殲滅とHPで判定）。
+ * 旧LevelDefの moves/goals は Board.won/lost 判定にしか使わないため、実質発火しない値で埋めて無効化する。
+ */
+const buildFloorLevelDef = (floor: number, seed: number): LevelDef => ({
+  id: floor,
+  seed,
+  moves: 9999,
+  colors: 5,
+  goals: [{ type: 'color', color: 0, count: 999999 }],
+  layout: Array(8).fill('........'),
+})
+
+/** 所持強化とのシナジー判定（簡易版）：系統一致 or フック種が同じ＝「因果が繋がる」とみなす（ROGUE.md §4） */
+function isSynergyWith(owned: UpgradeDef[], candidate: UpgradeDef): boolean {
+  const candCat = UPGRADE_CATEGORY[candidate.id]
+  for (const o of owned) {
+    if (UPGRADE_CATEGORY[o.id] === candCat) return true
+    for (const oh of o.hooks) for (const ch of candidate.hooks) if (oh.on === ch.on) return true
+  }
+  return false
+}
+
+/**
+ * ドラフト3択（ROGUE.md §4）：所持済みとシナジーする2枠＋無関係1枠。同一強化の重複なし。
+ * 所持0（初回ドラフト）はシナジー元が無いので自然に3枠ともランダムになる。
+ */
+function pickDraftOptions(ownedIds: string[], rng: Rng): UpgradeDef[] {
+  const owned = UPGRADES.filter((u) => ownedIds.includes(u.id))
+  let remaining = UPGRADES.filter((u) => !ownedIds.includes(u.id))
+  const take = (pred: (u: UpgradeDef) => boolean): UpgradeDef | null => {
+    const cands = remaining.filter(pred)
+    if (!cands.length) return null
+    const picked = cands[randInt(rng, cands.length)]
+    remaining = remaining.filter((u) => u.id !== picked.id)
+    return picked
+  }
+  const synergy = (u: UpgradeDef) => isSynergyWith(owned, u)
+  const picks: UpgradeDef[] = []
+  for (let i = 0; i < 2; i++) {
+    const p = take(synergy) ?? take(() => true)
+    if (p) picks.push(p)
+  }
+  const off = take((u) => !synergy(u)) ?? take(() => true)
+  if (off) picks.push(off)
+  // 表示順をシャッフル（決定的）
+  for (let i = picks.length - 1; i > 0; i--) {
+    const j = randInt(rng, i + 1)
+    ;[picks[i], picks[j]] = [picks[j], picks[i]]
+  }
+  return picks
+}
 
 const app = new Application()
 
@@ -37,7 +109,7 @@ async function boot() {
   const vw = app.screen.width
   const vh = app.screen.height
   const fs = (r: number) => Math.round(vw * r)
-  const save: SaveData = loadSave()
+  const save: SaveData = loadSave() // 旧セーブは拠点の装飾（ノード色/星）にのみ流用。ローグ進行では更新しない
 
   const mapRoot = new Container()
   const playRoot = new Container()
@@ -48,7 +120,35 @@ async function boot() {
     if (bgmStarted) startBgm(themeForLevel(themeId))
   }
 
-  // =============== マップシーン（縦断面図） ===============
+  /** 焼き込み文言（「つぎへ」）が乗った既存ボタン素材の上に、独自ラベルで覆って再利用する（MVP：好評ならv2で焼き込み） */
+  const makeCoveredButton = (label: string, texKey: string, width: number): Container => {
+    const c = new Container()
+    const tex = spriteTexture(texKey) ?? spriteTexture('ui_button_next')
+    let h: number
+    if (tex) {
+      const sp = new Sprite(tex)
+      sp.anchor.set(0.5)
+      sp.scale.set(width / tex.width)
+      c.addChild(sp)
+      h = (width / tex.width) * tex.height
+      const cover = new Graphics()
+      cover.roundRect(-width * 0.42, -h * 0.3, width * 0.84, h * 0.6, h * 0.22).fill({ color: 0x241a10, alpha: 0.96 })
+      c.addChild(cover)
+    } else {
+      h = width * 0.32
+      const g = new Graphics()
+      g.roundRect(-width / 2, -h / 2, width, h, 14).fill(UI.wood).stroke({ width: 3, color: UI.brass })
+      c.addChild(g)
+    }
+    const t = new Text({ text: label, style: { fill: 0xf4e8cf, fontSize: fs(0.044), fontFamily: FONT, fontWeight: 'bold' } })
+    t.anchor.set(0.5)
+    c.addChild(t)
+    // Container自体には形が無いため hitArea が無いと static でも当たり判定を持てない（子のeventModeにも依存しない）
+    c.hitArea = { contains: (x: number, y: number) => x >= -width / 2 && x <= width / 2 && y >= -h / 2 && y <= h / 2 }
+    return c
+  }
+
+  // =============== 拠点シーン（旧・縦断面図マップを流用） ===============
   const MAP_H = vh * 4.2 // ノード密度を上げる（背景の縦解像度と両立する上限）
   let mapScroll = 0
 
@@ -74,7 +174,7 @@ async function boot() {
     dim.rect(0, 0, vw, MAP_H).fill({ color: 0x0a1420, alpha: 0.18 })
     content.addChild(dim)
 
-    // レベルノード（上=浅い→下=深い）
+    // レベルノード（上=浅い→下=深い。ROGUE: タップ起動は撤去し、装飾としてのみ残す）
     const nodeTex = spriteTexture('map_node')
     const nodeGoldTex = spriteTexture('map_node_gold')
     const topPad = vh * 0.19
@@ -220,52 +320,37 @@ async function boot() {
         }
       }
       node.position.set(nx, ny)
-      if (!locked) {
-        node.eventMode = 'static'
-        node.cursor = 'pointer'
-        const id = i
-        node.on('pointertap', () => {
-          if (mapDragged) return
-          startLevel(id)
-        })
-      }
+      // ROGUE: レベルノードのタップ起動は撤去。描画は「拠点」の装飾として残す（ROGUE.md §8）
       content.addChild(node)
     }
 
-    // ヘッダー（全幅バー廃止。左=コイン札／右=星札の小型プラーク2枚＋小さな題字）
+    // ヘッダー（コイン札は非表示。右に「さいこう とうたつ」プラーク＝ローグの最深記録）
     const header = new Container()
-    const plaque = (x: number) => {
+    const plaque = (x: number, w: number) => {
       const g = new Graphics()
-      g.roundRect(x, vh * 0.025, vw * 0.24, vh * 0.045, 10).fill({ color: 0x2e2416, alpha: 0.82 })
-      g.roundRect(x, vh * 0.025, vw * 0.24, vh * 0.045, 10).stroke({ width: 1.5, color: UI.brass })
+      g.roundRect(x, vh * 0.025, w, vh * 0.045, 10).fill({ color: 0x2e2416, alpha: 0.82 })
+      g.roundRect(x, vh * 0.025, w, vh * 0.045, 10).stroke({ width: 1.5, color: UI.brass })
       return g
     }
-    header.addChild(plaque(vw * 0.02))
-    header.addChild(plaque(vw * 0.74))
-    const coinTex = spriteTexture('ui_coin')
-    if (coinTex) {
-      const c = new Sprite(coinTex)
-      c.anchor.set(0.5)
-      c.scale.set((vh * 0.028) / Math.max(coinTex.width, coinTex.height))
-      c.position.set(vw * 0.07, vh * 0.0475)
-      header.addChild(c)
-    }
-    const coinT = new Text({
-      text: save.coins.toLocaleString(),
-      style: { fill: 0xe5d8bb, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
+    const bestX = vw * 0.56
+    const bestW = vw * 0.42
+    header.addChild(plaque(bestX, bestW))
+    const bestT = new Text({
+      text: `さいこう とうたつ ${loadRogueBest()}そう`,
+      style: { fill: 0xd8b855, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' },
     })
-    coinT.anchor.set(0, 0.5)
-    coinT.position.set(vw * 0.11, vh * 0.0475)
-    header.addChild(coinT)
-    const starTotal = save.stars.reduce((a, b) => a + (b || 0), 0)
-    const starT = new Text({
-      text: `★ ${starTotal}`,
-      style: { fill: 0xd8b855, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
-    })
-    starT.anchor.set(0.5)
-    starT.position.set(vw * 0.86, vh * 0.0475)
-    header.addChild(starT)
+    bestT.anchor.set(0.5)
+    bestT.position.set(bestX + bestW / 2, vh * 0.0475)
+    header.addChild(bestT)
     mapRoot.addChild(header)
+
+    // 中央「ランかいし」ボタン（拠点の主導線。ROGUE.md §8）
+    const startBtn = makeCoveredButton('ランかいし', 'next_forest', vw * 0.58)
+    startBtn.position.set(vw / 2, vh * 0.5)
+    startBtn.eventMode = 'static'
+    startBtn.cursor = 'pointer'
+    startBtn.on('pointertap', () => startRun())
+    mapRoot.addChild(startBtn)
 
     // スクロール（ドラッグ）
     const clampScroll = (v: number) => Math.min(0, Math.max(-(MAP_H - vh), v))
@@ -277,20 +362,17 @@ async function boot() {
     let scrollStart = 0
     mapRoot.eventMode = 'static'
     mapRoot.hitArea = app.screen
-    mapDragged = false
     mapRoot.on('pointerdown', (e) => {
       if (!bgmStarted) {
         bgmStarted = true
-        startBgm(themeForLevel(save.unlocked + 1))
+        startBgm(themeForLevel(1))
       }
       dragStart = e.global.y
       scrollStart = mapScroll
-      mapDragged = false
     })
     mapRoot.on('pointermove', (e) => {
       if (dragStart === null) return
       const dy = e.global.y - dragStart
-      if (Math.abs(dy) > 8) mapDragged = true
       mapScroll = clampScroll(scrollStart + dy)
       content.position.y = mapScroll
     })
@@ -300,7 +382,6 @@ async function boot() {
     mapRoot.on('pointerup', endDrag)
     mapRoot.on('pointerupoutside', endDrag)
   }
-  let mapDragged = false
 
   const showMap = () => {
     playRoot.visible = false
@@ -308,37 +389,47 @@ async function boot() {
     playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
     mapRoot.visible = true
     buildMap()
-    ensureBgm(save.unlocked + 1)
+    ensureBgm(1)
   }
 
-  // =============== プレイシーン ===============
+  // =============== ラン・層プレイ ===============
   let board!: Board
   let view!: BoardView
   let inputLocked = false
-  let currentLevelId = 1
+  let runState: RunState | null = null
+  let runSeed = 0
   let sceneEpoch = 0 // シーン再構築の世代。跨いだ遅延コールバックは無効化
 
-  const startLevel = (id: number) => {
-    currentLevelId = id
+  const draftRng = (floor: number): Rng => makeRng((runSeed + floor * 104729 + 17) | 0)
+
+  const startRun = () => {
+    runState = createRunState()
+    runSeed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) | 0
     mapRoot.visible = false
     playRoot.visible = true
-    playRoot.removeAllListeners() // 旧シーンの入力ハンドラを掃除（破棄済みオブジェクト参照の防止）
+    playRoot.removeAllListeners()
     playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
-    buildPlayScene(LEVELS[id - 1])
-    ensureBgm(id)
+    buildFloorScene(1)
+    ensureBgm(themeFloorId(1))
   }
 
-  const buildPlayScene = (def: (typeof LEVELS)[0]) => {
-    board = new Board(def)
+  const buildFloorScene = (floor: number) => {
+    const run = runState!
+    run.floor = floor
+    const floorDef = FLOORS[floor - 1]
+    const floorSeed = (runSeed + floor * 7919) | 0
+    board = new Board(buildFloorLevelDef(floor, floorSeed), run, floorDef)
     inputLocked = false
     const epoch = ++sceneEpoch
     const alive = () => epoch === sceneEpoch // このシーンがまだ生きているか
+    const themeId = themeFloorId(floor)
+    const theme = themeForLevel(themeId)
 
     // 背景
     const bgSprite = new Sprite()
     bgSprite.anchor.set(0.5)
     bgSprite.position.set(vw / 2, vh / 2)
-    const tex = spriteTexture(`bg_${themeForLevel(def.id)}`)
+    const tex = spriteTexture(`bg_${theme}`)
     if (tex) {
       bgSprite.texture = tex
       const s = Math.max(vw / tex.width, vh / tex.height)
@@ -349,7 +440,7 @@ async function boot() {
     bgDim.rect(0, 0, vw, vh).fill({ color: 0x2b2118, alpha: 0.1 }) // 暖色の沈め（青黒で潰さない）
     playRoot.addChild(bgDim)
 
-    // 4帯レイアウト（AD v3.1）: HUD帯(〜0.20) / キャラ帯(0.20〜0.35) / 盤(0.35〜0.78) / ブースター帯(〜0.90)
+    // 4帯レイアウト（AD v3.1流用）: HUD帯(〜0.20) / キャラ帯(0.20〜0.35) / 盤(0.35〜0.78) / ブースター帯(〜0.90)
     const boardSize = Math.min(vw * 0.9, vh * 0.48)
     view = new BoardView(board, app.renderer, boardSize)
     const bw = view.S * W
@@ -357,8 +448,8 @@ async function boot() {
     view.root.position.set((vw - bw) / 2, boardTop)
     playRoot.addChild(view.root)
 
-    // ---------- 探窟家バスト（HUDと盤の間から覗く。盤より先に足して奥に置く） ----------
-    const bustTex = spriteTexture(`bust_${themeForLevel(def.id)}`)
+    // ---------- 探窟家バスト ----------
+    const bustTex = spriteTexture(`bust_${theme}`)
     if (bustTex) {
       const bust = new Sprite(bustTex)
       bust.anchor.set(0.5, 1)
@@ -368,11 +459,11 @@ async function boot() {
       playRoot.addChildAt(bust, playRoot.getChildIndex(view.root))
     }
 
-    // ---------- HUD（AD v3: メダリオン/中央プラーク/スコアバッジ） ----------
+    // ---------- HUD ----------
     const ui = new Container()
     playRoot.addChild(ui)
 
-    // のこりメダリオン（左上・円形ブロンズ。小型化）
+    // 探窟隊HP（左上メダリオン。旧「のこりメダリオン」を差し替え。ROGUE.md §5）
     const badgeW = vw * 0.16
     const plaqueTex = spriteTexture('ui_moves')
     let badgeH = badgeW
@@ -384,16 +475,15 @@ async function boot() {
       sp.position.set(vw * 0.035, vh * 0.022)
       ui.addChild(sp)
     }
-    const movesText = new Text({
+    const hpText = new Text({
       text: '',
       style: { fill: 0xe5d8bb, fontSize: fs(0.064), fontFamily: FONT, fontWeight: 'bold' },
     })
-    movesText.anchor.set(0.5)
-    // メダリオンの暗い中心（リボン下）に合わせる
-    movesText.position.set(vw * 0.035 + badgeW / 2, vh * 0.022 + badgeH * 0.58)
-    ui.addChild(movesText)
+    hpText.anchor.set(0.5)
+    hpText.position.set(vw * 0.035 + badgeW / 2, vh * 0.022 + badgeH * 0.58)
+    ui.addChild(hpText)
 
-    // スコアバッジ（小型・中央札と重ならない位置。「スコア」は焼き込み・数字のみ描画）
+    // スコアバッジ（現状のまま）
     const scoreBadgeTex = spriteTexture('ui_score')
     const sbW = vw * 0.24
     let sbH = sbW * 0.39
@@ -415,7 +505,7 @@ async function boot() {
     scoreText.position.set(sbX + sbW * 0.88, sbY + sbH * 0.5)
     ui.addChild(scoreText)
 
-    // 歯車（ミュート）と戻る（青銅メダリオン・右上に縦並び。小型化＋タップ領域確保）
+    // 歯車（ミュート）と戻る（現状のまま。戻る=ラン放棄で拠点へ）
     const gearTex = spriteTexture('ui_gear')
     const gr = vw * 0.042
     const hitR = Math.max(gr, 22) // 最低44px相当のタップ領域
@@ -459,7 +549,7 @@ async function boot() {
     back.on('pointertap', () => showMap())
     ui.addChild(back)
 
-    // ターゲット札（画面中央上・リボン見出し焼き込み。小型化）
+    // 残り敵数（画面中央上・旧ターゲット札を差し替え。ROGUE.md §5）
     const tpW = vw * 0.42
     const tpTex = spriteTexture('ui_target')
     const tpH = tpTex ? (tpW / tpTex.width) * tpTex.height : badgeH
@@ -470,72 +560,43 @@ async function boot() {
       sp.height = tpH
       tp.addChild(sp)
     }
-    tp.position.set((vw - tpW) / 2, vh * 0.025) // 真ん中に置く（モック準拠）
+    tp.position.set((vw - tpW) / 2, vh * 0.025)
     ui.addChild(tp)
 
-    const goalItems: { icon: Container; count: Text }[] = []
-    const goalIcon = (g: Goal): Container => {
-      const c = new Container()
-      let sp: Sprite | null = null
-      if (g.type === 'color') sp = new Sprite(pieceTexture(app.renderer, { kind: 'normal', color: g.color! }, 64))
-      else if (g.type === 'kokeishi' && spriteTexture('kokeishi')) sp = new Sprite(spriteTexture('kokeishi')!)
-      else if (g.type === 'touhen' && spriteTexture('touhen')) sp = new Sprite(spriteTexture('touhen')!)
-      else if (g.type === 'tsutagoke' && spriteTexture('moss_icon')) sp = new Sprite(spriteTexture('moss_icon')!)
-      else if (g.type === 'spore' && spriteTexture('spore')) sp = new Sprite(spriteTexture('spore')!)
-      if (sp) {
-        sp.anchor.set(0.5)
-        sp.scale.set((tpH * 0.28) / Math.max(sp.texture.width, sp.texture.height))
-        c.addChild(sp)
-      } else {
-        const gph = new Graphics()
-        gph.roundRect(-tpH * 0.12, -tpH * 0.12, tpH * 0.24, tpH * 0.24, 6).fill(g.type === 'tsutagoke' ? 0x4f7a4a : 0xb8b2a0)
-        c.addChild(gph)
-      }
-      return c
+    const enemyRow = new Container()
+    const enemyIconTex = spriteTexture('kokeishi')
+    if (enemyIconTex) {
+      const sp = new Sprite(enemyIconTex)
+      sp.anchor.set(0.5)
+      sp.scale.set((tpH * 0.32) / Math.max(sp.texture.width, sp.texture.height))
+      sp.position.set(-tpW * 0.05, 0)
+      enemyRow.addChild(sp)
     }
-    const buildGoals = () => {
-      for (const gi of goalItems) {
-        gi.icon.destroy()
-        gi.count.destroy()
-      }
-      goalItems.length = 0
-      // モック準拠：アイコンの「下」に数字（重なり解消）。パネル内側に等間隔
-      const n = board.goals.length
-      const inner = tpW * 0.78
-      const groupW = Math.min(tpW * 0.32, inner / n)
-      const iconScale = n >= 3 ? 0.26 : 0.32
-      board.goals.forEach((g, i) => {
-        const icon = goalIcon(g)
-        for (const ch of icon.children) if (ch instanceof Sprite) ch.scale.set((tpH * iconScale) / Math.max(ch.texture.width, ch.texture.height))
-        const cx = tpW / 2 + (i - (n - 1) / 2) * groupW
-        icon.position.set(cx, tpH * 0.52)
-        const count = new Text({
-          text: '',
-          style: { fill: UI.paperInk, fontSize: fs(n >= 3 ? 0.036 : 0.042), fontFamily: FONT, fontWeight: 'bold' },
-        })
-        count.anchor.set(0.5)
-        count.position.set(cx, tpH * 0.8)
-        tp.addChild(icon)
-        tp.addChild(count)
-        goalItems.push({ icon, count })
-      })
-    }
+    const enemyCountText = new Text({
+      text: '',
+      style: { fill: UI.paperInk, fontSize: fs(0.048), fontFamily: FONT, fontWeight: 'bold' },
+    })
+    enemyCountText.anchor.set(0, 0.5)
+    enemyCountText.position.set(tpW * 0.02, 0)
+    enemyRow.addChild(enemyCountText)
+    enemyRow.position.set(tpW * 0.5, tpH * 0.58)
+    tp.addChild(enemyRow)
 
-    const refreshHud = () => {
-      movesText.text = String(board.movesLeft)
+    const refreshFloorHud = () => {
+      hpText.text = String(Math.max(0, run.playerHp))
       scoreText.text = board.score.toLocaleString()
-      board.goals.forEach((g, i) => {
-        const gi = goalItems[i]
-        if (!gi) return
-        const left = Math.max(0, g.count - board.goalDone[i])
-        gi.count.text = left === 0 ? '✓' : String(left)
-        gi.count.style.fill = left === 0 ? 0x667451 : UI.paperInk
+      enemyCountText.text = String(board.enemies.length)
+    }
+    refreshFloorHud()
+    const flashHp = () => {
+      hpText.style.fill = 0xff6b5a
+      tw.tween(hpText.scale, { x: 1.3, y: 1.3 }, 90, { onDone: () => tw.tween(hpText.scale, { x: 1, y: 1 }, 140) })
+      tw.delay(260, () => {
+        if (!hpText.destroyed) hpText.style.fill = 0xe5d8bb
       })
     }
-    buildGoals()
-    refreshHud()
 
-    // ブースター帯（モック準拠4枠・専用アイコン。機能接続はPhase 3残）
+    // ブースター帯（モック準拠4枠・専用アイコン。機能接続はPhase 3残。現状のまま）
     const boosterBar = new Container()
     const medalTex = spriteTexture('ui_medal')
     ;['bst_pickaxe', 'bst_lantern', 'bst_mushroom', 'bst_potion'].forEach((k, i) => {
@@ -584,11 +645,9 @@ async function boot() {
       if (x < 0 || y < 0 || x >= W || y >= H) return null
       return { x, y }
     }
-    const stage = new Container()
-    stage.eventMode = 'static'
-    stage.hitArea = app.screen
-    playRoot.addChildAt(stage, playRoot.children.length)
-    // 入力は背景レイヤーで拾う（UIボタンは各自 eventMode）
+    // 入力は playRoot 自身（hitArea=app.screen）で拾う（UIボタンは各自 eventMode）。
+    // 旧実装にあった未使用の全画面 stage コンテナは、ui層のgear/back等より後ろに手前へ差し込まれ
+    // ヒットテストを奪ってしまう（リスナー無しの死んだレイヤー）ため、このシーンでは持ち込まない（逸脱・理由は最終報告）。
     bgDim.eventMode = 'static'
     view.root.eventMode = 'static'
     playRoot.eventMode = 'static'
@@ -596,7 +655,7 @@ async function boot() {
     playRoot.on('pointerdown', (e) => {
       if (!bgmStarted) {
         bgmStarted = true
-        startBgm(themeForLevel(currentLevelId))
+        startBgm(theme)
       }
       downAt = { x: e.global.x, y: e.global.y }
       downCell = toCell(e.global.x, e.global.y)
@@ -606,7 +665,7 @@ async function boot() {
       const dx = e.global.x - downAt.x
       const dy = e.global.y - downAt.y
       const dist = Math.hypot(dx, dy)
-      let evs: import('./core/types').BoardEvent[] = []
+      let evs: BoardEvent[] = []
       if (dist < view.S * 0.35) {
         const c = board.at(downCell.x, downCell.y)
         if (c?.piece && c.piece.kind !== 'normal' && c.piece.kind !== 'spore') evs = board.tap(downCell)
@@ -619,30 +678,46 @@ async function boot() {
       if (evs.length === 0) return
       if (evs.some((ev2) => ev2.t === 'swap' && ev2.illegal)) sfx.illegal()
       else sfx.swap()
-      const dur = view.play(evs)
-      refreshHud()
-      if (board.won) {
-        inputLocked = true
-        tw.delay(Math.min(dur, 1200), () => {
-          if (alive()) triggerWin()
-        })
-      } else if (board.lost) {
-        inputLocked = true
-        tw.delay(900, () => {
-          if (alive()) showLoseOffer()
-        })
-      }
+      handleFloorResult(evs)
     })
 
-    // ---------- 勝利・敗北 ----------
-    const triggerWin = () => {
-      inputLocked = true
+    // ---------- 層の決着（floor-clear / run-over。ROGUE.md §5/§6/§8） ----------
+    const handleFloorResult = (evs: BoardEvent[]) => {
+      const dur = view.play(evs)
+      refreshFloorHud()
+      if (evs.some((e) => e.t === 'poison-triggered' || e.t === 'boss-slam')) flashHp()
+      const cleared = evs.some((e) => e.t === 'floor-clear')
+      const over = evs.some((e) => e.t === 'run-over')
+      if (cleared) {
+        inputLocked = true
+        tw.delay(Math.min(dur, 1200), () => {
+          if (alive()) onFloorClear()
+        })
+      } else if (over) {
+        inputLocked = true
+        tw.delay(Math.min(dur, 900), () => {
+          if (alive()) showRunResult(false)
+        })
+      }
+    }
+
+    const onFloorClear = () => {
+      if (floor >= 10) {
+        showRunResult(true) // ボス層クリア＝ラン勝利（ROGUE.md §6）
+        return
+      }
+      showFloorClearBanner()
+    }
+
+    // 層クリア演出（既存テーマバナー流用）→ ドラフト3択（ROGUE.md §8）
+    const showFloorClearBanner = () => {
+      sfx.fanfare()
       const dim = new Graphics()
       dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0 })
       playRoot.addChild(dim)
-      tw.tween(dim, { alpha: 0.45 }, 250)
+      tw.tween(dim, { alpha: 0.4 }, 220)
       const bt = new Container()
-      const bannerTex = spriteTexture('ui_banner_word') ?? spriteTexture('ui_ribbon')
+      const bannerTex = spriteTexture(`ribbon_${theme}`) ?? spriteTexture('ui_ribbon_clear')
       if (bannerTex) {
         const rb = new Sprite(bannerTex)
         rb.anchor.set(0.5)
@@ -653,52 +728,94 @@ async function boot() {
       bt.scale.set(0)
       playRoot.addChild(bt)
       tw.tween(bt.scale, { x: 1, y: 1 }, 320, { ease: tw.easeOutBack })
-      tw.delay(1500, () => {
+      tw.delay(1100, () => {
         if (!alive()) return
-        tw.tween(bt.scale, { x: 0, y: 0 }, 300, { ease: tw.easeInCubic, onDone: () => bt.destroy() })
-        tw.tween(dim, { alpha: 0 }, 150, { onDone: () => dim.destroy() })
-        const evs = board.finishWin()
-        const dur = view.play(evs)
-        const drains = evs.filter((e) => e.t === 'win-drain')
-        drains.forEach((e, i) => {
-          tw.delay(i * 45, () => {
-            if (alive() && e.t === 'win-drain' && !movesText.destroyed) movesText.text = String(e.movesLeft)
-          })
-        })
-        tw.delay(dur * 0.5, () => {
-          if (alive() && !scoreText.destroyed) scoreText.text = board.score.toLocaleString()
-        })
-        tw.delay(dur, () => {
-          if (!alive()) return
-          refreshHud()
-          showClearPanel()
+        tw.tween(bt.scale, { x: 0, y: 0 }, 280, { ease: tw.easeInCubic, onDone: () => bt.destroy() })
+        tw.tween(dim, { alpha: 0 }, 200, { onDone: () => dim.destroy() })
+        tw.delay(160, () => {
+          if (alive()) showDraftPanel()
         })
       })
     }
 
-    const showClearPanel = () => {
-      sfx.fanfare()
-      // セーブ反映
-      const st = board.stars
-      const reward = clearReward(currentLevelId, st)
-      save.coins += reward
-      save.stars[currentLevelId - 1] = Math.max(save.stars[currentLevelId - 1] ?? 0, st)
-      if (!save.best) save.best = []
-      const prevBest = save.best[currentLevelId - 1] ?? 0
-      save.best[currentLevelId - 1] = Math.max(prevBest, board.score)
-      save.unlocked = Math.max(save.unlocked, currentLevelId)
-      persistSave(save)
+    // ドラフト3択：羊皮紙カード3枚（ROGUE.md §4/§8）
+    const showDraftPanel = () => {
+      const options = pickDraftOptions(run.upgrades, draftRng(floor))
+      const panel = new Container()
+      const dimG = new Graphics()
+      dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 0.55 })
+      panel.addChild(dimG)
+      const title = new Text({
+        text: 'そなえを ひとつ えらぶ',
+        style: { fill: 0xf4e8cf, fontSize: fs(0.044), fontFamily: FONT, fontWeight: 'bold' },
+      })
+      title.anchor.set(0.5)
+      title.position.set(vw / 2, vh * 0.1)
+      panel.addChild(title)
+      const cardW = vw * 0.86
+      const cardTex = spriteTexture('ui_parchment')
+      const cardH = cardTex ? Math.min(vh * 0.2, (cardW / cardTex.width) * cardTex.height) : vh * 0.18
+      const gap = vh * 0.025
+      const top = vh * 0.16
+      options.forEach((opt, i) => {
+        const card = new Container()
+        const cy = top + i * (cardH + gap)
+        if (cardTex) {
+          const sp = new Sprite(cardTex)
+          sp.width = cardW
+          sp.height = cardH
+          card.addChild(sp)
+        } else {
+          const g = new Graphics()
+          g.roundRect(0, 0, cardW, cardH, 14).fill(UI.paper)
+          card.addChild(g)
+        }
+        const name = new Text({
+          text: opt.name,
+          style: { fill: UI.paperInk, fontSize: fs(0.038), fontFamily: FONT, fontWeight: 'bold' },
+        })
+        name.position.set(cardW * 0.08, cardH * 0.16)
+        card.addChild(name)
+        const desc = new Text({
+          text: opt.desc,
+          style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: cardW * 0.84, breakWords: true },
+        })
+        desc.position.set(cardW * 0.08, cardH * 0.44)
+        card.addChild(desc)
+        card.position.set((vw - cardW) / 2, cy)
+        card.eventMode = 'static'
+        card.cursor = 'pointer'
+        card.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= cardW && y >= 0 && y <= cardH }
+        card.on('pointertap', () => {
+          run.upgrades.push(opt.id)
+          const next = floor + 1
+          playRoot.removeAllListeners()
+          playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
+          buildFloorScene(next)
+          ensureBgm(themeFloorId(next))
+        })
+        panel.addChild(card)
+      })
+      playRoot.addChild(panel)
+    }
+
+    // ---------- 記録画面（層10クリア or run-over。ROGUE.md §7/§8） ----------
+    const showRunResult = (victory: boolean) => {
+      inputLocked = true
+      victory ? sfx.fanfare() : sfx.lose()
+      const reached = run.floor
+      saveRogueBest(reached)
+      const name = buildRunName(run.upgrades)
 
       const panel = new Container()
       const dim = new Graphics()
-      dim.rect(0, 0, vw, vh).fill({ color: 0x1a130c, alpha: 0.28 }) // 背景テーマを見せる（正本③）
+      dim.rect(0, 0, vw, vh).fill({ color: 0x1a130c, alpha: 0.32 })
       panel.addChild(dim)
       const pw = vw * 0.9
       const panelTex = spriteTexture('ui_panel') ?? spriteTexture('ui_parchment')
-      // 等比スケール（引き伸ばし禁止）。専用パネルは縦2:3で設計
-      const ph = panelTex ? Math.min(vh * 0.66, (pw / panelTex.width) * panelTex.height) : vh * 0.62
+      const ph = panelTex ? Math.min(vh * 0.72, (pw / panelTex.width) * panelTex.height) : vh * 0.68
       const px0 = (vw - pw) / 2
-      const py0 = vh * 0.13
+      const py0 = vh * 0.11
       if (panelTex) {
         const sp = new Sprite(panelTex)
         const s = Math.min(pw / panelTex.width, ph / panelTex.height)
@@ -706,133 +823,61 @@ async function boot() {
         sp.position.set((vw - panelTex.width * s) / 2, py0)
         panel.addChild(sp)
       }
-      const ribbonTex2 =
-        spriteTexture(`ribbon_${themeForLevel(currentLevelId)}`) ?? spriteTexture('ui_ribbon_clear') ?? spriteTexture('ui_ribbon')
-      if (ribbonTex2) {
-        const rb = new Sprite(ribbonTex2)
-        rb.anchor.set(0.5)
-        rb.scale.set((pw * 0.82) / ribbonTex2.width)
-        rb.position.set(vw / 2, py0 + vh * 0.002)
-        panel.addChild(rb)
-      }
-      // ★はスプライトで大きく（モック準拠：中央が一段高い）
-      const starY = py0 + ph * 0.26
-      const starGold = spriteTexture('ui_star_gold')
-      const starEmpty = spriteTexture('ui_star_empty')
-      for (let i = 0; i < 3; i++) {
-        const filled = i < st
-        const tex3 = filled ? starGold : starEmpty
-        let stS: Container
-        if (tex3) {
-          const sp = new Sprite(tex3)
-          sp.anchor.set(0.5)
-          const sw = pw * (i === 1 ? 0.27 : 0.22)
-          sp.scale.set(sw / tex3.width)
-          stS = sp
-        } else {
-          const t2 = new Text({ text: '★', style: { fill: filled ? 0xf2c14e : 0xcbc2ab, fontSize: fs(0.12), fontFamily: FONT } })
-          t2.anchor.set(0.5)
-          stS = t2
+      if (victory) {
+        const ribbonTex = spriteTexture('ui_banner_word') ?? spriteTexture('ui_ribbon_clear')
+        if (ribbonTex) {
+          const rb = new Sprite(ribbonTex)
+          rb.anchor.set(0.5)
+          rb.scale.set((pw * 0.82) / ribbonTex.width)
+          rb.position.set(vw / 2, py0 + vh * 0.002)
+          panel.addChild(rb)
         }
-        stS.position.set(vw / 2 + (i - 1) * pw * 0.27, starY + (i === 1 ? -ph * 0.05 : 0))
-        stS.scale.set(0)
-        const target = tex3 ? (pw * (i === 1 ? 0.27 : 0.22)) / tex3.width : 1
-        panel.addChild(stS)
-        tw.tween(stS.scale, { x: target, y: target }, 300, {
-          delay: 200 + i * 180,
-          ease: tw.easeOutBack,
-          onDone: () => {
-            if (filled) sfx.star(i)
-          },
+      } else {
+        const t0 = new Text({
+          text: 'ここまでの記録',
+          style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
         })
+        t0.anchor.set(0.5)
+        t0.position.set(vw / 2, py0 + ph * 0.12)
+        panel.addChild(t0)
       }
-      // スコア（バッジ焼き込み「スコア」＋数字）
-      const scBadge = spriteTexture('ui_score')
-      const scW = pw * 0.56
-      let scH = scW * 0.39
-      const scY = py0 + ph * 0.47
-      if (scBadge) {
-        const sp = new Sprite(scBadge)
-        sp.anchor.set(0.5)
-        sp.width = scW
-        sp.height = (scW / scBadge.width) * scBadge.height
-        scH = sp.height
-        sp.position.set(vw / 2, scY)
-        panel.addChild(sp)
-      }
-      const sc = new Text({
-        text: board.score.toLocaleString(),
-        style: { fill: 0xf4e8cf, fontSize: fs(0.046), fontFamily: FONT, fontWeight: 'bold' },
+      const nameT = new Text({
+        text: name,
+        style: { fill: 0xf4e8cf, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
       })
-      sc.anchor.set(0.5)
-      sc.position.set(vw / 2 + scW * 0.15, scY) // 「スコア」焼き込みの右側・鋲を避けて中央寄せ
-      panel.addChild(sc)
-      // ハイスコア（焼き込み札＋数字）
-      const hsTex = spriteTexture('ui_word_hiscore')
-      const hsY = scY + scH * 0.5 + vh * 0.022
-      if (hsTex) {
-        const sp = new Sprite(hsTex)
-        sp.anchor.set(1, 0.5)
-        sp.scale.set((pw * 0.3) / hsTex.width)
-        sp.position.set(vw / 2 + pw * 0.02, hsY)
-        panel.addChild(sp)
-      }
-      const hs = new Text({
-        text: Math.max(prevBest, board.score).toLocaleString(),
-        style: { fill: UI.paperInk, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' },
+      nameT.anchor.set(0.5)
+      nameT.position.set(vw / 2, py0 + ph * 0.22)
+      panel.addChild(nameT)
+
+      const records = [
+        `とうたつ深度　${reached}層`,
+        `さいだい連鎖　${run.records.maxChain}`,
+        `1手さいだい破壊　${run.records.maxDestroyed}`,
+        `発動した効果　${run.records.effectFires}回`,
+        `ボス撃破　${victory ? '○' : '×'}`,
+      ]
+      records.forEach((line, i) => {
+        const t = new Text({
+          text: line,
+          style: { fill: UI.paperInk, fontSize: fs(0.032), fontFamily: FONT, fontWeight: 'bold' },
+        })
+        t.anchor.set(0.5)
+        t.position.set(vw / 2, py0 + ph * 0.36 + i * fs(0.055))
+        panel.addChild(t)
       })
-      hs.anchor.set(0, 0.5)
-      hs.position.set(vw / 2 + pw * 0.06, hsY)
-      panel.addChild(hs)
-      // 報酬コイン
-      const rw = new Container()
-      const coinTex = spriteTexture('ui_coin')
-      if (coinTex) {
-        const c = new Sprite(coinTex)
-        c.anchor.set(0.5)
-        c.scale.set((fs(0.05) * 1.1) / Math.max(coinTex.width, coinTex.height))
-        c.position.set(-fs(0.06), 0)
-        rw.addChild(c)
-      }
-      const rwT = new Text({
-        text: `+${reward}`,
-        style: { fill: 0x8a6d1f, fontSize: fs(0.045), fontFamily: FONT, fontWeight: 'bold' },
-      })
-      rwT.anchor.set(0, 0.5)
-      rwT.position.set(-fs(0.02), 0)
-      rw.addChild(rwT)
-      rw.position.set(vw / 2, py0 + ph * 0.69)
-      panel.addChild(rw)
-      // 探窟家と相棒がパネル下端から覗く（正本③）。縦長端末でボタンに食い込まないよう横幅基準で上限
-      const bustTex2 = spriteTexture(`bust_${themeForLevel(currentLevelId)}`)
+
+      const bustTex2 = spriteTexture(`bust_${theme}`)
       if (bustTex2) {
         const ch = new Sprite(bustTex2)
         ch.anchor.set(0.5, 1)
-        const chH = Math.min(vh * 0.18, ((pw * 0.24) / bustTex2.width) * bustTex2.height)
+        const chH = Math.min(vh * 0.16, ((pw * 0.22) / bustTex2.width) * bustTex2.height)
         ch.scale.set(chH / bustTex2.height)
-        ch.position.set(px0 + pw * 0.1, py0 + ph + vh * 0.05)
+        ch.position.set(px0 + pw * 0.1, py0 + ph + vh * 0.045)
         panel.addChild(ch)
       }
-      const mascotTex = spriteTexture('mascot')
-      if (mascotTex) {
-        const mo = new Sprite(mascotTex)
-        mo.anchor.set(0.5, 1)
-        const moH = Math.min(vh * 0.12, ((pw * 0.16) / mascotTex.width) * mascotTex.height)
-        mo.scale.set(moH / mascotTex.height)
-        mo.position.set(px0 + pw * 0.9, py0 + ph + vh * 0.045)
-        panel.addChild(mo)
-      }
-      // つぎへ（→マップ）
-      const btn = new Container()
-      const bw2 = pw * 0.52 // キャラと重ならない幅
-      const btnTex = spriteTexture(`next_${themeForLevel(currentLevelId)}`) ?? spriteTexture('ui_button_next')
-      if (btnTex) {
-        const sp = new Sprite(btnTex)
-        sp.anchor.set(0.5)
-        sp.scale.set(bw2 / btnTex.width)
-        btn.addChild(sp)
-      }
-      btn.position.set(vw / 2, py0 + ph * 0.86)
+
+      const btn = makeCoveredButton('もういちど', `next_${theme}`, pw * 0.6)
+      btn.position.set(vw / 2, py0 + ph * 0.9)
       btn.eventMode = 'static'
       btn.cursor = 'pointer'
       btn.on('pointertap', () => {
@@ -843,88 +888,7 @@ async function boot() {
       playRoot.addChild(panel)
     }
 
-    // 敗北オファー（追加5手=900コイン or あきらめる）
-    const showLoseOffer = () => {
-      sfx.lose()
-      const panel = new Container()
-      const dim = new Graphics()
-      dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0.55 })
-      panel.addChild(dim)
-      const pw = vw * 0.8
-      const ph = vh * 0.32
-      const px0 = (vw - pw) / 2
-      const py0 = vh * 0.3
-      const parchTex = spriteTexture('ui_parchment')
-      if (parchTex) {
-        const sp = new Sprite(parchTex)
-        sp.width = pw
-        sp.height = ph
-        sp.position.set(px0, py0)
-        panel.addChild(sp)
-      } else {
-        const g = new Graphics()
-        g.roundRect(px0, py0, pw, ph, 14).fill(UI.paper)
-        panel.addChild(g)
-      }
-      const t1 = new Text({
-        text: '手数が尽きた…',
-        style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
-      })
-      t1.anchor.set(0.5)
-      t1.position.set(vw / 2, py0 + ph * 0.2)
-      panel.addChild(t1)
-      const goalLeft = board.goals.reduce((a, g, i) => a + Math.max(0, g.count - board.goalDone[i]), 0)
-      const t2 = new Text({
-        text: `のこり目標 ${goalLeft}。あと少し！`,
-        style: { fill: UI.paperInk, fontSize: fs(0.036), fontFamily: FONT },
-      })
-      t2.anchor.set(0.5)
-      t2.position.set(vw / 2, py0 + ph * 0.34)
-      panel.addChild(t2)
-      // +5手ボタン
-      const canAfford = save.coins >= EXTRA_MOVES_COST
-      const buy = new Container()
-      const bg1 = new Graphics()
-      bg1.roundRect(-pw * 0.3, -vh * 0.03, pw * 0.6, vh * 0.06, 12).fill(canAfford ? 0x5d7a3f : 0x777468).stroke({ width: 3, color: 0x3f5429 })
-      buy.addChild(bg1)
-      const buyT = new Text({
-        text: `＋${EXTRA_MOVES}手  ${EXTRA_MOVES_COST}コイン`,
-        style: { fill: 0xf4f8ea, fontSize: fs(0.04), fontFamily: FONT, fontWeight: 'bold' },
-      })
-      buyT.anchor.set(0.5)
-      buy.addChild(buyT)
-      buy.position.set(vw / 2, py0 + ph * 0.56)
-      if (canAfford) {
-        buy.eventMode = 'static'
-        buy.cursor = 'pointer'
-        buy.on('pointertap', () => {
-          save.coins -= EXTRA_MOVES_COST
-          persistSave(save)
-          board.addMoves(EXTRA_MOVES)
-          panel.destroy({ children: true })
-          inputLocked = false
-          refreshHud()
-        })
-      } else buy.alpha = 0.6
-      panel.addChild(buy)
-      // あきらめる
-      const giveup = new Text({
-        text: 'あきらめて戻る',
-        style: { fill: 0x6e6250, fontSize: fs(0.038), fontFamily: FONT },
-      })
-      giveup.anchor.set(0.5)
-      giveup.position.set(vw / 2, py0 + ph * 0.8)
-      giveup.eventMode = 'static'
-      giveup.cursor = 'pointer'
-      giveup.on('pointertap', () => {
-        panel.destroy({ children: true })
-        showMap()
-      })
-      panel.addChild(giveup)
-      playRoot.addChild(panel)
-    }
-
-    // QA用フック
+    // QA用フック（既存 __yacho の流儀＝シーン再構築のたびに全体を差し替え）
     ;(window as unknown as Record<string, unknown>).__yacho = {
       get board() {
         return board
@@ -932,28 +896,33 @@ async function boot() {
       get view() {
         return view
       },
+      get run() {
+        return runState
+      },
       metrics: () => ({ S: view.S, ox: view.root.position.x, oy: view.root.position.y, vw, vh }),
       busy: () => tw.activeCount(),
-      forceWin: () => {
-        board.goals.forEach((g, i) => (board.goalDone[i] = g.count))
-        refreshHud()
-        triggerWin()
-      },
-      forceLose: () => {
-        board.movesLeft = 0
-        refreshHud()
-        showLoseOffer()
+      startRun,
+      forceFloorClear: () => {
+        if (inputLocked) return
+        const ev: BoardEvent[] = []
+        const priv = board as unknown as { dealEnemyDamage: (id: number, amount: number, ev: BoardEvent[]) => void }
+        for (const e of [...board.enemies]) priv.dealEnemyDamage(e.id, e.hp, ev)
+        if (ev.length) handleFloorResult(ev)
       },
       showMap,
-      startLevel,
-      save,
     }
   }
 
   app.ticker.add((t) => tw.update(t.deltaMS))
   showMap()
-  // マップからも QA フックを使えるように
-  ;(window as unknown as Record<string, unknown>).__yachoNav = { showMap, startLevel, save }
+  // 拠点表示前でも startRun 等をコンソールから呼べるようにベースラインを用意（floor開始後は上で全体が差し替わる）
+  ;(window as unknown as Record<string, unknown>).__yacho = {
+    startRun,
+    showMap,
+    get run() {
+      return runState
+    },
+  }
 }
 
 boot()

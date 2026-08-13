@@ -1,12 +1,18 @@
 // 盤面ビュー：エンジンのイベント列をタイムライン化して描く。
 // 方針: ロジックは即時確定・ビューが追いかける。入力割込時は snap で追いつく。
 // タイミングは RESEARCH.md §5 実測値。
-import { Container, Graphics, Sprite, Renderer } from 'pixi.js'
+import { Container, Graphics, Sprite, Renderer, Text } from 'pixi.js'
 import { Board, W, H } from '../core/board'
-import type { BoardEvent, Piece, XY } from '../core/types'
+import type { BoardEvent, EnemyKind, Piece, XY } from '../core/types'
+import type { EnemyInstance } from '../core/enemies'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import { completeAll, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
 import { sfx } from '../juice/sound'
+
+// ローグ拡張（ROGUE.md §5）：ダメージ数字は既存UI（main.ts）と合わせ明朝体
+const FONT = '"Shippori Mincho", serif'
+// 敵ブロック・ボスの顔に HP バーの描画位置を焼き込むための拡張タグ（pieces.ts の __base 流儀に倣う）
+type HpHost = Container & { __hpFill?: Graphics; __hpGeom?: { x: number; y: number; w: number; h: number } }
 
 // juice 実測値テーブル（ms）
 export const T = {
@@ -32,6 +38,16 @@ export class BoardView {
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
   private drainCount = 0 // 勝利ドレインSEのピッチ段数
   private epoch = 0 // レベル遷移の世代。跨いだ遅延コールバックは無効化する
+
+  // ---- ローグライク拡張（ROGUE.md §5）：敵・環境オーバーレイの帳簿 ----
+  private armorG = new Map<string, Graphics>() // "x,y" -> 甲殻オーバーレイ
+  private poisonG = new Map<string, Graphics>() // "x,y" -> 毒胞子オーバーレイ
+  private sporeTokenG = new Map<string, Container>() // "x,y" -> 胞子トークン（既存 spore 駒とは別物）
+  private bossRowG = new Map<number, Container>() // row(y) -> ボス身体1行ぶんの連結コンテナ
+  private bossFaceG = new Map<number, Container>() // enemyId -> ボスの目+HPバー（前線行に追従）
+  private bossId: number | null = null
+  private enemyMeta = new Map<number, { kind: EnemyKind; maxHp: number }>() // 撃破後も参照できるよう種別/最大HPを保持
+  private enemyCellsCache = new Map<number, XY[]>() // 直近の敵セル座標（enemy-damage等、座標を持たないイベント用）
 
   constructor(
     public board: Board,
@@ -101,10 +117,23 @@ export class BoardView {
     this.epoch++ // 以降、旧世代の遅延コールバックは無効
     for (const s of this.sprites.values()) s.destroy()
     this.sprites.clear()
-    for (const g of this.blockG.values()) g.destroy()
+    // ボス身体の連結コンテナは複数セルから同一参照を共有するため、二重destroyを避けて回る
+    for (const g of this.blockG.values()) if (!g.destroyed) g.destroy()
     this.blockG.clear()
     for (const g of this.groundG.values()) g.destroy()
     this.groundG.clear()
+    for (const g of this.armorG.values()) if (!g.destroyed) g.destroy()
+    this.armorG.clear()
+    for (const g of this.poisonG.values()) if (!g.destroyed) g.destroy()
+    this.poisonG.clear()
+    for (const g of this.sporeTokenG.values()) if (!g.destroyed) g.destroy()
+    this.sporeTokenG.clear()
+    for (const g of this.bossFaceG.values()) if (!g.destroyed) g.destroy()
+    this.bossFaceG.clear()
+    this.bossRowG.clear() // 中身は上のblockGループで既に破棄済み
+    this.bossId = null
+    this.enemyMeta.clear()
+    this.enemyCellsCache.clear()
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const c = this.board.at(x, y)
@@ -112,7 +141,11 @@ export class BoardView {
         if (c.ground > 0) this.makeGround(x, y, c.ground as 1 | 2)
         if (c.block) this.makeBlock(x, y)
         if (c.piece) this.makePiece(x, y, c.piece)
+        if (c.armored) this.makeArmorOverlay(x, y, 0)
+        if (c.poisonSpore) this.makePoisonOverlay(x, y, 0)
+        if (c.sporeToken) this.makeSporeTokenSprite(x, y, 0)
       }
+    // ボスの顔（目+HPバー）は上のループ内 makeBossSegment が前線行の処理時に生成する
   }
 
   private makePiece(x: number, y: number, p: Piece): Sprite {
@@ -146,6 +179,15 @@ export class BoardView {
     const c = this.board.at(x, y)!
     const b = c.block!
     const S = this.S
+    // ローグ拡張（ROGUE.md §5）：敵の身体セル・穴潜みの封鎖セル
+    if (b.type === 'enemy') {
+      this.makeEnemyBlock(x, y, b.enemyId)
+      return
+    }
+    if (b.type === 'seal') {
+      this.makeSealBlock(x, y)
+      return
+    }
     // 生成アセットがある障害物は Sprite で
     if (b.type === 'kokeishi' || b.type === 'hako' || b.type === 'touhen' || b.type === 'subi') {
       // 苔石は損傷差分アセット優先（半透明化でなく「欠け」で見せる）
@@ -188,6 +230,419 @@ export class BoardView {
     g.position.set(x * this.S, y * this.S)
     this.blockLayer.addChild(g)
     this.blockG.set(this.key(x, y), g)
+  }
+
+  // ---- ローグライク拡張（ROGUE.md §5）：敵の描画 ----
+
+  private drawEye(g: Graphics, cx: number, cy: number, r: number, iris: number) {
+    g.circle(cx, cy, r * 1.3).fill(0xf6f1e4)
+    g.circle(cx, cy, r).fill(iris)
+    g.circle(cx, cy, r * 0.42).fill(0x201812)
+  }
+
+  /** 敵の身体セル1つぶんのコンテナに HP バー（背景+塗り）を焼き込む */
+  private attachHpBar(wrap: Container, hp: number, maxHp: number, w: number, h: number, x0: number, y0: number) {
+    const back = new Graphics()
+    back.roundRect(x0, y0, w, h, h / 2).fill({ color: 0x1c1712, alpha: 0.82 })
+    wrap.addChild(back)
+    const fill = new Graphics()
+    wrap.addChild(fill)
+    const host = wrap as HpHost
+    host.__hpFill = fill
+    host.__hpGeom = { x: x0, y: y0, w, h }
+    this.paintHpBar(wrap, hp, maxHp)
+  }
+
+  /** HP バーの塗りだけ引き直す（enemy-damage・reconcile 双方から呼ぶ） */
+  private paintHpBar(wrap: Container, hp: number, maxHp: number) {
+    const host = wrap as HpHost
+    const fill = host.__hpFill
+    const geom = host.__hpGeom
+    if (!fill || !geom || fill.destroyed) return
+    const ratio = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 0
+    fill.clear()
+    if (ratio > 0) fill.roundRect(geom.x, geom.y, Math.max(2, geom.w * ratio), geom.h, geom.h / 2).fill(ratio > 0.3 ? 0xc0503a : 0xe0d040)
+  }
+
+  /** 単体セルの敵（岩殻獣/胞子獣/穴潜み）を描く。ボスは別経路（makeBossSegment） */
+  private makeEnemyBlock(x: number, y: number, enemyId: number) {
+    const enemy = this.board.enemies.find((e) => e.id === enemyId)
+    if (!enemy) return
+    if (enemy.kind === 'boss') {
+      this.makeBossSegment(x, y, enemy)
+      return
+    }
+    this.enemyMeta.set(enemy.id, { kind: enemy.kind, maxHp: enemy.maxHp })
+    this.enemyCellsCache.set(
+      enemy.id,
+      enemy.cells.map((p) => ({ ...p })),
+    )
+    const S = this.S
+    const wrap = new Container()
+    wrap.position.set(x * S, y * S)
+    if (enemy.kind === 'rockshell') {
+      const tex = spriteTexture('kokeishi')
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 4) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.roundRect(3, 3, S - 6, S - 6, 8).fill(PAL.stoneDark).stroke({ width: 2.5, color: 0x4d5147 })
+        wrap.addChild(g)
+      }
+      const eye = new Graphics()
+      this.drawEye(eye, S / 2, S * 0.44, S * 0.15, 0xf0c060) // 一つ目・琥珀
+      wrap.addChild(eye)
+    } else if (enemy.kind === 'sporeling') {
+      const tex = spriteTexture('subi')
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 4) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.circle(S / 2, S / 2, S * 0.4).fill(0x54636f).stroke({ width: 2.5, color: 0x39434c })
+        wrap.addChild(g)
+      }
+      const eye = new Graphics()
+      this.drawEye(eye, S / 2, S * 0.42, S * 0.14, 0xc9a0e8) // 一つ目・菫
+      wrap.addChild(eye)
+    } else {
+      // 穴潜み：暗い穴（同心円）＋二つ目
+      const g = new Graphics()
+      g.circle(S / 2, S / 2, S * 0.42).fill({ color: 0x0b0d10, alpha: 0.92 })
+      g.circle(S / 2, S / 2, S * 0.29).fill({ color: 0x1c2128, alpha: 0.92 })
+      g.circle(S / 2, S / 2, S * 0.15).fill({ color: 0x2c333b, alpha: 0.85 })
+      wrap.addChild(g)
+      const eyes = new Graphics()
+      this.drawEye(eyes, S / 2 - S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
+      this.drawEye(eyes, S / 2 + S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
+      wrap.addChild(eyes)
+    }
+    this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
+    this.blockLayer.addChild(wrap)
+    this.blockG.set(this.key(x, y), wrap)
+  }
+
+  /** ボス身体：1行=1コンテナで hako を連結（ROGUE.md §5） */
+  private makeBossSegment(x: number, y: number, enemy: EnemyInstance) {
+    this.enemyMeta.set(enemy.id, { kind: 'boss', maxHp: enemy.maxHp })
+    this.enemyCellsCache.set(
+      enemy.id,
+      enemy.cells.map((p) => ({ ...p })),
+    )
+    this.bossId = enemy.id
+    const S = this.S
+    let row = this.bossRowG.get(y)
+    if (!row || row.destroyed) {
+      row = new Container()
+      row.position.set(0, y * S)
+      this.blockLayer.addChild(row)
+      this.bossRowG.set(y, row)
+    }
+    const seg = new Container()
+    seg.position.set(x * S, 0)
+    const tex = spriteTexture('hako')
+    if (tex) {
+      const sp = new Sprite(tex)
+      sp.anchor.set(0.5)
+      sp.scale.set((S - 2) / Math.max(tex.width, tex.height))
+      sp.position.set(S / 2, S / 2)
+      seg.addChild(sp)
+    } else {
+      const g = new Graphics()
+      g.roundRect(1, 1, S - 2, S - 2, 5).fill(PAL.wood).stroke({ width: 2, color: 0x6b5238 })
+      seg.addChild(g)
+    }
+    row.addChild(seg)
+    this.blockG.set(this.key(x, y), row)
+    if (y === enemy.bossFrontRow && (!this.bossFaceG.get(enemy.id) || this.bossFaceG.get(enemy.id)!.destroyed)) {
+      this.makeBossFace(enemy)
+    }
+  }
+
+  /** ボスの顔（中央の大きい目+HPバー）。前線行に追従する単独オーバーレイ */
+  private makeBossFace(boss: EnemyInstance) {
+    const old = this.bossFaceG.get(boss.id)
+    if (old) {
+      this.bossFaceG.delete(boss.id)
+      if (!old.destroyed) old.destroy()
+    }
+    const S = this.S
+    this.bossId = boss.id
+    const face = new Container()
+    face.position.set(0, boss.bossFrontRow * S)
+    const eye = new Graphics()
+    this.drawEye(eye, (W * S) / 2, S * 0.5, S * 0.34, 0xe86a4a)
+    face.addChild(eye)
+    const w = W * S * 0.5
+    this.attachHpBar(face, boss.hp, boss.maxHp, w, S * 0.14, (W * S - w) / 2, S * 0.06)
+    this.blockLayer.addChild(face)
+    this.bossFaceG.set(boss.id, face)
+  }
+
+  /** 穴潜みの封鎖セル：暗い蓋＋X字 */
+  private makeSealBlock(x: number, y: number): Graphics {
+    const S = this.S
+    const g = new Graphics()
+    g.roundRect(3, 3, S - 6, S - 6, 8).fill({ color: 0x14110f, alpha: 0.78 })
+    const pad = S * 0.28
+    g.moveTo(pad, pad).lineTo(S - pad, S - pad).stroke({ width: S * 0.06, color: 0x6b5a46 })
+    g.moveTo(S - pad, pad).lineTo(pad, S - pad).stroke({ width: S * 0.06, color: 0x6b5a46 })
+    g.position.set(x * S, y * S)
+    this.blockLayer.addChild(g)
+    this.blockG.set(this.key(x, y), g)
+    return g
+  }
+
+  /** 岩殻獣の甲殻オーバーレイ（1回分の追加破壊を要求。ROGUE.md §5） */
+  private makeArmorOverlay(x: number, y: number, t: number) {
+    const k = this.key(x, y)
+    const old = this.armorG.get(k)
+    if (old) {
+      this.armorG.delete(k)
+      if (!old.destroyed) old.destroy()
+    }
+    const S = this.S
+    const g = new Graphics()
+    g.roundRect(4, 4, S - 8, S - 8, 8).stroke({ width: S * 0.07, color: 0x9aa2ac, alpha: 0.9 })
+    g.roundRect(4, 4, S - 8, S - 8, 8).fill({ color: 0xc7ccd2, alpha: 0.14 })
+    g.position.set(x * S, y * S)
+    g.alpha = 0
+    this.fxLayer.addChild(g)
+    this.armorG.set(k, g)
+    tween(g, { alpha: 1 }, 200, { delay: t })
+  }
+
+  /** 胞子獣が毒胞子化した駒の紫の靄オーバーレイ（ROGUE.md §5） */
+  private makePoisonOverlay(x: number, y: number, t: number) {
+    const k = this.key(x, y)
+    const old = this.poisonG.get(k)
+    if (old) {
+      this.poisonG.delete(k)
+      if (!old.destroyed) old.destroy()
+    }
+    const S = this.S
+    const g = new Graphics()
+    g.circle(S / 2, S / 2, S * 0.44).fill({ color: 0x8b5fc8, alpha: 0.26 })
+    g.circle(S / 2, S / 2, S * 0.44).stroke({ width: S * 0.035, color: 0xb98be0, alpha: 0.6 })
+    g.position.set(x * S, y * S)
+    g.alpha = 0
+    this.fxLayer.addChild(g)
+    this.poisonG.set(k, g)
+    tween(g, { alpha: 1 }, 200, { delay: t })
+  }
+
+  /** 胞子トークン（設置型。既存 spore 駒とは別物）。駒の70%サイズで駒レイヤーの上に置く */
+  private makeSporeTokenSprite(x: number, y: number, t: number) {
+    const k = this.key(x, y)
+    const old = this.sporeTokenG.get(k)
+    if (old) {
+      this.sporeTokenG.delete(k)
+      if (!old.destroyed) old.destroy()
+    }
+    const tex = spriteTexture('spore')
+    const target = this.S * 0.82 * 0.7
+    let node: Container
+    if (tex) {
+      const sp = new Sprite(tex)
+      sp.anchor.set(0.5)
+      sp.scale.set(target / Math.max(tex.width, tex.height))
+      node = sp
+    } else {
+      const g = new Graphics()
+      g.circle(0, 0, target / 2).fill({ color: PAL.glowSpore, alpha: 0.8 })
+      node = g
+    }
+    node.position.set(this.px(x), this.px(y))
+    const baseScale = node.scale.x || 1
+    node.scale.set(0)
+    this.fxLayer.addChild(node)
+    this.sporeTokenG.set(k, node)
+    tween(node.scale, { x: baseScale, y: baseScale }, 220, { delay: t, ease: easeOutBack })
+  }
+
+  /** コンテナを左右に小さく揺らす（敵被弾・ボス全体攻撃で共用） */
+  private shakeContainer(c: Container, t: number, amp = 4) {
+    const bx = c.position.x
+    const by = c.position.y
+    const offs = [amp, -amp, amp * 0.6, -amp * 0.6, 0]
+    let d = t
+    for (const ox of offs) {
+      tween(c.position, { x: bx + ox, y: by }, 45, { delay: d })
+      d += 45
+    }
+  }
+
+  /** 被弾フラッシュ（白い矩形を一瞬重ねてフェード） */
+  private hitFlash(container: Container, t: number) {
+    const b = container.getLocalBounds()
+    const g = new Graphics()
+    g.rect(b.x, b.y, b.width, b.height).fill({ color: 0xffffff, alpha: 0.5 })
+    container.addChild(g)
+    tween(g, { alpha: 0 }, 160, {
+      delay: t,
+      onDone: () => {
+        if (!g.destroyed) g.destroy()
+      },
+    })
+  }
+
+  /** ダメージ数字ポップ（小さな明朝数字、上に浮いて消える） */
+  private damageNumberFx(p: XY, amount: number, t: number) {
+    delay(t, () => {
+      const txt = new Text({
+        text: `-${amount}`,
+        style: { fill: 0xfff1d0, fontSize: this.S * 0.26, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x3a2418, width: 3 } },
+      })
+      txt.anchor.set(0.5)
+      txt.position.set(this.px(p.x), this.px(p.y) - this.S * 0.1)
+      this.fxLayer.addChild(txt)
+      tween(txt.position, { y: txt.position.y - this.S * 0.6 }, 500, { ease: easeOutCubic })
+      tween(txt, { alpha: 0 }, 380, {
+        delay: 120,
+        onDone: () => {
+          if (!txt.destroyed) txt.destroy()
+        },
+      })
+    })
+  }
+
+  /** enemy-damage：HPバー更新＋揺れ＋フラッシュ＋ダメージ数字（ROGUE.md §5） */
+  private enemyDamageFx(id: number, amount: number, hpLeft: number, t: number) {
+    const meta = this.enemyMeta.get(id)
+    const cells = this.enemyCellsCache.get(id)
+    if (!meta || !cells || !cells.length) return
+    const container = meta.kind === 'boss' ? this.bossFaceG.get(id) : this.blockG.get(this.key(cells[0].x, cells[0].y))
+    if (container && !container.destroyed) {
+      this.paintHpBar(container, hpLeft, meta.maxHp)
+      this.shakeContainer(container, t, 3)
+      this.hitFlash(container, t)
+    }
+    const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
+    const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
+    this.damageNumberFx({ x: cx, y: cy }, amount, t)
+  }
+
+  /** enemy-defeated：潰れて消えるポップ＋粒（ボスは行コンテナ＋顔も片付ける） */
+  private enemyDefeatedFx(id: number, cells: XY[], t: number) {
+    const meta = this.enemyMeta.get(id)
+    if (meta?.kind === 'boss') {
+      const rows = new Set(cells.map((c) => c.y))
+      for (const row of rows) {
+        const rowC = this.bossRowG.get(row)
+        if (rowC) {
+          this.bossRowG.delete(row)
+          if (!rowC.destroyed) {
+            tween(rowC.scale, { x: 0, y: 0 }, 220, {
+              delay: t,
+              ease: easeInCubic,
+              onDone: () => {
+                if (!rowC.destroyed) rowC.destroy()
+              },
+            })
+          }
+        }
+        for (let bx = 0; bx < W; bx++) this.blockG.delete(this.key(bx, row))
+      }
+      const face = this.bossFaceG.get(id)
+      if (face) {
+        this.bossFaceG.delete(id)
+        if (!face.destroyed)
+          tween(face, { alpha: 0 }, 220, {
+            delay: t,
+            onDone: () => {
+              if (!face.destroyed) face.destroy()
+            },
+          })
+      }
+      this.bossId = null
+    } else {
+      for (const p of cells) {
+        const k = this.key(p.x, p.y)
+        const g = this.blockG.get(k)
+        if (g) {
+          this.blockG.delete(k)
+          if (!g.destroyed) {
+            tween(g.scale, { x: 1.2, y: 1.2 }, 90, { delay: t })
+            tween(g.scale, { x: 0, y: 0 }, 160, {
+              delay: t + 90,
+              ease: easeInCubic,
+              onDone: () => {
+                if (!g.destroyed) g.destroy()
+              },
+            })
+          }
+        }
+      }
+    }
+    for (const p of cells) this.debrisFx(p, t, 0xd9c9a8)
+    this.enemyMeta.delete(id)
+    this.enemyCellsCache.delete(id)
+  }
+
+  /** 爆発鉱石：橙のフラッシュ円＋破片粒（既存 debrisFx を流用） */
+  private explodeFx(p: XY, t: number) {
+    delay(t, () => {
+      const ring = new Graphics()
+      ring.circle(0, 0, this.S * 0.3).fill({ color: 0xff8a3d, alpha: 0.85 })
+      ring.position.set(this.px(p.x), this.px(p.y))
+      this.fxLayer.addChild(ring)
+      tween(ring.scale, { x: 2.6, y: 2.6 }, 260, { ease: easeOutCubic })
+      tween(ring, { alpha: 0 }, 260, { onDone: () => ring.destroy() })
+    })
+    this.debrisFx(p, t, 0xff8a3d)
+  }
+
+  /** ギア起動：金の回転リング一瞬 */
+  private gearRingFx(p: XY, t: number) {
+    delay(t, () => {
+      const ring = new Graphics()
+      ring.circle(0, 0, this.S * 0.34).stroke({ width: this.S * 0.05, color: 0xe8b33c, alpha: 0.9 })
+      ring.position.set(this.px(p.x), this.px(p.y))
+      this.fxLayer.addChild(ring)
+      tween(ring.scale, { x: 1.5, y: 1.5 }, 240, { ease: easeOutCubic })
+      tween(ring, { rotation: Math.PI * 1.4 }, 240, { ease: easeOutCubic })
+      tween(ring, { alpha: 0 }, 240, { onDone: () => ring.destroy() })
+    })
+  }
+
+  /** 毒胞子発動：紫の小バースト */
+  private violetBurstFx(p: XY, t: number) {
+    delay(t, () => {
+      for (let i = 0; i < 6; i++) {
+        const g = new Graphics()
+        g.circle(0, 0, 2.6).fill(0xb98be0)
+        g.position.set(this.px(p.x), this.px(p.y))
+        this.fxLayer.addChild(g)
+        const a = Math.random() * Math.PI * 2
+        const d = this.S * (0.35 + Math.random() * 0.45)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 300, { ease: easeOutCubic })
+        tween(g, { alpha: 0 }, 300, { onDone: () => g.destroy() })
+      }
+    })
+  }
+
+  /** 環境効果の自然増殖：緑/青の芽吹きキラ */
+  private envGrowFx(p: XY, kind: 'plant' | 'mineral', t: number) {
+    delay(t, () => {
+      const color = kind === 'plant' ? 0x8fb05a : 0x6fb6e8
+      for (let i = 0; i < 5; i++) {
+        const g = new Graphics()
+        g.circle(0, 0, 2.6).fill(color)
+        g.position.set(this.px(p.x), this.px(p.y))
+        this.fxLayer.addChild(g)
+        const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6
+        const d = this.S * (0.3 + Math.random() * 0.4)
+        tween(g.position, { x: this.px(p.x) + Math.cos(a) * d, y: this.px(p.y) + Math.sin(a) * d }, 380, { ease: easeOutCubic })
+        tween(g, { alpha: 0 }, 380, { onDone: () => g.destroy() })
+      }
+    })
   }
 
   private makeGround(x: number, y: number, level: 1 | 2) {
@@ -389,6 +844,153 @@ export class BoardView {
           }
           break
         }
+        // ---- ローグライク拡張（ROGUE.md §3/§5/§6）：フック・敵・ターン・環境 ----
+        case 'token-spawn': {
+          this.makeSporeTokenSprite(e.at.x, e.at.y, t)
+          break
+        }
+        case 'token-consumed': {
+          const k = this.key(e.at.x, e.at.y)
+          const node = this.sporeTokenG.get(k)
+          if (node) {
+            this.sporeTokenG.delete(k)
+            tween(node.scale, { x: 0, y: 0 }, 150, {
+              delay: t,
+              ease: easeInCubic,
+              onDone: () => {
+                if (!node.destroyed) node.destroy()
+              },
+            })
+          }
+          break
+        }
+        case 'explode': {
+          for (const p of e.cells) this.popPieceAt(p, t, true)
+          this.explodeFx(e.at, t)
+          t += 200
+          break
+        }
+        case 'gear-trigger': {
+          this.gearRingFx(e.at, t)
+          break
+        }
+        case 'obstacle-spawn': {
+          this.popPieceAt(e.at, t, true)
+          const ep = this.epoch
+          delay(t + 60, () => {
+            if (ep !== this.epoch) return
+            this.makeBlock(e.at.x, e.at.y)
+          })
+          t += 150
+          break
+        }
+        case 'enemy-damage': {
+          this.enemyDamageFx(e.id, e.amount, e.hpLeft, t)
+          break
+        }
+        case 'enemy-defeated': {
+          this.enemyDefeatedFx(e.id, e.cells, t)
+          t += 200
+          break
+        }
+        case 'armor-applied': {
+          this.makeArmorOverlay(e.at.x, e.at.y, t)
+          t += 200
+          break
+        }
+        case 'armor-broken': {
+          const k = this.key(e.at.x, e.at.y)
+          const g = this.armorG.get(k)
+          if (g) {
+            this.armorG.delete(k)
+            tween(g, { alpha: 0 }, 150, {
+              delay: t,
+              onDone: () => {
+                if (!g.destroyed) g.destroy()
+              },
+            })
+          }
+          this.flashFx(e.at, t)
+          break
+        }
+        case 'spore-poisoned': {
+          this.makePoisonOverlay(e.at.x, e.at.y, t)
+          t += 200
+          break
+        }
+        case 'poison-triggered': {
+          const k = this.key(e.at.x, e.at.y)
+          const g = this.poisonG.get(k)
+          if (g) {
+            this.poisonG.delete(k)
+            if (!g.destroyed) g.destroy()
+          }
+          this.violetBurstFx(e.at, t)
+          break
+        }
+        case 'cell-sealed': {
+          const g = this.makeSealBlock(e.at.x, e.at.y)
+          g.scale.set(0)
+          tween(g.scale, { x: 1, y: 1 }, 220, { delay: t, ease: easeOutBack })
+          t += 220
+          break
+        }
+        case 'cell-unsealed': {
+          const k = this.key(e.at.x, e.at.y)
+          const g = this.blockG.get(k)
+          if (g && !g.destroyed) {
+            this.blockG.delete(k)
+            tween(g.scale, { x: 0, y: 0 }, 160, {
+              delay: t,
+              ease: easeInCubic,
+              onDone: () => {
+                if (!g.destroyed) g.destroy()
+              },
+            })
+          }
+          break
+        }
+        case 'boss-retreat': {
+          const prevRow = e.row - 1
+          const oldRow = this.bossRowG.get(prevRow)
+          this.bossRowG.delete(prevRow)
+          for (let bx = 0; bx < W; bx++) this.blockG.delete(this.key(bx, prevRow))
+          if (oldRow && !oldRow.destroyed) {
+            tween(oldRow, { alpha: 0 }, 220, {
+              delay: t,
+              onDone: () => {
+                if (!oldRow.destroyed) oldRow.destroy()
+              },
+            })
+          }
+          if (this.bossId != null) {
+            const face = this.bossFaceG.get(this.bossId)
+            if (face && !face.destroyed) tween(face.position, { y: e.row * this.S }, 260, { delay: t, ease: easeOutCubic })
+          }
+          t += 220
+          break
+        }
+        case 'boss-slam': {
+          this.shakeContainer(this.root, t)
+          t += 220
+          break
+        }
+        case 'env-grow': {
+          const c = this.board.at(e.at.x, e.at.y)
+          if (c?.piece) {
+            const sp = this.makePiece(e.at.x, e.at.y, c.piece)
+            const b = this.bs(sp)
+            sp.scale.set(0)
+            tween(sp.scale, { x: b, y: b }, 260, { delay: t, ease: easeOutBack })
+          }
+          this.envGrowFx(e.at, e.kind, t)
+          t += 200
+          break
+        }
+        // floor-clear / run-over：ビューでは何もしない（main.ts が層進行・記録画面を扱う）
+        case 'floor-clear':
+        case 'run-over':
+          break
       }
     }
     const total = t + T.pop + T.fall
@@ -452,7 +1054,71 @@ export class BoardView {
           this.groundG.delete(k)
           if (!gg.destroyed) gg.destroy()
         }
+        // ローグ拡張：胞子トークン・甲殻・毒胞子オーバーレイの帳簿照合
+        const wantToken = c?.sporeToken === true
+        const tk = this.sporeTokenG.get(k)
+        if (wantToken && (!tk || tk.destroyed)) {
+          if (tk) this.sporeTokenG.delete(k)
+          this.makeSporeTokenSprite(x, y, 0)
+        } else if (!wantToken && tk) {
+          this.sporeTokenG.delete(k)
+          if (!tk.destroyed) tk.destroy()
+        }
+        const wantArmor = c?.armored === true
+        const ag = this.armorG.get(k)
+        if (wantArmor && (!ag || ag.destroyed)) {
+          if (ag) this.armorG.delete(k)
+          this.makeArmorOverlay(x, y, 0)
+        } else if (!wantArmor && ag) {
+          this.armorG.delete(k)
+          if (!ag.destroyed) ag.destroy()
+        }
+        const wantPoison = c?.poisonSpore === true
+        const pg = this.poisonG.get(k)
+        if (wantPoison && (!pg || pg.destroyed)) {
+          if (pg) this.poisonG.delete(k)
+          this.makePoisonOverlay(x, y, 0)
+        } else if (!wantPoison && pg) {
+          this.poisonG.delete(k)
+          if (!pg.destroyed) pg.destroy()
+        }
       }
+    // 敵ブロック（岩殻獣/胞子獣/穴潜み）：帳簿はblock照合ループ（上）でmakeBlock経由に自己修復済み。
+    // ここではHPバー・メタ情報・座標キャッシュを最新化する（enemy-damage等の座標なしイベント用）
+    for (const en of this.board.enemies) {
+      if (en.kind === 'boss') continue
+      this.enemyMeta.set(en.id, { kind: en.kind, maxHp: en.maxHp })
+      this.enemyCellsCache.set(
+        en.id,
+        en.cells.map((p) => ({ ...p })),
+      )
+      const cell = en.cells[0]
+      if (cell) {
+        const g = this.blockG.get(this.key(cell.x, cell.y))
+        if (g && !g.destroyed) this.paintHpBar(g, en.hp, en.maxHp)
+      }
+    }
+    // ボスの顔（目+HPバー）オーバーレイ：不在なら片付け、居るのに欠けていれば再生成・位置とHPを同期
+    const boss = this.board.enemies.find((en) => en.kind === 'boss')
+    if (boss) {
+      this.enemyMeta.set(boss.id, { kind: 'boss', maxHp: boss.maxHp })
+      this.enemyCellsCache.set(
+        boss.id,
+        boss.cells.map((p) => ({ ...p })),
+      )
+      this.bossId = boss.id
+      const face = this.bossFaceG.get(boss.id)
+      if (!face || face.destroyed) {
+        this.makeBossFace(boss)
+      } else {
+        face.position.set(0, boss.bossFrontRow * this.S)
+        this.paintHpBar(face, boss.hp, boss.maxHp)
+      }
+    } else {
+      for (const face of this.bossFaceG.values()) if (!face.destroyed) face.destroy()
+      this.bossFaceG.clear()
+      this.bossId = null
+    }
   }
 
   private popPieceAt(p: XY, t: number, byFire = false) {
