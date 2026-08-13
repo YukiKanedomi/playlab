@@ -67,13 +67,13 @@ export class BoardView {
           sp.width = this.S
           sp.height = this.S
           sp.position.set(x * this.S, y * this.S)
-          sp.tint = (x + y) % 2 ? 0xffffff : 0xe4d6c4
+          sp.tint = (x + y) % 2 ? 0xffffff : 0xf2ebe0 // 市松は微差に
           this.cellLayer.addChild(sp)
         }
       if (frameTex) {
         // スリム枠（帯内縁がテクスチャ幅の INNER 比率にある前提）を盤外周に重ねる
-        const INNER = 0.038 // frame_v3 実測（帯内縁 38/1024）
-        const inset = this.S * 0.12 // 盤へ少し食い込ませて隙間を消す
+        const INNER = 0.053 // frame_v4 実測（帯内縁 54/1024）
+        const inset = this.S * 0.06 // 外周セルへの食い込みは最小限に
         const gridW = W * this.S
         const gridH = H * this.S
         const pad = (INNER * gridW + inset) / (1 - 2 * INNER)
@@ -125,7 +125,7 @@ export class BoardView {
     const sp = new Sprite(pieceTexture(this.renderer, p, this.S))
     sp.anchor.set(0.5)
     // テクスチャ原寸に依らずセル寸法へ正規化（この基準スケールが演出の「1」）
-    const target = this.S * (p.kind === 'normal' ? 0.94 : 0.98)
+    const target = this.S * (p.kind === 'normal' ? 0.82 : 0.86) // 正本準拠: セルに10〜15%の石地余白
     const base = target / Math.max(sp.texture.width, sp.texture.height)
     sp.scale.set(base)
     ;(sp as unknown as { __base: number }).__base = base
@@ -148,7 +148,9 @@ export class BoardView {
     const S = this.S
     // 生成アセットがある障害物は Sprite で
     if (b.type === 'kokeishi' || b.type === 'hako' || b.type === 'touhen' || b.type === 'subi') {
-      const tex = spriteTexture(b.type)
+      // 苔石は損傷差分アセット優先（半透明化でなく「欠け」で見せる）
+      const key = b.type === 'kokeishi' && b.hp === 1 ? (spriteTexture('kokeishi_cracked') ? 'kokeishi_cracked' : 'kokeishi') : b.type
+      const tex = spriteTexture(key)
       if (tex) {
         const sp = new Sprite(tex)
         sp.anchor.set(0.5)
@@ -156,8 +158,8 @@ export class BoardView {
         const base = ((S - 4) * shrink) / Math.max(tex.width, tex.height)
         sp.scale.set(base)
         sp.position.set(this.px(x), this.px(y))
-        if (b.type === 'kokeishi' && b.hp === 1) {
-          sp.alpha = 0.82 // 1層目: 削れた表現（v1簡易。ひび差分はアセット第2弾で）
+        if (b.type === 'kokeishi' && b.hp === 1 && key === 'kokeishi') {
+          sp.alpha = 0.82 // 差分アセット未ロード時のフォールバック
           sp.tint = 0xd8d2c2
         }
         const wrap = new Container()
