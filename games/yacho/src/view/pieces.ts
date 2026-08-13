@@ -2,37 +2,56 @@
 import { Assets, Container, Graphics, RenderTexture, Renderer, Texture } from 'pixi.js'
 import type { Piece } from '../core/types'
 
-// 生成アセット AD v2（user_master 参照・256px透過）。vite が URL 解決する
+// 生成アセット AD v3（user_v3 モック参照・256px透過）。vite が URL 解決する
 // 色スロット: 0=鉱石(黄) 1=葉(緑) 2=結晶(青) 3=花(紫) 4=キノコ(赤)
 const SPRITE_URLS: Record<string, URL> = {
-  n0: new URL('../../assets/sprites2/p0_ore.png', import.meta.url),
-  n1: new URL('../../assets/sprites2/p1_leaf.png', import.meta.url),
-  n2: new URL('../../assets/sprites2/p2_crystal.png', import.meta.url),
-  n3: new URL('../../assets/sprites2/p3_flower.png', import.meta.url),
-  n4: new URL('../../assets/sprites2/p4_mushroom.png', import.meta.url),
-  harpoon: new URL('../../assets/sprites2/s_wrench.png', import.meta.url),
-  hamushi: new URL('../../assets/sprites2/s_compass.png', import.meta.url),
-  hitsubo: new URL('../../assets/sprites2/s_gearbomb.png', import.meta.url),
-  seiju: new URL('../../assets/sprites2/s_lantern.png', import.meta.url),
-  spore: new URL('../../assets/sprites2/s_spore.png', import.meta.url),
-  kokeishi: new URL('../../assets/sprites2/o_stone.png', import.meta.url),
-  hako: new URL('../../assets/sprites2/o_crate.png', import.meta.url),
-  // 盤素材
-  tile: new URL('../../assets/board/tile_cell.png', import.meta.url),
-  frame: new URL('../../assets/board/board_frame.png', import.meta.url),
-  // UI部材（ui_kit切り出し）
+  n0: new URL('../../assets/sprites3/p0_ore.png', import.meta.url),
+  n1: new URL('../../assets/sprites3/p1_leaf.png', import.meta.url),
+  n2: new URL('../../assets/sprites3/p2_crystal.png', import.meta.url),
+  n3: new URL('../../assets/sprites3/p3_flower.png', import.meta.url),
+  n4: new URL('../../assets/sprites3/p4_mushroom.png', import.meta.url),
+  harpoon: new URL('../../assets/sprites3/s_wrench.png', import.meta.url),
+  hamushi: new URL('../../assets/sprites3/s_compass.png', import.meta.url),
+  hitsubo: new URL('../../assets/sprites3/s_gearbomb.png', import.meta.url),
+  seiju: new URL('../../assets/sprites3/s_lantern.png', import.meta.url),
+  spore: new URL('../../assets/sprites3/s_spore.png', import.meta.url),
+  kokeishi: new URL('../../assets/sprites3/o_stone.png', import.meta.url),
+  hako: new URL('../../assets/sprites3/o_crate.png', import.meta.url),
+  touhen: new URL('../../assets/sprites3/o_touhen.png', import.meta.url),
+  subi: new URL('../../assets/sprites3/o_subi.png', import.meta.url),
+  ground_thick: new URL('../../assets/sprites3/ground_thick.png', import.meta.url),
+  ground_thin: new URL('../../assets/sprites3/ground_thin.png', import.meta.url),
+  moss_icon: new URL('../../assets/sprites3/moss_icon.png', import.meta.url),
+  // 盤素材（暖色石タイル4バリアント＋苔石フレーム）
+  tile: new URL('../../assets/board/tile2_0.png', import.meta.url),
+  tile_1: new URL('../../assets/board/tile2_1.png', import.meta.url),
+  tile_2: new URL('../../assets/board/tile2_2.png', import.meta.url),
+  tile_3: new URL('../../assets/board/tile2_3.png', import.meta.url),
+  frame: new URL('../../assets/board/board_frame2.png', import.meta.url),
+  // UI部材（ui_kit3切り出し。ラベルは焼き込み）
   ui_ribbon: new URL('../../assets/ui/ribbon.png', import.meta.url),
-  ui_target: new URL('../../assets/ui/target_panel.png', import.meta.url),
-  ui_moves: new URL('../../assets/ui/moves_plaque.png', import.meta.url),
-  ui_medal: new URL('../../assets/ui/medallion.png', import.meta.url),
-  ui_gear: new URL('../../assets/ui/gear.png', import.meta.url),
+  ui_target: new URL('../../assets/ui/target_plaque2.png', import.meta.url),
+  ui_moves: new URL('../../assets/ui/moves_medallion.png', import.meta.url),
+  ui_score: new URL('../../assets/ui/score_badge.png', import.meta.url),
+  ui_medal: new URL('../../assets/ui/booster_socket.png', import.meta.url),
+  ui_gear: new URL('../../assets/ui/gear2.png', import.meta.url),
+  ui_back: new URL('../../assets/ui/back2.png', import.meta.url),
   ui_parchment: new URL('../../assets/ui/parchment.png', import.meta.url),
   // 文字焼き込み部材（ラベルはコード描画せずこちらを使う）
-  ui_button_next: new URL('../../assets/ui/button_next.png', import.meta.url),
+  ui_button_next: new URL('../../assets/ui/button_next2.png', import.meta.url),
   ui_coin: new URL('../../assets/ui/coin.png', import.meta.url),
+  ui_star_gold: new URL('../../assets/ui/star_gold.png', import.meta.url),
+  ui_star_empty: new URL('../../assets/ui/star_empty.png', import.meta.url),
+  ui_word_hiscore: new URL('../../assets/ui/word_hiscore.png', import.meta.url),
   map_bg: new URL('../../assets/bg/map_bg.png', import.meta.url),
-  map_node: new URL('../../assets/ui/map_node.png', import.meta.url),
-  map_node_gold: new URL('../../assets/ui/map_node_gold.png', import.meta.url),
+  map_node: new URL('../../assets/ui/map_node2.png', import.meta.url),
+  map_node_gold: new URL('../../assets/ui/map_node_gold2.png', import.meta.url),
+  map_stararc: new URL('../../assets/ui/map_stararc.png', import.meta.url),
+  map_avatar: new URL('../../assets/ui/map_avatar.png', import.meta.url),
+  // 探窟家バスト（盤上に覗く。層テーマで交代）
+  bust_forest: new URL('../../assets/ui/bust_boy.png', import.meta.url),
+  bust_machine: new URL('../../assets/ui/bust_mole.png', import.meta.url),
+  bust_crystal: new URL('../../assets/ui/bust_girl.png', import.meta.url),
   ui_ribbon_clear: new URL('../../assets/ui/ribbon_clear.png', import.meta.url),
   ui_banner_word: new URL('../../assets/ui/banner_toha.png', import.meta.url), // 「深界踏破！」（本人選定 2026-08-12）
   // 層テーマ背景（Lv1-10 森 / 11-20 機械遺跡 / 21-30 結晶洞窟）

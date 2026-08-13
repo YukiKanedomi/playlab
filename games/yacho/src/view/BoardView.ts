@@ -28,7 +28,7 @@ export class BoardView {
   S: number
   sprites = new Map<string, Sprite>() // "x,y" -> 駒スプライト
   blockG = new Map<string, Container>()
-  groundG = new Map<string, Graphics>()
+  groundG = new Map<string, Container>()
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
   private drainCount = 0 // 勝利ドレインSEのピッチ段数
   private epoch = 0 // レベル遷移の世代。跨いだ遅延コールバックは無効化する
@@ -55,27 +55,32 @@ export class BoardView {
     const tileTex = spriteTexture('tile')
     const frameTex = spriteTexture('frame')
     if (tileTex) {
-      // 生成タイル：市松は微ティントで（整列はコード保証）
+      // 生成タイル：暖色石4バリアントを決定的に散らす（AD v3。市松は微ティント）
+      const variants = [tileTex, spriteTexture('tile_1') ?? tileTex, spriteTexture('tile_2') ?? tileTex, spriteTexture('tile_3') ?? tileTex]
       const base = new Graphics()
-      base.roundRect(-6, -6, W * this.S + 12, H * this.S + 12, 10).fill({ color: 0x0c161f, alpha: 0.85 })
+      base.roundRect(-6, -6, W * this.S + 12, H * this.S + 12, 10).fill({ color: 0x2b2118, alpha: 0.85 })
       this.cellLayer.addChild(base)
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W; x++) {
           if (!this.board.at(x, y)) continue
-          const sp = new Sprite(tileTex)
+          const sp = new Sprite(variants[(x * 7 + y * 13 + ((x * x + y) >> 1)) % 4])
           sp.width = this.S
           sp.height = this.S
           sp.position.set(x * this.S, y * this.S)
-          sp.tint = (x + y) % 2 ? 0xffffff : 0xc9d2dd
+          sp.tint = (x + y) % 2 ? 0xffffff : 0xe4d6c4
           this.cellLayer.addChild(sp)
         }
       if (frameTex) {
+        // スリム枠（帯内縁がテクスチャ幅の INNER 比率にある前提）を盤外周に重ねる
+        const INNER = 0.038 // frame_v3 実測（帯内縁 38/1024）
+        const inset = this.S * 0.12 // 盤へ少し食い込ませて隙間を消す
+        const gridW = W * this.S
+        const gridH = H * this.S
+        const pad = (INNER * gridW + inset) / (1 - 2 * INNER)
         const fr = new Sprite(frameTex)
-        // 枠の帯 (~60/1024) が盤の外周に載るよう、少し外に広げて被せる
-        const pad = this.S * 0.42
-        fr.width = W * this.S + pad * 2
-        fr.height = H * this.S + pad * 2
-        fr.position.set(-pad, -pad)
+        fr.width = gridW + 2 * pad
+        fr.height = gridH + 2 * ((INNER * gridH + inset) / (1 - 2 * INNER))
+        fr.position.set(-pad, -(INNER * gridH + inset) / (1 - 2 * INNER))
         this.cellLayer.addChild(fr)
       }
       return
@@ -142,12 +147,13 @@ export class BoardView {
     const b = c.block!
     const S = this.S
     // 生成アセットがある障害物は Sprite で
-    if (b.type === 'kokeishi' || b.type === 'hako') {
+    if (b.type === 'kokeishi' || b.type === 'hako' || b.type === 'touhen' || b.type === 'subi') {
       const tex = spriteTexture(b.type)
       if (tex) {
         const sp = new Sprite(tex)
         sp.anchor.set(0.5)
-        const base = (S - 4) / Math.max(tex.width, tex.height)
+        const shrink = b.type === 'touhen' ? 0.78 : 1 // 陶片は「中身」なので小さめ
+        const base = ((S - 4) * shrink) / Math.max(tex.width, tex.height)
         sp.scale.set(base)
         sp.position.set(this.px(x), this.px(y))
         if (b.type === 'kokeishi' && b.hp === 1) {
@@ -183,8 +189,18 @@ export class BoardView {
   }
 
   private makeGround(x: number, y: number, level: 1 | 2) {
-    const g = new Graphics()
     const S = this.S
+    const tex = spriteTexture(level === 2 ? 'ground_thick' : 'ground_thin')
+    if (tex) {
+      const sp = new Sprite(tex)
+      sp.width = S
+      sp.height = S
+      sp.position.set(x * S, y * S)
+      this.groundLayer.addChild(sp)
+      this.groundG.set(this.key(x, y), sp)
+      return
+    }
+    const g = new Graphics()
     g.roundRect(2, 2, S - 4, S - 4, 6).fill({ color: 0x4f7a4a, alpha: level === 2 ? 0.85 : 0.5 })
     g.position.set(x * this.S, y * this.S)
     this.groundLayer.addChild(g)

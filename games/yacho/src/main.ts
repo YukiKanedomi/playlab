@@ -92,16 +92,32 @@ async function boot() {
       }
       const num = new Text({
         text: String(i),
-        style: { fill: cleared ? 0x4a3a10 : UI.badgeText, fontSize: fs(0.04), fontFamily: 'serif', fontWeight: 'bold' },
+        style: { fill: 0xf4e8cf, fontSize: fs(0.04), fontFamily: 'serif', fontWeight: 'bold', stroke: { color: 0x3a2c18, width: 3 } },
       })
       num.anchor.set(0.5)
       node.addChild(num)
-      // 星
+      // 星アーチ（ノードの上に王冠状。獲得数ぶんの小さな金星）
       const st = save.stars[i - 1] ?? 0
-      if (cleared && st > 0) {
+      const starTex = spriteTexture('ui_star_gold')
+      if (cleared && st > 0 && starTex) {
+        const slots = [
+          [-r * 0.95, -r * 1.28, 0.68],
+          [0, -r * 1.55, 0.85],
+          [r * 0.95, -r * 1.28, 0.68],
+        ] as const
+        const order = st === 1 ? [1] : st === 2 ? [0, 1] : [0, 1, 2]
+        for (const k of order) {
+          const [sx, sy, sscale] = slots[k]
+          const s2 = new Sprite(starTex)
+          s2.anchor.set(0.5)
+          s2.scale.set((r * sscale) / starTex.width)
+          s2.position.set(sx, sy)
+          node.addChild(s2)
+        }
+      } else if (cleared && st > 0) {
         const stt = new Text({ text: '★'.repeat(st), style: { fill: 0xf2c14e, fontSize: fs(0.03), fontFamily: 'serif' } })
         stt.anchor.set(0.5)
-        stt.position.set(0, r * 1.45)
+        stt.position.set(0, -r * 1.4)
         node.addChild(stt)
       }
       if (current) {
@@ -118,6 +134,41 @@ async function boot() {
           })
         }
         pulse()
+        // アバターピン（層テーマの探窟家がノード上に浮かぶ）
+        const pinTex = spriteTexture('map_avatar')
+        const bustTex2 = spriteTexture(`bust_${themeForLevel(i)}`)
+        if (pinTex) {
+          const pin = new Container()
+          const ring2 = new Sprite(pinTex)
+          ring2.anchor.set(0.5)
+          const pr = r * 1.15
+          ring2.scale.set((pr * 2) / pinTex.width)
+          pin.addChild(ring2) // 中心が不透過なので、顔はリングの上にマスク付きで載せる
+          if (bustTex2) {
+            const face = new Sprite(bustTex2)
+            face.anchor.set(0.5, 0.24)
+            face.scale.set((pr * 1.5) / bustTex2.width)
+            face.position.set(0, -pr * 0.62)
+            const m = new Graphics()
+            m.circle(0, -pr * 0.05, pr * 0.68).fill(0xffffff)
+            face.mask = m
+            pin.addChild(face)
+            pin.addChild(m)
+          }
+          // モック準拠：現在ノードの真上に重ねる（番号は隠れてよい）
+          pin.position.set(0, -r * 0.55)
+          node.addChild(pin)
+          const bob = () => {
+            if (pin.destroyed) return
+            tw.tween(pin, { y: -r * 0.85 }, 900, {
+              onDone: () => {
+                if (pin.destroyed) return
+                tw.tween(pin, { y: -r * 0.55 }, 900, { onDone: bob })
+              },
+            })
+          }
+          bob()
+        }
       }
       if (locked) node.alpha = 0.45
       node.position.set(nx, ny)
@@ -254,46 +305,75 @@ async function boot() {
     playRoot.addChild(bgDim)
 
     // 盤はRM流に「親指の届く下側」へ。上1/4はHUD帯、下端にブースター帯
-    const boardSize = Math.min(vw * 0.94, vh * 0.58)
+    const boardSize = Math.min(vw * 0.9, vh * 0.58) // 枠の帯ぶん少し細く（frame_v3）
     view = new BoardView(board, app.renderer, boardSize)
     const bw = view.S * W
     const boardTop = vh * 0.27
     view.root.position.set((vw - bw) / 2, boardTop)
     playRoot.addChild(view.root)
 
-    // ---------- HUD ----------
+    // ---------- 探窟家バスト（HUDと盤の間から覗く。盤より先に足して奥に置く） ----------
+    const bustTex = spriteTexture(`bust_${themeForLevel(def.id)}`)
+    if (bustTex) {
+      const bust = new Sprite(bustTex)
+      bust.anchor.set(0.5, 1)
+      const bh = vh * 0.17
+      bust.scale.set(bh / bustTex.height)
+      // 盤上辺に手を掛けるように少し沈める
+      bust.position.set(vw * 0.38, boardTop + vh * 0.012) // スコアバッジと重ならない位置
+      playRoot.addChildAt(bust, playRoot.getChildIndex(view.root))
+    }
+
+    // ---------- HUD（AD v3: メダリオン/中央プラーク/スコアバッジ） ----------
     const ui = new Container()
     playRoot.addChild(ui)
 
-    const badgeW = vw * 0.2
+    // のこりメダリオン（左上・円形ブロンズ）
+    const badgeW = vw * 0.185
     const plaqueTex = spriteTexture('ui_moves')
-    let badgeH = vw * 0.19
+    let badgeH = badgeW
     if (plaqueTex) {
       const sp = new Sprite(plaqueTex)
       sp.width = badgeW
       sp.height = (badgeW / plaqueTex.width) * plaqueTex.height
       badgeH = sp.height
-      sp.position.set(vw * 0.03, vh * 0.025)
+      sp.position.set(vw * 0.035, vh * 0.022)
       ui.addChild(sp)
     }
     const movesText = new Text({
       text: '',
-      style: { fill: UI.badgeText, fontSize: fs(0.08), fontFamily: 'serif', fontWeight: 'bold' },
+      style: { fill: 0xf4e8cf, fontSize: fs(0.075), fontFamily: 'serif', fontWeight: 'bold' },
     })
     movesText.anchor.set(0.5)
-    movesText.position.set(vw * 0.03 + badgeW / 2, vh * 0.025 + badgeH * 0.62)
+    // メダリオンの暗い中心（リボン下）に合わせる
+    movesText.position.set(vw * 0.035 + badgeW / 2, vh * 0.022 + badgeH * 0.58)
     ui.addChild(movesText)
 
+    // スコアバッジ（メダリオンの下。「スコア」は焼き込み・数字のみ描画）
+    const scoreBadgeTex = spriteTexture('ui_score')
+    const sbW = vw * 0.3
+    let sbH = sbW * 0.39
+    const sbX = vw * 0.03
+    const sbY = vh * 0.022 + badgeH + vh * 0.012
+    if (scoreBadgeTex) {
+      const sp = new Sprite(scoreBadgeTex)
+      sp.width = sbW
+      sp.height = (sbW / scoreBadgeTex.width) * scoreBadgeTex.height
+      sbH = sp.height
+      sp.position.set(sbX, sbY)
+      ui.addChild(sp)
+    }
     const scoreText = new Text({
       text: '',
-      style: { fill: UI.badgeText, fontSize: fs(0.032), fontFamily: 'serif', stroke: { color: 0x2a2013, width: 3 } },
+      style: { fill: 0xf4e8cf, fontSize: fs(0.034), fontFamily: 'serif', fontWeight: 'bold' },
     })
-    scoreText.position.set(vw * 0.03, vh * 0.025 + badgeH + 8)
+    scoreText.anchor.set(1, 0.5)
+    scoreText.position.set(sbX + sbW * 0.92, sbY + sbH * 0.5)
     ui.addChild(scoreText)
 
-    // 歯車（ミュート）
+    // 歯車（ミュート）と戻る（青銅メダリオン・右上に縦並び）
     const gearTex = spriteTexture('ui_gear')
-    const gr = vw * 0.05
+    const gr = vw * 0.048
     let gear: Container
     if (gearTex) {
       const sp = new Sprite(gearTex)
@@ -305,7 +385,7 @@ async function boot() {
       g.circle(0, 0, gr).fill(UI.wood).stroke({ width: 3, color: UI.brass })
       gear = g
     }
-    gear.position.set(vw * 0.93, vh * 0.03 + gr)
+    gear.position.set(vw * 0.925, vh * 0.03 + gr)
     gear.eventMode = 'static'
     gear.cursor = 'pointer'
     gear.alpha = isMuted() ? 0.45 : 1
@@ -314,18 +394,26 @@ async function boot() {
     })
     ui.addChild(gear)
 
-    // マップへ戻る（左上の小さな札の下・青銅の矢印）
-    const back = new Graphics()
-    back.roundRect(-vw * 0.035, -vh * 0.016, vw * 0.07, vh * 0.032, 8).fill(UI.wood).stroke({ width: 2, color: UI.brass })
-    back.moveTo(vw * 0.01, -vh * 0.009).lineTo(-vw * 0.012, 0).lineTo(vw * 0.01, vh * 0.009).stroke({ width: 3, color: UI.badgeText })
-    back.position.set(vw * 0.93, vh * 0.03 + gr * 2 + vh * 0.028) // 歯車の下に縦並び（重なり解消）
+    const backTex = spriteTexture('ui_back')
+    let back: Container
+    if (backTex) {
+      const sp = new Sprite(backTex)
+      sp.anchor.set(0.5)
+      sp.scale.set((gr * 2.2) / Math.max(backTex.width, backTex.height))
+      back = sp
+    } else {
+      const g = new Graphics()
+      g.circle(0, 0, gr).fill(UI.wood).stroke({ width: 2, color: UI.brass })
+      back = g
+    }
+    back.position.set(vw * 0.925, vh * 0.03 + gr * 3 + vh * 0.012)
     back.eventMode = 'static'
     back.cursor = 'pointer'
     back.on('pointertap', () => showMap())
     ui.addChild(back)
 
-    // ターゲット札
-    const tpW = vw * 0.44
+    // ターゲット札（画面中央上・リボン見出し焼き込み）
+    const tpW = vw * 0.46
     const tpTex = spriteTexture('ui_target')
     const tpH = tpTex ? (tpW / tpTex.width) * tpTex.height : badgeH
     const tp = new Container()
@@ -335,7 +423,7 @@ async function boot() {
       sp.height = tpH
       tp.addChild(sp)
     }
-    tp.position.set(vw * 0.27 + (vw * 0.62 - tpW) / 2, vh * 0.02) // 木札と右ボタン群の間で中央寄せ
+    tp.position.set((vw - tpW) / 2, vh * 0.018) // 真ん中に置く（モック準拠）
     ui.addChild(tp)
 
     const goalItems: { icon: Container; count: Text }[] = []
@@ -344,7 +432,8 @@ async function boot() {
       let sp: Sprite | null = null
       if (g.type === 'color') sp = new Sprite(pieceTexture(app.renderer, { kind: 'normal', color: g.color! }, 64))
       else if (g.type === 'kokeishi' && spriteTexture('kokeishi')) sp = new Sprite(spriteTexture('kokeishi')!)
-      else if (g.type === 'touhen' && spriteTexture('hako')) sp = new Sprite(spriteTexture('hako')!)
+      else if (g.type === 'touhen' && spriteTexture('touhen')) sp = new Sprite(spriteTexture('touhen')!)
+      else if (g.type === 'tsutagoke' && spriteTexture('moss_icon')) sp = new Sprite(spriteTexture('moss_icon')!)
       else if (g.type === 'spore' && spriteTexture('spore')) sp = new Sprite(spriteTexture('spore')!)
       if (sp) {
         sp.anchor.set(0.5)
@@ -363,22 +452,22 @@ async function boot() {
         gi.count.destroy()
       }
       goalItems.length = 0
-      // 目標数に応じてグループ幅を決め、パネルの内側（12%〜88%）に収める
+      // モック準拠：アイコンの「下」に数字（重なり解消）。パネル内側に等間隔
       const n = board.goals.length
-      const inner = tpW * 0.76
-      const groupW = Math.min(tpW * 0.3, inner / n)
-      const iconScale = n >= 3 ? 0.22 : 0.28
+      const inner = tpW * 0.78
+      const groupW = Math.min(tpW * 0.32, inner / n)
+      const iconScale = n >= 3 ? 0.26 : 0.32
       board.goals.forEach((g, i) => {
         const icon = goalIcon(g)
         for (const ch of icon.children) if (ch instanceof Sprite) ch.scale.set((tpH * iconScale) / Math.max(ch.texture.width, ch.texture.height))
         const cx = tpW / 2 + (i - (n - 1) / 2) * groupW
-        icon.position.set(cx - groupW * 0.22, tpH * 0.58)
+        icon.position.set(cx, tpH * 0.52)
         const count = new Text({
           text: '',
-          style: { fill: UI.paperInk, fontSize: fs(n >= 3 ? 0.038 : 0.045), fontFamily: 'serif', fontWeight: 'bold' },
+          style: { fill: UI.paperInk, fontSize: fs(n >= 3 ? 0.036 : 0.042), fontFamily: 'serif', fontWeight: 'bold' },
         })
-        count.anchor.set(0, 0.5)
-        count.position.set(cx + groupW * 0.06, tpH * 0.58)
+        count.anchor.set(0.5)
+        count.position.set(cx, tpH * 0.8)
         tp.addChild(icon)
         tp.addChild(count)
         goalItems.push({ icon, count })
@@ -387,7 +476,7 @@ async function boot() {
 
     const refreshHud = () => {
       movesText.text = String(board.movesLeft)
-      scoreText.text = `スコア ${board.score.toLocaleString()}`
+      scoreText.text = board.score.toLocaleString()
       board.goals.forEach((g, i) => {
         const gi = goalItems[i]
         if (!gi) return
@@ -413,6 +502,10 @@ async function boot() {
       }
       const tex2 = spriteTexture(k)
       if (tex2) {
+        // ソケットの暗い中心で沈まないよう、淡い光を裏に敷く
+        const glow = new Graphics()
+        glow.circle(0, -r * 0.06, r * 0.62).fill({ color: 0xe8d9b0, alpha: 0.22 })
+        m.addChild(glow)
         const sp = new Sprite(tex2)
         sp.anchor.set(0.5)
         sp.scale.set((r * 1.05) / Math.max(tex2.width, tex2.height))
@@ -523,7 +616,7 @@ async function boot() {
           })
         })
         tw.delay(dur * 0.5, () => {
-          if (alive() && !scoreText.destroyed) scoreText.text = `スコア ${board.score.toLocaleString()}`
+          if (alive() && !scoreText.destroyed) scoreText.text = board.score.toLocaleString()
         })
         tw.delay(dur, () => {
           if (!alive()) return
@@ -540,6 +633,9 @@ async function boot() {
       const reward = clearReward(currentLevelId, st)
       save.coins += reward
       save.stars[currentLevelId - 1] = Math.max(save.stars[currentLevelId - 1] ?? 0, st)
+      if (!save.best) save.best = []
+      const prevBest = save.best[currentLevelId - 1] ?? 0
+      save.best[currentLevelId - 1] = Math.max(prevBest, board.score)
       save.unlocked = Math.max(save.unlocked, currentLevelId)
       persistSave(save)
 
@@ -548,9 +644,9 @@ async function boot() {
       dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0.55 })
       panel.addChild(dim)
       const pw = vw * 0.82
-      const ph = vh * 0.42
+      const ph = vh * 0.46
       const px0 = (vw - pw) / 2
-      const py0 = vh * 0.24
+      const py0 = vh * 0.22
       const parchTex = spriteTexture('ui_parchment')
       if (parchTex) {
         const sp = new Sprite(parchTex)
@@ -567,18 +663,30 @@ async function boot() {
         rb.position.set(vw / 2, py0 + vh * 0.002)
         panel.addChild(rb)
       }
-      const starY = py0 + ph * 0.34
+      // ★はスプライトで大きく（モック準拠：中央が一段高い）
+      const starY = py0 + ph * 0.3
+      const starGold = spriteTexture('ui_star_gold')
+      const starEmpty = spriteTexture('ui_star_empty')
       for (let i = 0; i < 3; i++) {
         const filled = i < st
-        const stT = new Text({
-          text: '★',
-          style: { fill: filled ? 0xf2c14e : 0xcbc2ab, fontSize: fs(filled ? 0.13 : 0.1), fontFamily: 'serif' },
-        })
-        stT.anchor.set(0.5)
-        stT.position.set(vw / 2 + (i - 1) * pw * 0.24, starY + (i === 1 ? -ph * 0.03 : 0))
-        stT.scale.set(0)
-        panel.addChild(stT)
-        tw.tween(stT.scale, { x: 1, y: 1 }, 300, {
+        const tex3 = filled ? starGold : starEmpty
+        let stS: Container
+        if (tex3) {
+          const sp = new Sprite(tex3)
+          sp.anchor.set(0.5)
+          const sw = pw * (i === 1 ? 0.27 : 0.22)
+          sp.scale.set(sw / tex3.width)
+          stS = sp
+        } else {
+          const t2 = new Text({ text: '★', style: { fill: filled ? 0xf2c14e : 0xcbc2ab, fontSize: fs(0.12), fontFamily: 'serif' } })
+          t2.anchor.set(0.5)
+          stS = t2
+        }
+        stS.position.set(vw / 2 + (i - 1) * pw * 0.27, starY + (i === 1 ? -ph * 0.05 : 0))
+        stS.scale.set(0)
+        const target = tex3 ? (pw * (i === 1 ? 0.27 : 0.22)) / tex3.width : 1
+        panel.addChild(stS)
+        tw.tween(stS.scale, { x: target, y: target }, 300, {
           delay: 200 + i * 180,
           ease: tw.easeOutBack,
           onDone: () => {
@@ -586,13 +694,44 @@ async function boot() {
           },
         })
       }
+      // スコア（バッジ焼き込み「スコア」＋数字）
+      const scBadge = spriteTexture('ui_score')
+      const scW = pw * 0.56
+      let scH = scW * 0.39
+      const scY = py0 + ph * 0.5
+      if (scBadge) {
+        const sp = new Sprite(scBadge)
+        sp.anchor.set(0.5)
+        sp.width = scW
+        sp.height = (scW / scBadge.width) * scBadge.height
+        scH = sp.height
+        sp.position.set(vw / 2, scY)
+        panel.addChild(sp)
+      }
       const sc = new Text({
-        text: `スコア ${board.score.toLocaleString()}`,
-        style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: 'serif', fontWeight: 'bold', align: 'center' },
+        text: board.score.toLocaleString(),
+        style: { fill: 0xf4e8cf, fontSize: fs(0.046), fontFamily: 'serif', fontWeight: 'bold' },
       })
       sc.anchor.set(0.5)
-      sc.position.set(vw / 2, py0 + ph * 0.55)
+      sc.position.set(vw / 2 + scW * 0.15, scY) // 「スコア」焼き込みの右側・鋲を避けて中央寄せ
       panel.addChild(sc)
+      // ハイスコア（焼き込み札＋数字）
+      const hsTex = spriteTexture('ui_word_hiscore')
+      const hsY = scY + scH * 0.5 + vh * 0.022
+      if (hsTex) {
+        const sp = new Sprite(hsTex)
+        sp.anchor.set(1, 0.5)
+        sp.scale.set((pw * 0.3) / hsTex.width)
+        sp.position.set(vw / 2 + pw * 0.02, hsY)
+        panel.addChild(sp)
+      }
+      const hs = new Text({
+        text: Math.max(prevBest, board.score).toLocaleString(),
+        style: { fill: UI.paperInk, fontSize: fs(0.034), fontFamily: 'serif', fontWeight: 'bold' },
+      })
+      hs.anchor.set(0, 0.5)
+      hs.position.set(vw / 2 + pw * 0.06, hsY)
+      panel.addChild(hs)
       // 報酬コイン
       const rw = new Container()
       const coinTex = spriteTexture('ui_coin')
@@ -610,7 +749,7 @@ async function boot() {
       rwT.anchor.set(0, 0.5)
       rwT.position.set(-fs(0.02), 0)
       rw.addChild(rwT)
-      rw.position.set(vw / 2, py0 + ph * 0.67)
+      rw.position.set(vw / 2, py0 + ph * 0.71)
       panel.addChild(rw)
       // つぎへ（→マップ）
       const btn = new Container()
@@ -622,7 +761,7 @@ async function boot() {
         sp.scale.set(bw2 / btnTex.width)
         btn.addChild(sp)
       }
-      btn.position.set(vw / 2, py0 + ph * 0.85)
+      btn.position.set(vw / 2, py0 + ph * 0.86)
       btn.eventMode = 'static'
       btn.cursor = 'pointer'
       btn.on('pointertap', () => {

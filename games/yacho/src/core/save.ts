@@ -5,6 +5,8 @@ export interface SaveData {
   /** レベルごとの最高星数（index = id-1） */
   stars: number[]
   coins: number
+  /** レベルごとのハイスコア（index = id-1。旧セーブには無いので optional） */
+  best?: number[]
 }
 
 const KEY = 'yacho-save-v1'
