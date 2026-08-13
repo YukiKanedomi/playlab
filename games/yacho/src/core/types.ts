@@ -4,8 +4,8 @@
 export type Color = 0 | 1 | 2 | 3 | 4
 
 export type Piece =
-  | { kind: 'normal'; color: Color }
-  | { kind: 'harpoon'; dir: 'h' | 'v' } // 銛（RMロケット）
+  | { kind: 'normal'; color: Color; volatile?: boolean } // volatile=爆発鉱石（ローグ拡張。ROGUE.md §3）
+  | { kind: 'harpoon'; dir: 'h' | 'v'; origin?: 'plant' | 'mineral' | 'gear' | 'relic' } // 銛（RMロケット）。originは蔓ロケット強化用
   | { kind: 'hamushi' } // 羽虫（RMプロペラ）
   | { kind: 'hitsubo' } // 火壺（RM TNT）
   | { kind: 'seiju' } // 星珠（RMライトボール）
@@ -23,6 +23,7 @@ export interface Cell {
   piece: Piece | null
   ground: 0 | 1 | 2 // 蔦苔の層（下敷き。上でマッチ/特殊駒起爆で1層剥がれる）
   block: Block | null
+  sporeToken?: boolean // ローグ拡張：設置型の胞子トークン（既存 spore 駒とは別物。RunState併用時のみ使用。ROGUE.md §3）
 }
 
 export type GoalType =
@@ -75,6 +76,12 @@ export type BoardEvent =
   // 勝利シーケンス（RESEARCH §5: 残手数ドレイン→特殊駒変換→自動起爆）
   | { t: 'win-drain'; movesLeft: number; convertAt: XY | null }
   | { t: 'win-detonate-begin' }
+  // ローグライク拡張（ROGUE.md §3）：フックが生む決定的アクションのうち、既存イベントに翻訳できないもの
+  | { t: 'token-spawn'; at: XY; kind: 'spore' } // 胞子トークン設置
+  | { t: 'token-consumed'; at: XY; kind: 'spore' } // トークンが隣接消滅に反応して消費
+  | { t: 'explode'; at: XY; cells: XY[] } // 爆発鉱石の爆発（destroy連鎖の起点）
+  | { t: 'gear-trigger'; at: XY; count: number } // ギア駒起動（RunState.gearCharge計上）
+  | { t: 'obstacle-spawn'; at: XY; blockType: Block['type'] } // 賭博師の壺などが生成する邪魔ピース
 
 export interface XY {
   x: number

@@ -2,6 +2,10 @@
 // 設計根拠: DESIGN.md §1/§5、RESEARCH.md §1-2（RM実仕様）。
 import { makeRng, randInt, type Rng } from './rng'
 import type { BoardEvent, Cell, Color, Goal, LevelDef, Piece, XY } from './types'
+import type { DestroyCause, Hook, HookCtx, MatchGroup } from './hooks'
+import { systemOf } from './hooks'
+import { MIMIC_SLIME_ID, PREHEAT_ID, RESONANT_SHATTER_ID, SPORE_BULLET_ID, UPGRADES, VINE_ROCKET_ID } from './upgrades'
+import type { RunState } from './run'
 
 export const W = 8
 export const H = 8
@@ -17,15 +21,27 @@ export class Board {
   subiCharge: number
   score = 0 // 消去1駒=10点×連鎖倍率、特殊駒発動=+50（DESIGN.md §2）
 
-  constructor(public def: LevelDef) {
+  // ---- ローグライク拡張（ROGUE.md §3）：run が無ければ以下は一切使われない ----
+  private hooks: { upgradeId: string; hook: Hook }[] = []
+  private hookFireCount = 0 // 1解決あたりのフック発火数（暴走対策の上限200）
+  private hooksSuspended = false
+  private resolveDestroyCount = 0 // 1解決あたりの破壊駒数（RunRecords.maxDestroyed用）
+  private lastHookReplay: (() => void) | null = null // 模倣の粘菌(#14)用
+
+  constructor(
+    public def: LevelDef,
+    public run?: RunState,
+  ) {
     this.rng = makeRng(def.seed)
     this.movesLeft = def.moves
     this.colors = ([0, 1, 2, 3, 4] as Color[]).slice(0, def.colors)
     this.goals = def.goals
     this.goalDone = def.goals.map(() => 0)
     this.subiCharge = def.subiCharge ?? 4
+    if (run) this.hooks = UPGRADES.filter((u) => run.upgrades.includes(u.id)).flatMap((u) => u.hooks.map((hook) => ({ upgradeId: u.id, hook })))
     this.loadLayout(def.layout)
     this.fillInitial()
+    this.applyPreheat()
   }
 
   private loadLayout(layout: string[]) {
@@ -234,6 +250,7 @@ export class Board {
       ev.push({ t: 'swap', a, b, illegal: true })
       return ev
     }
+    this.beginResolve() // 1解決（このswap一手ぶんの連鎖・浮上再安定化まで）のフック予算をリセット
     const isSpecial = (p: Piece) => p.kind !== 'normal' && p.kind !== 'spore'
     // 特殊駒コンボ（両方特殊）: 両方消費して b 地点で合成発動
     if (isSpecial(ca.piece) && isSpecial(cb.piece)) {
@@ -283,6 +300,7 @@ export class Board {
   /** 特殊駒タップ発動 */
   tap(at: XY): BoardEvent[] {
     const ev: BoardEvent[] = []
+    this.beginResolve()
     const c = this.at(at.x, at.y)
     if (!c?.piece || c.piece.kind === 'normal' || c.piece.kind === 'spore') return ev
     this.movesLeft--
@@ -321,7 +339,10 @@ export class Board {
       }
       if (!special) {
         if (r.cells.length >= 5) special = { kind: 'seiju' }
-        else if (r.cells.length === 4) special = { kind: 'harpoon', dir: r.dir === 'h' ? 'v' : 'h' }
+        else if (r.cells.length === 4) {
+          special = { kind: 'harpoon', dir: r.dir === 'h' ? 'v' : 'h' }
+          if (this.run) special.origin = systemOf(r.color) // 蔓ロケット(#17)判定用のタグ付け（発動時にfireSpecialが読む）
+        }
       }
       clusters.push({ cells, color: r.color, special })
       taken.add(i)
@@ -339,6 +360,10 @@ export class Board {
         this.clearPieceAt(p, ev, cl.color)
       }
       this.damageAround(cl.cells, ev)
+      if (this.run) {
+        const g: MatchGroup = { cells: cl.cells, color: cl.color, chain: this.chain, system: systemOf(cl.color) }
+        this.fireMatchHooks(g, ev)
+      }
       if (cl.special) {
         // 生成位置：プレイヤーのスワップ先がクラスタ内ならそこ、でなければ中央
         const spawnAt = born && cl.cells.some((p) => p.x === born.x && p.y === born.y) ? born : cl.cells[Math.floor(cl.cells.length / 2)]
@@ -353,16 +378,21 @@ export class Board {
   }
 
   /** 駒を消す（蔦苔剥がし・ゴール計上・スコア込み） */
-  private clearPieceAt(p: XY, ev: BoardEvent[], countColor?: Color) {
+  private clearPieceAt(p: XY, ev: BoardEvent[], countColor?: Color, cause: DestroyCause = 'match') {
     const c = this.at(p.x, p.y)
     if (!c) return
     if (c.piece?.kind === 'normal' && countColor !== undefined) this.progressGoal({ type: 'color', color: c.piece.color }, ev)
     if (c.piece) this.score += 10 * Math.max(1, this.chain)
+    const destroyedPiece = c.piece
     c.piece = null
     if (c.ground > 0) {
       c.ground = (c.ground - 1) as 0 | 1
       ev.push({ t: 'ground-hit', at: p, left: c.ground })
       if (c.ground === 0) this.progressGoal({ type: 'tsutagoke' }, ev)
+    }
+    if (this.run && destroyedPiece) {
+      this.resolveDestroyCount++
+      this.onPieceDestroyed(p, destroyedPiece, cause, ev)
     }
   }
 
@@ -464,7 +494,7 @@ export class Board {
         this.fireSpecial({ x, y }, q, ev)
       } else {
         this.progressGoal({ type: 'color', color: c.piece.color }, ev)
-        this.clearPieceAt({ x, y }, ev)
+        this.clearPieceAt({ x, y }, ev, undefined, 'special')
       }
       cleared.push({ x, y })
     }
@@ -530,6 +560,24 @@ export class Board {
         for (let y = 0; y < H; y++) row(y)
         break
     }
+    // 異種シナジー強化（#17/#18）：特殊駒の発動そのものに介入するため on:match/destroy/... のどれにも
+    // 当てはまらない。ここで run.upgrades を直接見て処理する（フック化していない理由は最終報告）。
+    if (this.run) {
+      if (p.kind === 'harpoon' && p.origin === 'plant' && this.run.upgrades.includes(VINE_ROCKET_ID) && cleared.length > 0) {
+        const n = Math.floor(cleared.length * 0.1)
+        for (let i = 0; i < n; i++) {
+          const at2 = cleared[randInt(this.rng, cleared.length)]
+          const c2 = this.at(at2.x, at2.y)
+          if (c2 && !c2.block && !c2.piece) {
+            c2.piece = { kind: 'normal', color: this.rng() < 0.5 ? 1 : 4 }
+            ev.push({ t: 'special-born', at: at2, piece: c2.piece })
+          }
+        }
+      }
+      if ((p.kind === 'hitsubo' || combo?.kind === 'hitsubo') && this.run.upgrades.includes(SPORE_BULLET_ID)) {
+        this.spawnTokenAt(at, 'spore', ev)
+      }
+    }
     ev.push({ t: 'special-fire', at, piece: p, cleared })
   }
 
@@ -544,7 +592,7 @@ export class Board {
       if (c.block) this.damageBlock(t, ev)
       else if (c.piece?.kind === 'normal') {
         this.progressGoal({ type: 'color', color: c.piece.color }, ev)
-        this.clearPieceAt(t, ev)
+        this.clearPieceAt(t, ev, undefined, 'special')
         cleared.push(t)
       }
     }
@@ -600,7 +648,7 @@ export class Board {
       for (const p of best) {
         const c = this.at(p.x, p.y)!
         this.progressGoal({ type: 'color', color: (c.piece as { color: Color }).color }, ev)
-        this.clearPieceAt(p, ev)
+        this.clearPieceAt(p, ev, undefined, 'special')
         cleared.push(p) // ビューへ通知（未通知だと幽霊/空白の温床）
       }
       this.damageAround(best, ev)
@@ -745,6 +793,10 @@ export class Board {
       }
     // 浮上で生じた空セル・偶発マッチを再安定化（Codexレビュー#3）
     if (sporeMoved) this.resolveCascades(ev)
+    if (this.run) {
+      this.run.records.maxChain = Math.max(this.run.records.maxChain, this.chain)
+      this.run.records.maxDestroyed = Math.max(this.run.records.maxDestroyed, this.resolveDestroyCount)
+    }
   }
 
   private progressGoal(match: { type: Goal['type']; color?: Color }, ev: BoardEvent[]) {
@@ -773,6 +825,7 @@ export class Board {
     if (this.winFinished) return [] // 二重呼び出しガード（Codexレビュー#7）
     this.winFinished = true
     const ev: BoardEvent[] = []
+    this.beginResolve()
     const drain = Math.min(this.movesLeft, 12) // 演出上限（ラッシュ全体を約5-6秒に収める）
     for (let i = 0; i < drain; i++) {
       this.movesLeft--
@@ -826,5 +879,266 @@ export class Board {
     const s2 = this.def.star2 ?? 1500
     const s3 = this.def.star3 ?? 3000
     return this.score >= s3 ? 3 : this.score >= s2 ? 2 : 1
+  }
+
+  // ==== ローグライク拡張：フックシステム（ROGUE.md §3） ====
+  // run が無いBoard（旧30レベル制）では以下は一切呼ばれず、挙動・性能とも無変化。
+
+  /** 1解決（1手ぶんの連鎖～浮上再安定化まで）の頭でフック予算をリセット */
+  private beginResolve() {
+    this.hookFireCount = 0
+    this.hooksSuspended = false
+    this.resolveDestroyCount = 0
+  }
+
+  /** フック発火予算（暴走対策・上限200/解決）を1つ消費。使い切っていたら false＝以後のフックは打ち切り */
+  private consumeHookBudget(): boolean {
+    if (this.hookFireCount >= 200) {
+      this.hooksSuspended = true
+      if (this.run) this.run.records.critical = true // 臨界＝ご褒美フラグ（ROGUE.md §3）
+      return false
+    }
+    this.hookFireCount++
+    return true
+  }
+
+  /** 各層開始時（＝Board構築時）にギアを3つ追加供給する「予熱」強化の適用 */
+  private applyPreheat() {
+    if (!this.run?.upgrades.includes(PREHEAT_ID)) return
+    for (let i = 0; i < 3; i++) {
+      const cands: XY[] = []
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (this.at(x, y)?.piece?.kind === 'normal') cands.push({ x, y })
+      if (!cands.length) return
+      const spot = cands[randInt(this.rng, cands.length)]
+      this.at(spot.x, spot.y)!.piece = { kind: 'normal', color: 0 }
+    }
+  }
+
+  /** 駒が1つ破壊された直後のローグ処理（destroyフック→胞子タッチ→ギア起動→爆発鉱石連鎖）。clearPieceAtから一元的に呼ばれる */
+  private onPieceDestroyed(at: XY, piece: Piece, cause: DestroyCause, ev: BoardEvent[]) {
+    if (!this.run) return
+    this.fireDestroyHooks(at, cause, piece, ev)
+    this.checkSporeTouch(at, ev)
+    if (piece.kind === 'normal' && piece.color === 0 && (cause === 'match' || cause === 'explode')) {
+      this.triggerGear(at, ev)
+    }
+    if (piece.kind === 'normal' && piece.volatile) {
+      this.explodeAt(at, ev, this.defaultExplosionOpts())
+    }
+  }
+
+  private defaultExplosionOpts(): { radius: number; shape: 'cross' | 'square' } {
+    return this.run?.upgrades.includes(RESONANT_SHATTER_ID) ? { radius: 1, shape: 'square' } : { radius: 1, shape: 'cross' }
+  }
+
+  /** ギア起動（マッチ消滅 or 爆発に巻き込まれる、または強化による追加チャージ）。ROGUE.md §3 */
+  private triggerGear(at: XY, ev: BoardEvent[]) {
+    if (!this.run) return
+    this.run.gearCharge++
+    const count = this.run.gearCharge
+    ev.push({ t: 'gear-trigger', at, count })
+    this.fireGearTriggerHooks(at, count, ev)
+  }
+
+  /** 爆発鉱石・トークン等の爆発。中心含む十字1マス、または3x3（共振破砕）。destroy連鎖はclearPieceAt経由で自然に波及する */
+  private explodeAt(at: XY, ev: BoardEvent[], opts?: { radius?: number; shape?: 'cross' | 'square' }) {
+    if (!this.run) return
+    const shape = opts?.shape ?? 'cross'
+    const r = opts?.radius ?? 1
+    const targets: XY[] =
+      shape === 'cross'
+        ? [
+            { x: at.x, y: at.y },
+            { x: at.x - 1, y: at.y },
+            { x: at.x + 1, y: at.y },
+            { x: at.x, y: at.y - 1 },
+            { x: at.x, y: at.y + 1 },
+          ]
+        : (() => {
+            const out: XY[] = []
+            for (let y = at.y - r; y <= at.y + r; y++) for (let x = at.x - r; x <= at.x + r; x++) out.push({ x, y })
+            return out
+          })()
+    const destroyed: XY[] = []
+    for (const p of targets) {
+      const c = this.at(p.x, p.y)
+      if (!c) continue
+      if (c.block) {
+        this.damageBlock(p, ev)
+        continue
+      }
+      if (!c.piece || c.piece.kind === 'spore') continue
+      if (c.piece.kind === 'normal') this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+      this.clearPieceAt(p, ev, undefined, 'explode')
+      destroyed.push(p)
+    }
+    if (destroyed.length) ev.push({ t: 'explode', at, cells: destroyed })
+  }
+
+  /** 胞子トークンを設置（既存 spore 駒とは別物。隣接消滅で消費される） */
+  private spawnTokenAt(at: XY, kind: 'spore', ev: BoardEvent[]) {
+    const c = this.at(at.x, at.y)
+    if (!c || c.block || c.sporeToken) return
+    c.sporeToken = true
+    ev.push({ t: 'token-spawn', at, kind })
+  }
+
+  /** 破壊された駒の隣接4マスにある胞子トークンを「触れた」判定→消費し、sporeTouchフックを発火 */
+  private checkSporeTouch(at: XY, ev: BoardEvent[]) {
+    if (!this.run) return
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const n = { x: at.x + dx, y: at.y + dy }
+      const c = this.at(n.x, n.y)
+      if (!c?.sporeToken) continue
+      c.sporeToken = false
+      ev.push({ t: 'token-consumed', at: n, kind: 'spore' })
+      this.fireSporeTouchHooks(n, at, ev)
+    }
+  }
+
+  /** 既存駒を別の駒に置き換える（変換・生まれ変わり）。既存 special-born イベントを再利用（Ctx.transform/convertSpecial共通） */
+  private transformPieceAt(at: XY, to: Piece, ev: BoardEvent[]) {
+    const c = this.at(at.x, at.y)
+    if (!c || c.block || !c.piece) return
+    c.piece = to
+    ev.push({ t: 'special-born', at, piece: to })
+  }
+
+  /** 空セルに駒を新規生成（既存 special-born イベントを再利用） */
+  private spawnPieceAt(at: XY, color: Color, ev: BoardEvent[]) {
+    const c = this.at(at.x, at.y)
+    if (!c || c.block || c.piece) return
+    const p: Piece = { kind: 'normal', color }
+    c.piece = p
+    ev.push({ t: 'special-born', at, piece: p })
+  }
+
+  /** 邪魔ピース（苔石1層）を生成（賭博師の壺のハズレ枠） */
+  private addObstacleAt(at: XY, ev: BoardEvent[]) {
+    const c = this.at(at.x, at.y)
+    if (!c || c.block) return
+    c.piece = null
+    c.block = { type: 'kokeishi', hp: 1 }
+    ev.push({ t: 'obstacle-spawn', at, blockType: 'kokeishi' })
+  }
+
+  /** フックへ渡す決定的アクション一式を組み立てる。ev（現在解決中のイベント列）にクロージャで束縛する */
+  private makeCtx(ev: BoardEvent[]): HookCtx {
+    const self = this
+    return {
+      rng: () => self.rng(),
+      at: (x, y) => self.at(x, y),
+      neighborsOf: (p) =>
+        (
+          [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+          ] as const
+        )
+          .map(([dx, dy]) => ({ x: p.x + dx, y: p.y + dy }))
+          .filter((q) => !!self.at(q.x, q.y)),
+      randomCell: (pred) => {
+        const cands: XY[] = []
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const c = self.at(x, y)
+            if (c && pred(c, { x, y })) cands.push({ x, y })
+          }
+        return cands.length ? cands[randInt(self.rng, cands.length)] : null
+      },
+      mostCommonColor: () => {
+        const count = new Map<Color, number>()
+        for (let y = 0; y < H; y++)
+          for (let x = 0; x < W; x++) {
+            const p = self.at(x, y)?.piece
+            if (p?.kind === 'normal') count.set(p.color, (count.get(p.color) ?? 0) + 1)
+          }
+        let best: Color | null = null
+        let bestN = 0
+        for (const [c, n] of count)
+          if (n > bestN) {
+            best = c
+            bestN = n
+          }
+        return best
+      },
+      records: self.run!.records,
+      spawnToken: (at, kind) => self.spawnTokenAt(at, kind, ev),
+      transform: (at, to) => self.transformPieceAt(at, to, ev),
+      convertSpecial: (at, to) => self.transformPieceAt(at, to, ev),
+      explode: (at, opts) => self.explodeAt(at, ev, opts),
+      chargeGear: (at) => self.triggerGear(at, ev),
+      damageEnemy: () => {}, // 敵は本スライスで未実装。ダメージ先が無いので no-op（ROGUE.md実装指示通り）
+      spawnPiece: (at, color) => self.spawnPieceAt(at, color, ev),
+      addObstacle: (at) => self.addObstacleAt(at, ev),
+      bumpChain: (n) => (self.chain += n),
+      boostNextRelic: () => {
+        if (self.run) self.run.relicBoostNext = true
+      },
+      takeRelicBoost: () => {
+        if (!self.run || !self.run.relicBoostNext) return 0
+        self.run.relicBoostNext = false
+        return 2
+      },
+      replayLast: () => self.lastHookReplay?.(),
+    }
+  }
+
+  private fireMatchHooks(g: MatchGroup, ev: BoardEvent[]) {
+    if (!this.run || this.hooksSuspended) return
+    const ctx = this.makeCtx(ev)
+    for (const { upgradeId, hook: h } of this.hooks) {
+      if (h.on !== 'match') continue
+      if (h.system && h.system !== g.system) continue
+      if (h.color !== undefined && h.color !== g.color) continue
+      if (h.minSize && g.cells.length < h.minSize) continue
+      if (!this.consumeHookBudget()) return
+      h.act(g, ctx)
+      this.run.records.effectFires++
+      if (upgradeId !== MIMIC_SLIME_ID) this.lastHookReplay = () => h.act(g, ctx)
+    }
+  }
+
+  private fireDestroyHooks(at: XY, cause: DestroyCause, piece: Piece, ev: BoardEvent[]) {
+    if (!this.run || this.hooksSuspended) return
+    const ctx = this.makeCtx(ev)
+    for (const { hook: h } of this.hooks) {
+      if (h.on !== 'destroy') continue
+      if (!this.consumeHookBudget()) return
+      h.act(at, cause, piece, ctx)
+      this.run.records.effectFires++
+      this.lastHookReplay = () => h.act(at, cause, piece, ctx)
+    }
+  }
+
+  private fireSporeTouchHooks(spore: XY, neighbor: XY, ev: BoardEvent[]) {
+    if (!this.run || this.hooksSuspended) return
+    const ctx = this.makeCtx(ev)
+    for (const { hook: h } of this.hooks) {
+      if (h.on !== 'sporeTouch') continue
+      if (!this.consumeHookBudget()) return
+      h.act(spore, neighbor, ctx)
+      this.run.records.effectFires++
+      this.lastHookReplay = () => h.act(spore, neighbor, ctx)
+    }
+  }
+
+  private fireGearTriggerHooks(at: XY, count: number, ev: BoardEvent[]) {
+    if (!this.run || this.hooksSuspended) return
+    const ctx = this.makeCtx(ev)
+    for (const { hook: h } of this.hooks) {
+      if (h.on !== 'gearTrigger') continue
+      if (!this.consumeHookBudget()) return
+      h.act(at, count, ctx)
+      this.run.records.effectFires++
+      this.lastHookReplay = () => h.act(at, count, ctx)
+    }
   }
 }
