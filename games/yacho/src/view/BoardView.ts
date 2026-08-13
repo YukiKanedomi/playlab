@@ -20,16 +20,6 @@ type HpHost = Container & { __hpFill?: Graphics; __hpGeom?: { x: number; y: numb
 // 可視化第一波②：強化発動アピールのラベルに使う名前引き（idはupgrades.tsのUpgradeDef.idと一致）
 const UPGRADE_NAME = new Map(UPGRADES.map((u) => [u.id, u.name]))
 
-// 可視化第一波①：敵タップ・ツールチップの文言。可視化第二波②：core側で妨害/攻撃の交互行動が入ったため文言更新＋swarm追加。
-// core が今後さらに敵種を増やしても即座にビルドが壊れないよう Partial にし、未知の種は showEnemyTooltip 側で汎用文言にフォールバックする
-const ENEMY_INFO: Partial<Record<EnemyKind, { name: string; desc: string }>> = {
-  rockshell: { name: '岩殻獣', desc: '妨害と攻撃を交互に行う。妨害では鉱物ひとつに甲殻をまとわせ、攻撃では探窟隊にダメージ' },
-  sporeling: { name: '胞子獣', desc: '妨害と攻撃を交互に行う。妨害では植物ひとつを毒胞子に変え、攻撃では探窟隊にダメージ' },
-  burrower: { name: '穴潜み', desc: '妨害と攻撃を交互に行う。妨害では空きマスを2手ふさいで自分は別マスへ移り、攻撃では探窟隊にダメージ' },
-  swarm: { name: 'サンドバッグ', desc: '妨害を持たない攻撃専業。1体倒すと隣接する仲間にもダメージが伝わり連鎖しやすい' },
-  boss: { name: '巨大深層生物', desc: '3手ごとに探窟隊全体を打つ。ダメージで後退する' },
-}
-
 // 可視化第二波②：敵の予告（攻撃/妨害）。core側の enemyIntent（enemies.ts export）が並行実装中のため、
 // 名前空間importを any 経由で覗く防御的な参照にする（未着の間は undefined のまま turnsUntilAction にフォールバック）
 type EnemyIntent = { kind: 'attack' | 'disrupt'; damage?: number; turns: number }
@@ -120,8 +110,6 @@ export class BoardView {
   // ---- 可視化第一波：敵インテント・爆発鉱石の常時発光の帳簿 ----
   private intentG = new Map<number, Container>() // enemyId -> インテントバッジ（uiFxLayer・セル内右上）
   private volatileG = new Map<string, Graphics>() // "x,y" -> 爆発鉱石の常時ゆらぎオーバーレイ
-  private tooltipG: Container | null = null // 敵タップの説明ツールチップ（同時に1個のみ）
-  private tooltipTarget: string | null = null // 現在開いているツールチップの対象キー（再タップ判定用）
 
   // ---- 可視化第二波：連鎖数の常駐表示（同じコンテナを更新して鼓動させる。毎回新規Textを重ねない） ----
   private chainCounterG: Container | null = null
@@ -142,6 +130,11 @@ export class BoardView {
   onUpgradeFire?: (id: string, at?: XY) => void
   /** 敵の攻撃通知（main.ts が購読して探窟隊HUDへの軌跡＋被弾演出を鳴らす。可視化第二波②） */
   onEnemyAttack?: (enemyId: number, damage: number) => void
+  /**
+   * 敵タップ通知（可視化第一波①〜。共通「野帳シート」統合により、説明表示そのものは main.ts 側の
+   * showFieldNote() に一本化した。BoardView は「敵本体／インテントバッジがタップされた」事実だけを渡す）。
+   */
+  onEnemyTap?: (enemy: EnemyInstance) => void
 
   constructor(
     public board: Board,
@@ -277,9 +270,6 @@ export class BoardView {
     this.chainCounterGlow = null
     for (const g of this.intentG.values()) if (!g.destroyed) g.destroy()
     this.intentG.clear()
-    if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
-    this.tooltipG = null
-    this.tooltipTarget = null
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const c = this.board.at(x, y)
@@ -489,11 +479,14 @@ export class BoardView {
     }
     // HP1の小型胞子虫はバーが常に満タンで意味を成さないため出さない（画面のノイズを減らす）
     if (enemy.maxHp > 1) this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
-    // 可視化第一波①：敵セルのタップで名前+行動の説明ツールチップ（スワップ対象にならないセルなので入力系と衝突しない）
+    // 可視化第一波①：敵セルのタップで野帳シートを開く（スワップ対象にならないセルなので入力系と衝突しない）
     wrap.eventMode = 'static'
     wrap.cursor = 'pointer'
     wrap.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= S && ly >= 0 && ly <= S }
-    wrap.on('pointertap', () => this.showEnemyTooltip(enemy.kind, x, y))
+    wrap.on('pointertap', (e) => {
+      e.stopPropagation()
+      this.onEnemyTap?.(enemy)
+    })
     this.blockLayer.addChild(wrap)
     this.blockG.set(this.key(x, y), wrap)
   }
@@ -551,11 +544,14 @@ export class BoardView {
     face.addChild(eye)
     const w = W * S * 0.5
     this.attachHpBar(face, boss.hp, boss.maxHp, w, S * 0.14, (W * S - w) / 2, S * 0.06)
-    // 可視化第一波①：ボスの顔もタップでツールチップ
+    // 可視化第一波①：ボスの顔もタップで野帳シートを開く
     face.eventMode = 'static'
     face.cursor = 'pointer'
     face.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= W * S && ly >= 0 && ly <= S }
-    face.on('pointertap', () => this.showEnemyTooltip('boss', W - 1, boss.bossFrontRow))
+    face.on('pointertap', (e) => {
+      e.stopPropagation()
+      this.onEnemyTap?.(boss)
+    })
     this.blockLayer.addChild(face)
     this.bossFaceG.set(boss.id, face)
   }
@@ -1221,6 +1217,15 @@ export class BoardView {
     }
     const h = host!
     h.removeChildren().forEach((c) => c.destroy())
+    if (isNew) {
+      // 可視化第一波①：インテントバッジ自体のタップでも野帳シートを開く（[C]「敵本体／インテントバッジのタップ」）
+      h.eventMode = 'static'
+      h.cursor = 'pointer'
+      h.on('pointertap', (e) => {
+        e.stopPropagation()
+        this.onEnemyTap?.(en)
+      })
+    }
     // 可視化第二波②：enemyIntent が来ていれば攻撃/妨害で描き分け。未着なら常に disrupt 扱い＝旧来の見た目のまま
     const intent = enemyIntentFn?.(en)
     const isAttack = intent?.kind === 'attack'
@@ -1228,6 +1233,9 @@ export class BoardView {
     const bw = S * (isAttack ? 0.37 : 0.32) // 攻撃バッジは妨害よりわずかに大きく
     const inset = S * 0.08
     h.position.set(cellX * S + S - bw / 2 - inset, cellY * S + bw / 2 + inset)
+    // タップ領域は攻撃/妨害の大小に関わらず最大サイズで確保（バッジの見た目より一回り広めの円）
+    const hitR = S * 0.37 * 0.75
+    h.hitArea = { contains: (lx: number, ly: number) => lx * lx + ly * ly <= hitR * hitR }
     const bg = new Graphics()
     bg.circle(0, 0, bw / 2)
       .fill({ color: 0x1c1712, alpha: 0.86 })
@@ -1294,81 +1302,6 @@ export class BoardView {
         },
       })
     })
-  }
-
-  /** ツールチップを閉じる（背景タップ・×・同一対象の再タップ・他対象タップの共通経路） */
-  private closeTooltip(): void {
-    if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
-    this.tooltipG = null
-    this.tooltipTarget = null
-  }
-
-  /**
-   * 敵ブロック/ボスの顔タップ：名前+行動の説明を羊皮紙の小片で表示する固定ボトムシート方式（codex_consult [D]-6）。
-   * オーナー指摘：時間で消えるのは不便 → 時間切れタイムアウトを廃止し、背景タップ／×／同一対象の再タップでのみ閉じる。単一インスタンス。
-   */
-  private showEnemyTooltip(kind: EnemyKind, cellX: number, cellY: number) {
-    const targetKey = `${kind}:${cellX},${cellY}`
-    if (this.tooltipTarget === targetKey) {
-      this.closeTooltip() // 同じ対象の再タップ→即時閉じる
-      return
-    }
-    this.closeTooltip()
-    this.tooltipTarget = targetKey
-    const info = ENEMY_INFO[kind] ?? { name: kind, desc: '' } // core未着の新種でも汎用表示にフォールバック
-    const S = this.S
-    const w = Math.min(W * S * 0.86, S * 6.4) // 盤幅基準（Sは盤セル寸法でありビュー全体の比率には小さすぎるため）
-    const root = new Container()
-    // 盤外タップで閉じる透明スクリム（盤全面を覆う。ボックスより下に描く）
-    const scrim = new Graphics()
-    scrim.rect(0, 0, W * S, H * S).fill({ color: 0x000000, alpha: 0.001 })
-    scrim.eventMode = 'static'
-    scrim.cursor = 'pointer'
-    scrim.on('pointertap', () => this.closeTooltip())
-    root.addChild(scrim)
-    const name = new Text({ text: info.name, style: { fill: 0x4a3a24, fontSize: S * 0.32, fontFamily: FONT, fontWeight: 'bold' } })
-    const desc = new Text({
-      text: info.desc,
-      style: { fill: 0x4a3a24, fontSize: S * 0.22, fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.86, breakWords: true, align: 'center' },
-    })
-    const padY = S * 0.14
-    const h = name.height + desc.height + padY * 3
-    const box = new Container()
-    const bg = new Graphics()
-    bg.roundRect(-w / 2, -h / 2, w, h, h * 0.16)
-      .fill({ color: 0xe8d9b0, alpha: 0.96 })
-      .stroke({ width: 1.6, color: 0x8a6f45 })
-    bg.eventMode = 'static' // パネル自体へのタップは背景スクリムへ抜けさせない（誤閉じ防止）
-    box.addChild(bg)
-    name.anchor.set(0.5, 0)
-    name.position.set(0, -h / 2 + padY)
-    box.addChild(name)
-    desc.anchor.set(0.5, 0)
-    desc.position.set(0, -h / 2 + padY * 2 + name.height)
-    box.addChild(desc)
-    // 右上の× 閉じるボタン
-    const closeR = S * 0.15
-    const closeBtn = new Container()
-    closeBtn.position.set(w / 2 - closeR - S * 0.06, -h / 2 + closeR + S * 0.06)
-    const closeBg = new Graphics()
-    closeBg.circle(0, 0, closeR).fill({ color: 0x4a3a24, alpha: 0.14 })
-    closeBtn.addChild(closeBg)
-    const closeX = new Text({ text: '×', style: { fill: 0x4a3a24, fontSize: closeR * 1.6, fontFamily: FONT, fontWeight: 'bold' } })
-    closeX.anchor.set(0.5)
-    closeBtn.addChild(closeX)
-    closeBtn.eventMode = 'static'
-    closeBtn.cursor = 'pointer'
-    closeBtn.hitArea = { contains: (lx: number, ly: number) => lx * lx + ly * ly <= closeR * closeR * 2.2 }
-    closeBtn.on('pointertap', () => this.closeTooltip())
-    box.addChild(closeBtn)
-    const px = Math.max(w / 2 + 2, Math.min(W * S - w / 2 - 2, this.px(cellX)))
-    const py = Math.max(h / 2 + 2, this.px(cellY) - S * 0.78)
-    box.position.set(px, py)
-    root.addChild(box)
-    root.alpha = 0
-    this.uiFxLayer.addChild(root)
-    this.tooltipG = root
-    tween(root, { alpha: 1 }, 140)
   }
 
   // ---- 可視化第一波③：爆発鉱石の常時発光 ----

@@ -95,12 +95,25 @@ export function themeForLevel(id: number): 'forest' | 'machine' | 'crystal' {
 
 const loaded = new Map<string, Texture>()
 
+// 強化20種の固有アイコン（外周=系統リング／中央=効果グリフ。codex_consult_ui.md [D]）。
+// ファイル名が強化IDそのものなので glob で一括登録し、キーは `upg:<id>` とする
+const UPGRADE_ICON_URLS = import.meta.glob('../../assets/ui/upg/*.png', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+}) as Record<string, string>
+
 /** 起動時に一括ロード。失敗した分はプレースホルダーにフォールバック */
 export async function loadSprites(): Promise<void> {
+  const entries: [string, string][] = Object.entries(SPRITE_URLS).map(([k, u]) => [k, u.href])
+  for (const [path, url] of Object.entries(UPGRADE_ICON_URLS)) {
+    const id = path.slice(path.lastIndexOf('/') + 1, -'.png'.length)
+    entries.push([`upg:${id}`, url])
+  }
   await Promise.all(
-    Object.entries(SPRITE_URLS).map(async ([k, u]) => {
+    entries.map(async ([k, href]) => {
       try {
-        loaded.set(k, await Assets.load<Texture>(u.href))
+        loaded.set(k, await Assets.load<Texture>(href))
       } catch {
         /* fallback へ */
       }
@@ -110,6 +123,11 @@ export async function loadSprites(): Promise<void> {
 
 export function spriteTexture(key: string): Texture | null {
   return loaded.get(key) ?? null
+}
+
+/** 強化IDから固有アイコン。未生成のIDは null（呼び出し側は系統駒テクスチャへフォールバックする） */
+export function upgradeIconTexture(id: string): Texture | null {
+  return loaded.get(`upg:${id}`) ?? null
 }
 
 /**

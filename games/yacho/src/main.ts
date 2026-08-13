@@ -11,8 +11,9 @@ import { makeRng, randInt, type Rng } from './core/rng'
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
-import { enemyIntent, type EnemyInstance } from './core/enemies'
-import type { BoardEvent, LevelDef, XY } from './core/types'
+import { enemyIntent, ENEMY_ATTACK_DAMAGE, SWARM_ATTACK_PERIOD, type EnemyInstance } from './core/enemies'
+import type { BoardEvent, EnemyKind, LevelDef, XY } from './core/types'
+import { GLOSSARY, findTerm, type GlossaryEntry } from './core/glossary'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
 
@@ -141,8 +142,354 @@ function pickDraftOptions(ownedIds: string[], rng: Rng): UpgradeDef[] {
   return picks
 }
 
-// ボスの表示名（BoardView.ts の ENEMY_INFO と同一の呼称。ボス以外はチップに個体名を出さないため他は複製しない）
+// ボスの表示名（下の ENEMY_INFO.boss.name と同一の呼称。ボス以外はチップに個体名を出さないため他は複製しない）
 const BOSS_NAME = '巨大深層生物'
+
+// =============== 野帳シート：共通ボトムシート（codex_consult_ui.md [C]） ===============
+// 強化ポップ・敵ツールチップの2実装を統合する中核データ・エンジン部分（モジュール直下＝vw/vhに依存しない純粋関数群）。
+// 実際にシートを開閉する状態機械（vw/vh/playRoot/inputLockedを使う）は boot() 内 showFieldNote() が持つ。
+
+type FieldNoteIcon = (size: number) => Container
+interface FieldNoteRowBlock {
+  kind: 'row'
+  label: string
+  text: string
+}
+interface FieldNoteTextBlock {
+  kind: 'text'
+  text: string
+}
+interface FieldNoteItemsBlock {
+  kind: 'items'
+  items: { icon: FieldNoteIcon; title: string; text: string }[]
+}
+type FieldNoteBlock = FieldNoteRowBlock | FieldNoteTextBlock | FieldNoteItemsBlock
+interface FieldNoteEntry {
+  /** 同一対象の再タップ判定＆用語シート切替のキー（例: `upgrade:${id}` / `enemy:${enemyId}` / `term:${id}`） */
+  noteKey: string
+  kindLabel: string // 見出し下の種別ラベル（強化/特殊駒/敵/用語のkind名）
+  title: string
+  icon: FieldNoteIcon
+  blocks: FieldNoteBlock[]
+}
+
+// ---- 用語リンク（[C]用語リンクの実装方針）：termまたはaliasesが本文に現れたら最初の1回だけリンク化する ----
+const GLOSSARY_MATCHERS = GLOSSARY.flatMap((g) => [{ id: g.id, text: g.term }, ...(g.aliases ?? []).map((a) => ({ id: g.id, text: a }))]).sort(
+  (a, b) => b.text.length - a.text.length, // 長い語から優先照合（「敵インテント」等の複合語が部分一致に負けないように）
+)
+interface RichToken {
+  text: string
+  termId?: string
+}
+/** 本文を「用語トークン」と「地の文トークン」に分解する。usedTermsは呼び出し側が本文単位で使い回し、二重リンクを防ぐ */
+function tokenizeRich(text: string, usedTerms: Set<string>): RichToken[] {
+  const tokens: RichToken[] = []
+  let i = 0
+  let plain = ''
+  const flush = () => {
+    if (plain) {
+      tokens.push({ text: plain })
+      plain = ''
+    }
+  }
+  scan: while (i < text.length) {
+    for (const m of GLOSSARY_MATCHERS) {
+      if (usedTerms.has(m.id) || !m.text) continue
+      if (text.startsWith(m.text, i)) {
+        flush()
+        tokens.push({ text: m.text, termId: m.id })
+        usedTerms.add(m.id)
+        i += m.text.length
+        continue scan
+      }
+    }
+    plain += text[i]
+    i++
+  }
+  flush()
+  return tokens
+}
+
+/**
+ * 用語ごとに独立したTextを並べて1行を組む簡易リッチテキスト（Textは矩形しか持たないため）。折り返しは行単位で自前計算する。
+ * 用語トークンは点線下線＋小さな「?」を付け（色だけに頼らない）、タップで onTermTap を呼ぶ。
+ * 用語タップはドラフトカード選択等の祖先へ伝播させないよう、必ず e.stopPropagation() する。戻り値＝本文の下端y。
+ */
+function layoutRichText(
+  host: Container,
+  measurer: Text,
+  tokens: RichToken[],
+  x0: number,
+  y0: number,
+  maxW: number,
+  fontSize: number,
+  color: number,
+  linkColor: number,
+  onTermTap: (id: string) => void,
+): number {
+  const lineH = fontSize * 1.56
+  let x = x0
+  let y = y0
+  measurer.style.fontSize = fontSize // 呼び出しごとにサイズが違う（シート本文/カード本文）ため、都度measurerへ反映する
+  const measure = (s: string) => {
+    measurer.text = s
+    return measurer.width
+  }
+  const placeTerm = (text: string, termId: string) => {
+    const t = new Text({ text, style: { fill: linkColor, fontSize, fontFamily: FONT, fontWeight: 'bold', breakWords: true } })
+    t.position.set(x, y)
+    host.addChild(t)
+    const uw = t.width
+    const underline = new Graphics()
+    const dash = fontSize * 0.22
+    const gap = fontSize * 0.16
+    for (let dx = 0; dx < uw; dx += dash + gap)
+      underline
+        .moveTo(x + dx, y + t.height - 1)
+        .lineTo(x + Math.min(dx + dash, uw), y + t.height - 1)
+        .stroke({ width: 1.4, color: linkColor, alpha: 0.9 })
+    host.addChild(underline)
+    const mark = new Text({ text: '?', style: { fill: linkColor, fontSize: fontSize * 0.66, fontFamily: FONT, fontWeight: 'bold' } })
+    mark.position.set(x + uw + fontSize * 0.1, y - fontSize * 0.16)
+    host.addChild(mark)
+    const hitW = uw + mark.width + fontSize * 0.2
+    const hitH = t.height + fontSize * 0.3
+    const hit = new Container()
+    hit.position.set(x - fontSize * 0.08, y - fontSize * 0.12)
+    hit.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= hitW && ly >= 0 && ly <= hitH }
+    hit.eventMode = 'static'
+    hit.cursor = 'pointer'
+    hit.on('pointertap', (e) => {
+      e.stopPropagation() // カード選択・シート開閉タップへ伝播させない（[C]用語リンクの実装方針）
+      onTermTap(termId)
+    })
+    host.addChild(hit)
+    x += uw + mark.width + fontSize * 0.1
+  }
+  const placePlain = (str: string) => {
+    const t = new Text({ text: str, style: { fill: color, fontSize, fontFamily: FONT } })
+    t.position.set(x, y)
+    host.addChild(t)
+    x += t.width
+  }
+  for (const tok of tokens) {
+    if (tok.termId) {
+      const w = measure(tok.text) + fontSize * 0.9
+      if (x > x0 && x + w > x0 + maxW) {
+        x = x0
+        y += lineH
+      }
+      placeTerm(tok.text, tok.termId)
+      continue
+    }
+    let s = tok.text
+    while (s.length) {
+      if (x >= x0 + maxW - 1 && x > x0) {
+        x = x0
+        y += lineH
+      }
+      let n = 0
+      let cur = ''
+      for (; n < s.length; n++) {
+        const cand = cur + s[n]
+        if (measure(cand) > x0 + maxW - x) break
+        cur = cand
+      }
+      if (n === 0) n = 1 // 1文字も入らない幅でも無限ループにしない（最低1文字は強制的に置く）
+      placePlain(s.slice(0, n))
+      s = s.slice(n)
+      if (s.length) {
+        x = x0
+        y += lineH
+      }
+    }
+  }
+  return y + lineH
+}
+
+// ---- 野帳シートのアイコン（ビルドドックの描き方を簡略再利用。素材キーは spriteTexture(...) ?? null で必ずフォールバック） ----
+function makeUpgradeIconContainer(id: string, size: number): Container {
+  const c = new Container()
+  const medalTex = spriteTexture('ui_medal')
+  if (medalTex) {
+    const base = new Sprite(medalTex)
+    base.anchor.set(0.5)
+    base.scale.set((size * 1.15) / Math.max(medalTex.width, medalTex.height))
+    c.addChild(base)
+  }
+  const cat = UPGRADE_CATEGORY[id]
+  if (cat === 'synergy') {
+    const [a, b] = SYNERGY_HALVES[id] ?? ['n1', 'n0']
+    const r = size / 2
+    ;([
+      [a, 'l'],
+      [b, 'r'],
+    ] as const).forEach(([key, side]) => {
+      const tex = spriteTexture(key)
+      if (!tex) return
+      const sp = new Sprite(tex)
+      sp.anchor.set(0.5)
+      sp.scale.set((size * 0.62) / Math.max(tex.width, tex.height))
+      const mask = new Graphics()
+      if (side === 'l') mask.moveTo(-r, -r).lineTo(r, -r).lineTo(-r, r).closePath().fill(0xffffff)
+      else mask.moveTo(r, -r).lineTo(r, r).lineTo(-r, r).closePath().fill(0xffffff)
+      sp.mask = mask
+      c.addChild(mask, sp)
+    })
+  } else {
+    const tex = spriteTexture(CATEGORY_ICON[cat] ?? 'n1')
+    if (tex) {
+      const sp = new Sprite(tex)
+      sp.anchor.set(0.5)
+      sp.scale.set((size * 0.64) / Math.max(tex.width, tex.height))
+      c.addChild(sp)
+    }
+  }
+  return c
+}
+const ENEMY_ICON_TEX: Partial<Record<EnemyKind, string>> = { rockshell: 'kokeishi', sporeling: 'subi', swarm: 'e_swarm', boss: 'hako' }
+function makeEnemyIconContainer(kind: EnemyKind, size: number): Container {
+  const c = new Container()
+  const tex = spriteTexture(ENEMY_ICON_TEX[kind] ?? '') ?? null
+  if (tex) {
+    const sp = new Sprite(tex)
+    sp.anchor.set(0.5)
+    sp.scale.set((size * 0.86) / Math.max(tex.width, tex.height))
+    c.addChild(sp)
+  } else {
+    const g = new Graphics()
+    g.circle(0, 0, size * 0.42).fill(0x3a4048).stroke({ width: 2, color: 0x8a94a0 })
+    c.addChild(g)
+  }
+  return c
+}
+function makeSpecialIconContainer(spriteKey: string, size: number): Container {
+  const c = new Container()
+  const tex = spriteTexture(spriteKey) ?? null
+  if (tex) {
+    const sp = new Sprite(tex)
+    sp.anchor.set(0.5)
+    sp.scale.set((size * 0.82) / Math.max(tex.width, tex.height))
+    c.addChild(sp)
+  } else {
+    const g = new Graphics()
+    g.roundRect(-size * 0.36, -size * 0.36, size * 0.72, size * 0.72, size * 0.14).fill(UI.brass)
+    c.addChild(g)
+  }
+  return c
+}
+function makeTermIconContainer(size: number): Container {
+  const c = new Container()
+  const g = new Graphics()
+  g.circle(0, 0, size * 0.44)
+    .fill({ color: 0x2a1c10, alpha: 0.92 })
+    .stroke({ width: 2, color: UI.brass })
+  c.addChild(g)
+  const t = new Text({ text: '?', style: { fill: 0xf4e8cf, fontSize: size * 0.5, fontFamily: FONT, fontWeight: 'bold' } })
+  t.anchor.set(0.5)
+  c.addChild(t)
+  return c
+}
+
+// ---- 敵の野帳データ（実装の実挙動と一致させる。enemies.ts/board.ts を読んで確認済み） ----
+interface EnemyInfoEntry {
+  name: string
+  attackDesc: string
+  disruptDesc: string | null
+  defeatDesc: string
+  retreatDesc?: string
+}
+const ENEMY_INFO: Record<EnemyKind, EnemyInfoEntry> = {
+  rockshell: {
+    name: '岩殻獣',
+    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.rockshell}ダメージを与える`,
+    disruptDesc: '鉱物ひとつに甲殻をまとわせる（甲殻はもう1回壊さないと消えない）',
+    defeatDesc: '隣接するマスで駒を消すとダメージが入る。HPが尽きると撃破',
+  },
+  sporeling: {
+    name: '胞子獣',
+    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.sporeling}ダメージを与える`,
+    disruptDesc: '植物ひとつを毒胞子に変える（消すと探窟隊に1ダメージ）',
+    defeatDesc: '隣接するマスで駒を消すとダメージが入る。HPが尽きると撃破',
+  },
+  burrower: {
+    name: '穴潜み',
+    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.burrower}ダメージを与える`,
+    disruptDesc: '空きマスを2手ふさいで自分は別のマスへ移る（封鎖は攻撃で解除できない）',
+    defeatDesc: '隣接するマスで駒を消すとダメージが入る。HPが尽きると撃破',
+  },
+  swarm: {
+    name: 'サンドバッグ',
+    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.swarm}ダメージを与える（${SWARM_ATTACK_PERIOD}手ごと）`,
+    disruptDesc: null,
+    defeatDesc: 'HP1で即撃破。1体倒すと隣接する仲間にもダメージが伝わり連鎖しやすい',
+  },
+  boss: {
+    name: '巨大深層生物',
+    attackDesc: `3手ごとに探窟隊全体へ${ENEMY_ATTACK_DAMAGE.boss}ダメージ`,
+    disruptDesc: null,
+    defeatDesc: '身体の前線行へダメージを与え続けるとHPが減る',
+    retreatDesc: '累計5ダメージがたまるたび、身体の最上段1行が解放されて1行後退する',
+  },
+}
+
+const SPECIAL_PIECE_LIST: { key: string; name: string; text: string }[] = [
+  { key: 'harpoon', name: '銛（レンチ銛）', text: '駒の向きに合わせて、1列または1行をまとめて消す。' },
+  { key: 'hamushi', name: '羽虫（コンパス甲虫）', text: '離陸地点の周囲を壊してから、目標へ飛んで壊す。' },
+  { key: 'hitsubo', name: '火壺（歯車爆弾）', text: '着地点を中心に5×5マスを壊す。' },
+  { key: 'seiju', name: '星珠（探窟ランタン）', text: '盤面でいちばん多い色をすべて消す。' },
+]
+
+/** 強化：プレイ中・ドラフト所持欄で共通（[C]表：名前・系統・条件→効果・進捗・獲得ボーナス） */
+function buildUpgradeEntry(def: UpgradeDef, run: RunState): FieldNoteEntry {
+  const cat = UPGRADE_CATEGORY[def.id]
+  const { condition, effect } = splitDesc(def.desc)
+  const blocks: FieldNoteBlock[] = [{ kind: 'row', label: '系統', text: CATEGORY_LABEL[cat] ?? '' }]
+  if (condition) blocks.push({ kind: 'row', label: '条件', text: condition })
+  blocks.push({ kind: 'row', label: '効果', text: effect })
+  const progress = run.progress[def.id]
+  if (progress) blocks.push({ kind: 'row', label: '進捗', text: `${Math.min(progress.cur, progress.max)} / ${progress.max}` })
+  if (def.starterDesc) blocks.push({ kind: 'row', label: '獲得ボーナス', text: def.starterDesc.replace(/^おまけ[:：]\s*/, '') })
+  return { noteKey: `upgrade:${def.id}`, kindLabel: '強化', title: def.name, icon: (size) => makeUpgradeIconContainer(def.id, size), blocks }
+}
+
+/** 特殊駒：野帳ボタンから開く一覧（[C]表：4種の早見。効果は board.ts fireSpecial の実挙動と一致） */
+function buildSpecialPieceEntry(): FieldNoteEntry {
+  return {
+    noteKey: 'special-pieces',
+    kindLabel: '特殊駒',
+    title: '特殊駒 早見表',
+    icon: (size) => makeSpecialIconContainer('harpoon', size),
+    blocks: [
+      {
+        kind: 'items',
+        items: SPECIAL_PIECE_LIST.map((p) => ({ icon: (size: number) => makeSpecialIconContainer(p.key, size), title: p.name, text: p.text })),
+      },
+      { kind: 'text', text: '特殊駒どうしを隣り合わせて動かすと、組み合わせでさらに強力な効果が起きる。' },
+    ],
+  }
+}
+
+/** 敵：本体／インテントバッジのタップで開く（[C]表：名前・HP・次行動・与ダメージ・妨害内容・倒し方。ボスは後退条件も） */
+function buildEnemyEntry(enemy: EnemyInstance): FieldNoteEntry {
+  const info = ENEMY_INFO[enemy.kind]
+  const intent = enemyIntent(enemy)
+  const nextText = intent.kind === 'attack' ? `あと${intent.turns}手で攻撃（${intent.damage}ダメージ）` : `あと${intent.turns}手で妨害`
+  const blocks: FieldNoteBlock[] = [
+    { kind: 'row', label: 'HP', text: `${Math.max(0, enemy.hp)} / ${enemy.maxHp}` },
+    { kind: 'row', label: '次行動', text: nextText },
+    { kind: 'row', label: '与ダメージ', text: info.attackDesc },
+    { kind: 'row', label: '妨害', text: info.disruptDesc ?? '妨害は行わない' },
+    { kind: 'row', label: '倒し方', text: info.defeatDesc },
+  ]
+  if (info.retreatDesc) blocks.push({ kind: 'row', label: '後退条件', text: info.retreatDesc })
+  return { noteKey: `enemy:${enemy.id}`, kindLabel: '敵', title: info.name, icon: (size) => makeEnemyIconContainer(enemy.kind, size), blocks }
+}
+
+/** 用語：本文・ドラフトカード中の用語リンクから開く（[C]表：2〜3行の定義＋小図。図はアイコンで代替） */
+function buildGlossaryEntry(g: GlossaryEntry): FieldNoteEntry {
+  return { noteKey: `term:${g.id}`, kindLabel: g.kind, title: g.term, icon: (size) => makeTermIconContainer(size), blocks: [{ kind: 'text', text: g.body }] }
+}
 
 /**
  * 遭遇帯の「状態の語り手」に必要な最小限の集計（codex_consult_ui.md [A]：残敵/次行動、[B]：被弾予告）。
@@ -471,6 +818,272 @@ async function boot() {
   let sceneEpoch = 0 // シーン再構築の世代。跨いだ遅延コールバックは無効化
 
   const draftRng = (floor: number): Rng => makeRng((runSeed + floor * 104729 + 17) | 0)
+
+  // ---- 野帳シート：状態機械（vw/vh/playRoot/inputLockedを使う部分。データ・レイアウト計算は上のモジュール関数） ----
+  let fieldNote: {
+    key: string
+    root: Container
+    panel: Container
+    baseY: number
+    scrollHost: Container
+    contentH: number
+    viewH: number
+    scrollY: number
+    dragStartY: number | null
+    dragStartScroll: number
+    dragMode: 'none' | 'scroll' | 'dismiss'
+  } | null = null
+  let fieldNotePrevInputLocked = false
+
+  const closeFieldNote = () => {
+    if (!fieldNote) return
+    const fn = fieldNote
+    fieldNote = null
+    inputLocked = fieldNotePrevInputLocked
+    tw.tween(fn.panel.position, { y: vh }, 180, {
+      ease: tw.easeInCubic,
+      onDone: () => {
+        if (!fn.root.destroyed) fn.root.destroy({ children: true })
+      },
+    })
+    tw.tween(fn.root, { alpha: 0 }, 180)
+  }
+
+  /** 強化/特殊駒/敵/用語の本文を、シート幅に合わせてレイアウトする（[C]表：各表面共通の描画部） */
+  const renderFieldNoteBlocks = (host: Container, measurer: Text, blocks: FieldNoteBlock[], width: number, onTermTap: (id: string) => void): number => {
+    const padX = Math.max(24, vw * 0.05) // 内容安全域：左右24px以上（[C]必達）
+    const bodyFont = fs(0.0265)
+    const labelFont = fs(0.024)
+    // ラベル列の幅は実際のラベル文字列（「獲得ボーナス」等の長いものを含む）から実測する（固定幅だと本文と重なる）
+    measurer.style.fontSize = labelFont
+    let maxLabelW = labelFont * 2
+    for (const b of blocks) {
+      if (b.kind !== 'row') continue
+      measurer.text = b.label
+      if (measurer.width > maxLabelW) maxLabelW = measurer.width
+    }
+    const labelW = Math.min(width * 0.34, maxLabelW + labelFont * 0.8)
+    const contentX = padX + labelW
+    const rowGap = bodyFont * 0.9
+    const usedTerms = new Set<string>() // 「1つの本文で同じ用語は最初の1回だけ」＝シート1枚を1本文として共有
+    let y = 0
+    for (const b of blocks) {
+      if (b.kind === 'text') {
+        y = layoutRichText(host, measurer, tokenizeRich(b.text, usedTerms), padX, y, width - padX * 2, bodyFont, 0xf4e8cf, 0xd8b855, onTermTap)
+        y += rowGap
+      } else if (b.kind === 'row') {
+        const label = new Text({ text: b.label, style: { fill: 0xcbb98a, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
+        label.position.set(padX, y)
+        host.addChild(label)
+        const contentBottom = layoutRichText(
+          host,
+          measurer,
+          tokenizeRich(b.text, usedTerms),
+          contentX,
+          y,
+          width - padX - contentX,
+          bodyFont,
+          0xf4e8cf,
+          0xd8b855,
+          onTermTap,
+        )
+        y = Math.max(y + label.height, contentBottom) + rowGap
+      } else {
+        for (const item of b.items) {
+          const iconSize = fs(0.1)
+          const icon = item.icon(iconSize)
+          icon.position.set(padX + iconSize / 2, y + iconSize / 2)
+          host.addChild(icon)
+          const titleX = padX + iconSize + fs(0.02)
+          const title = new Text({ text: item.title, style: { fill: 0xf4e8cf, fontSize: bodyFont * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+          title.position.set(titleX, y)
+          host.addChild(title)
+          const textY = y + title.height + fs(0.006)
+          const textBottom = layoutRichText(
+            host,
+            measurer,
+            tokenizeRich(item.text, usedTerms),
+            titleX,
+            textY,
+            width - padX - titleX,
+            bodyFont,
+            0xe8d9b0,
+            0xd8b855,
+            onTermTap,
+          )
+          y = Math.max(y + iconSize, textBottom) + rowGap
+        }
+      }
+    }
+    return y
+  }
+
+  /**
+   * 共通ボトムシート本体。旧 showUpgradePopup（main.ts）と BoardView.showEnemyTooltip の統合先（codex_consult_ui.md [C]）。
+   * 高さは通常48dvh、本文が長ければ最大72dvhまで伸び、それでも収まらなければ内部スクロール。
+   * 閉じ方：背景タップ／×／下スワイプ／同じ対象の再タップ。開いている間は盤面入力（inputLocked）だけ止める。
+   */
+  const showFieldNote = (entry: FieldNoteEntry) => {
+    if (fieldNote && fieldNote.key === entry.noteKey) {
+      closeFieldNote() // 同じ対象の再タップ→閉じる
+      return
+    }
+    if (!fieldNote) fieldNotePrevInputLocked = inputLocked // 新規オープン時だけ元のロック状態を記憶（用語切替では上書きしない）
+    if (fieldNote) {
+      if (!fieldNote.root.destroyed) fieldNote.root.destroy({ children: true })
+      fieldNote = null
+    }
+    inputLocked = true
+
+    const root = new Container()
+    const scrim = new Graphics()
+    scrim.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 1 })
+    scrim.alpha = 0
+    scrim.eventMode = 'static'
+    scrim.on('pointertap', () => closeFieldNote())
+    root.addChild(scrim)
+    tw.tween(scrim, { alpha: 0.42 }, 160)
+
+    const panelW = vw
+    const padX = Math.max(24, vw * 0.05)
+    const padTop = fs(0.03)
+    const padBottom = Math.max(fs(0.03), vh * 0.02)
+    const headerIconSize = fs(0.13)
+    const headerH = Math.max(headerIconSize, fs(0.09)) + fs(0.02)
+
+    const panel = new Container()
+    const measurer = new Text({ text: '', style: { fontFamily: FONT, fontSize: fs(0.0265) } })
+    const scrollHost = new Container()
+    const contentH = renderFieldNoteBlocks(scrollHost, measurer, entry.blocks, panelW, openGlossaryTerm)
+    measurer.destroy()
+
+    const sheetMin = vh * 0.48
+    const sheetMax = vh * 0.72
+    const needed = headerH + padTop + contentH + padBottom
+    const sheetH = Math.min(sheetMax, Math.max(sheetMin, needed))
+    const viewH = Math.max(fs(0.1), sheetH - headerH - padTop - padBottom)
+
+    // 背景：コード描画の地＋brass枠＋四隅の小さな鋲飾り（[C]：一枚絵の引き伸ばし禁止への対応）
+    const corner = fs(0.032)
+    const bg = new Graphics()
+    bg.roundRect(0, 0, panelW, sheetH, corner).fill({ color: 0x241a10, alpha: 0.98 })
+    bg.roundRect(1.5, 1.5, panelW - 3, sheetH - 3, corner).stroke({ width: 2.4, color: UI.brass, alpha: 0.9 })
+    panel.addChild(bg)
+    const studR = fs(0.007)
+    for (const sx of [corner * 0.7, panelW - corner * 0.7]) {
+      const stud = new Graphics()
+      stud.circle(sx, corner * 0.7, studR).fill({ color: UI.brass, alpha: 0.85 })
+      panel.addChild(stud)
+    }
+    // つまみ（掴んで下スワイプできることを示す短いバー）
+    const grabber = new Graphics()
+    grabber.roundRect(panelW / 2 - fs(0.06), fs(0.01), fs(0.12), fs(0.006), fs(0.003)).fill({ color: UI.brass, alpha: 0.6 })
+    panel.addChild(grabber)
+
+    // ヘッダー：アイコン＋名前＋種別ラベル、右上×
+    const icon = entry.icon(headerIconSize)
+    icon.position.set(padX + headerIconSize / 2, padTop + headerIconSize / 2)
+    panel.addChild(icon)
+    const titleT = new Text({
+      text: entry.title,
+      style: { fill: 0xf4e8cf, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
+    })
+    titleT.position.set(padX + headerIconSize + fs(0.025), padTop + headerIconSize * 0.1)
+    panel.addChild(titleT)
+    const kindT = new Text({ text: entry.kindLabel, style: { fill: 0xcbb98a, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' } })
+    kindT.position.set(padX + headerIconSize + fs(0.025), padTop + headerIconSize * 0.1 + titleT.height + fs(0.004))
+    panel.addChild(kindT)
+    const closeR = fs(0.026)
+    const closeBtn = new Container()
+    closeBtn.position.set(panelW - padX - closeR, padTop + closeR * 0.7)
+    const closeBg = new Graphics()
+    closeBg.circle(0, 0, closeR).fill({ color: 0x2a1c10, alpha: 0.85 }).stroke({ width: 1.5, color: UI.brass })
+    closeBtn.addChild(closeBg)
+    const closeX = new Text({ text: '×', style: { fill: 0xf4e8cf, fontSize: closeR * 1.1, fontFamily: FONT, fontWeight: 'bold' } })
+    closeX.anchor.set(0.5)
+    closeBtn.addChild(closeX)
+    closeBtn.eventMode = 'static'
+    closeBtn.cursor = 'pointer'
+    closeBtn.hitArea = { contains: (lx: number, ly: number) => lx * lx + ly * ly <= closeR * closeR * 2.4 }
+    closeBtn.on('pointertap', (e) => {
+      e.stopPropagation()
+      closeFieldNote()
+    })
+    panel.addChild(closeBtn)
+
+    // 本文：マスクでスクロール領域を切り出す（縦ドラッグでスクロール。慣性は無し）
+    const scrollTop = headerH + padTop
+    const scrollMask = new Graphics()
+    scrollMask.rect(0, scrollTop, panelW, viewH).fill(0xffffff)
+    panel.addChild(scrollMask)
+    scrollHost.position.set(0, scrollTop)
+    scrollHost.mask = scrollMask
+    panel.addChild(scrollHost)
+
+    panel.eventMode = 'static'
+    panel.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= panelW && ly >= 0 && ly <= sheetH }
+    root.addChild(panel)
+    playRoot.addChild(root) // 常に最後尾＝最前面（ドラフトパネルより上に出す）
+
+    const baseY = vh - sheetH
+    panel.position.set(0, vh)
+    tw.tween(panel.position, { y: baseY }, 200, { ease: tw.easeOutCubic })
+
+    const state = {
+      key: entry.noteKey,
+      root,
+      panel,
+      baseY,
+      scrollHost,
+      contentH,
+      viewH,
+      scrollY: 0,
+      dragStartY: null as number | null,
+      dragStartScroll: 0,
+      dragMode: 'none' as 'none' | 'scroll' | 'dismiss',
+    }
+    fieldNote = state
+
+    const minScroll = -Math.max(0, contentH - viewH)
+    panel.on('pointerdown', (e) => {
+      state.dragStartY = e.global.y
+      state.dragStartScroll = state.scrollY
+      state.dragMode = 'none'
+    })
+    panel.on('pointermove', (e) => {
+      if (state.dragStartY === null || fieldNote !== state) return
+      const dy = e.global.y - state.dragStartY
+      if (state.dragMode === 'none') {
+        if (Math.abs(dy) < 6) return
+        // 上端（これ以上スクロールできない）で下方向に引いたときだけ「閉じるスワイプ」扱いにする
+        state.dragMode = dy > 0 && state.scrollY >= -0.5 ? 'dismiss' : 'scroll'
+      }
+      if (state.dragMode === 'scroll') {
+        state.scrollY = Math.max(minScroll, Math.min(0, state.dragStartScroll + dy))
+        scrollHost.position.y = scrollTop + state.scrollY
+      } else {
+        panel.position.y = baseY + Math.max(0, dy)
+      }
+    })
+    const endDrag = () => {
+      if (fieldNote !== state) return
+      if (state.dragMode === 'dismiss') {
+        const dy = panel.position.y - baseY
+        if (dy > sheetH * 0.22) closeFieldNote()
+        else tw.tween(panel.position, { y: baseY }, 160, { ease: tw.easeOutCubic })
+      }
+      state.dragStartY = null
+      state.dragMode = 'none'
+    }
+    panel.on('pointerup', endDrag)
+    panel.on('pointerupoutside', endDrag)
+  }
+
+  /** 用語シートへの遷移（本文・ドラフトカード双方の用語リンクから共通で呼ぶ） */
+  const openGlossaryTerm = (id: string) => {
+    const g = findTerm(id)
+    if (g) showFieldNote(buildGlossaryEntry(g))
+  }
 
   const startRun = () => {
     runState = createRunState()
@@ -901,92 +1514,13 @@ async function boot() {
     const upgradeIconG = new Map<string, Container>()
     const UPGRADE_ICON_MAX = 10 // ROGUE.md §4：層1〜9クリアで最大9回ドラフト（安全側の上限）
     const ownedUpgrades = run.upgrades.slice(0, UPGRADE_ICON_MAX)
-    const iconSpacing = Math.min(vw * 0.19, (vw * 0.86) / Math.max(1, ownedUpgrades.length))
+    // 右端に「野帳」ボタン（[C]特殊駒の主導線）を置く分、アイコン列の幅を詰める
+    const dockNoteBtnW = vw * 0.145
+    const iconAreaW = vw * 0.86 - dockNoteBtnW
+    const iconSpacing = Math.min(vw * 0.19, iconAreaW / Math.max(1, ownedUpgrades.length))
     const iconR = Math.min(vw * 0.055, iconSpacing * 0.4)
-    // 強化説明ポップ：時間で消さず、同じアイコン再タップ／パネル外タップ／右上×のいずれかで即閉じる固定パネルへ
-    // （プレイテスト指摘「すぐ消えるのが微妙」「押し直すことになる」への対応。codex_consult_rogue.md [B]）。
-    let upgradePopupOverlay: Container | null = null
-    let upgradePopupBox: Container | null = null
-    let upgradePopupId: string | null = null
-    let popupPrevInputLocked = false
-    /** パネルの見た目だけ片付ける（差し替え時に閉じ処理のinputLocked復帰を挟まないための下請け） */
-    const destroyUpgradePopupVisuals = () => {
-      if (upgradePopupOverlay && !upgradePopupOverlay.destroyed) upgradePopupOverlay.destroy()
-      if (upgradePopupBox && !upgradePopupBox.destroyed) upgradePopupBox.destroy({ children: true })
-      upgradePopupOverlay = null
-      upgradePopupBox = null
-    }
-    const closeUpgradePopup = () => {
-      destroyUpgradePopupVisuals()
-      if (upgradePopupId !== null) inputLocked = popupPrevInputLocked
-      upgradePopupId = null
-    }
-    const showUpgradePopup = (def: UpgradeDef) => {
-      if (upgradePopupId === def.id) {
-        closeUpgradePopup() // 同じアイコンの再タップ＝閉じる
-        return
-      }
-      if (upgradePopupId === null) popupPrevInputLocked = inputLocked // 新規オープン時だけ元のロック状態を記憶
-      destroyUpgradePopupVisuals() // 単一インスタンス：別アイコンなら差し替え
-      const w = vw * 0.72
-      const nameT = new Text({ text: def.name, style: { fill: UI.paperInk, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' } })
-      const descT = new Text({
-        text: def.desc,
-        style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.8, breakWords: true },
-      })
-      const padY = vh * 0.014
-      // 四辺が完全なカード素材を使う（旧 ui_parchment は左縁が欠けており、実機で切れて見えた）
-      const ptex = spriteTexture('ui_card') ?? spriteTexture('ui_panel')
-      // 見出し帯（上24%）に名前、その下の羊皮紙に本文を置く。素材比率を保つため高さは内容から決めて等比で使わずスライス的に伸ばす
-      const bandH = ptex ? w * (0.24 * (450 / 760)) : fs(0.05)
-      const h = bandH + descT.height + padY * 3
-      const box = new Container()
-      if (ptex) {
-        const sp = new Sprite(ptex)
-        sp.width = w
-        sp.height = h
-        box.addChild(sp)
-      } else {
-        const bg = new Graphics()
-        bg.roundRect(0, 0, w, h, 12).fill(UI.paper)
-        box.addChild(bg)
-      }
-      nameT.style.fill = 0xf4e8cf // 濃色の見出し帯に載るので明色に
-      nameT.position.set(w * 0.09, bandH * 0.5 - fs(0.036) * 0.6)
-      descT.position.set(w * 0.09, bandH + padY)
-      box.addChild(nameT, descT)
-      // 右上の閉じる×（GraphicsはPixi v8でaddChild非推奨のためContainerに包む）
-      const closeR = Math.max(fs(0.028), 16)
-      const closeBtn = new Container()
-      const closeCircle = new Graphics()
-      closeCircle.circle(0, 0, closeR).fill({ color: 0x2a1c10, alpha: 0.85 }).stroke({ width: 1.5, color: UI.brass })
-      closeBtn.addChild(closeCircle)
-      const closeX = new Text({ text: '×', style: { fill: 0xf4e8cf, fontSize: closeR * 1.1, fontFamily: FONT, fontWeight: 'bold' } })
-      closeX.anchor.set(0.5)
-      closeBtn.addChild(closeX)
-      closeBtn.position.set(w - closeR * 0.9, closeR * 0.9)
-      closeBtn.eventMode = 'static'
-      closeBtn.cursor = 'pointer'
-      closeBtn.hitArea = { contains: (x: number, y: number) => x * x + y * y <= closeR * closeR * 1.6 }
-      closeBtn.on('pointertap', () => closeUpgradePopup())
-      box.addChild(closeBtn)
-      box.position.set((vw - w) / 2, boosterBar.position.y - h - vh * 0.012)
-      // box自身も当たり判定を持たせ、内側タップが下のoverlayへ抜けて誤って閉じないようにする
-      box.eventMode = 'static'
-      box.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= w && y >= 0 && y <= h }
-      ui.addChild(box)
-      // パネル外タップで閉じる透明な全画面当たり判定。boosterBarより背面に挿し、
-      // アイコンの再タップ／差し替えタップは先にアイコン自身が拾えるようにする
-      const overlay = new Container()
-      overlay.eventMode = 'static'
-      overlay.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= vw && y >= 0 && y <= vh }
-      overlay.on('pointertap', () => closeUpgradePopup())
-      ui.addChildAt(overlay, ui.getChildIndex(boosterBar))
-      upgradePopupOverlay = overlay
-      upgradePopupBox = box
-      upgradePopupId = def.id
-      inputLocked = true
-    }
+    const iconAreaCenterX = vw * 0.04 + iconAreaW / 2
+    // 強化説明・特殊駒・敵・用語は共通「野帳シート」に統合済み（showFieldNote。旧ここにあった個別ポップアップ実装は撤去）
     // 可視化第二波④：強化アイコンの回数条件バッジ（run.progress は並行実装中。無ければ何も描かない）
     type UpgradeProgress = Record<string, { cur: number; max: number }>
     const getProgress = (): UpgradeProgress | undefined => (run as unknown as { progress?: UpgradeProgress }).progress
@@ -1088,14 +1622,31 @@ async function boot() {
       m.eventMode = 'static'
       m.cursor = 'pointer'
       m.hitArea = { contains: (x: number, y: number) => x * x + y * y <= iconR * iconR * 2.4 }
-      m.on('pointertap', () => showUpgradePopup(def))
-      m.position.set(vw / 2 + (i - (ownedUpgrades.length - 1) / 2) * iconSpacing, 0)
+      m.on('pointertap', () => showFieldNote(buildUpgradeEntry(def, run)))
+      m.position.set(iconAreaCenterX + (i - (ownedUpgrades.length - 1) / 2) * iconSpacing, 0)
       boosterBar.addChild(m)
       upgradeIconG.set(id, m)
     })
     boosterBar.position.set(0, dockTop) // 盤面との間はdockGap（>=8px）確保済み（[A]ビルドドック必達条件）
     ui.addChild(boosterBar)
     refreshProgressBadges() // 可視化第二波④：層開始時点の進捗（あれば）を反映
+
+    // 「野帳」ボタン（ビルドドック右端。[C]特殊駒の主導線＝タップで4種＋効果の一覧シート）
+    const noteBtn = new Container()
+    const noteBtnW = Math.min(dockNoteBtnW, vw * 0.2)
+    const noteBtnH = Math.max(iconR * 2.1, fs(0.09))
+    const noteBg = new Graphics()
+    noteBg.roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.28).fill({ color: 0x2a1c10, alpha: 0.9 }).stroke({ width: 2, color: UI.brass })
+    noteBtn.addChild(noteBg)
+    const noteLabel = new Text({ text: '野帳', style: { fill: 0xf4e8cf, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' } })
+    noteLabel.anchor.set(0.5)
+    noteBtn.addChild(noteLabel)
+    noteBtn.position.set(vw * 0.96 - noteBtnW / 2, 0)
+    noteBtn.eventMode = 'static'
+    noteBtn.cursor = 'pointer'
+    noteBtn.hitArea = { contains: (x: number, y: number) => x >= -noteBtnW / 2 && x <= noteBtnW / 2 && y >= -noteBtnH / 2 && y <= noteBtnH / 2 }
+    noteBtn.on('pointertap', () => showFieldNote(buildSpecialPieceEntry()))
+    boosterBar.addChild(noteBtn)
 
     /** 強化発動アピール：バー内の該当アイコンをバウンス+金の一瞬発光（BoardView.onUpgradeFireから購読） */
     const bounceUpgradeIcon = (id: string) => {
@@ -1160,6 +1711,8 @@ async function boot() {
       bounceUpgradeIcon(id)
       if (at) upgradeFirePulseFx(id, at)
     }
+    // 敵本体／インテントバッジのタップ→共通「野帳シート」（[C]表：敵の開き方）。旧BoardView.showEnemyTooltipの統合先
+    view.onEnemyTap = (enemy) => showFieldNote(buildEnemyEntry(enemy))
     /** 可視化第二波②：「どの敵が殴ったか」を軌跡で示してからHPゲージの被弾演出（hpHitFx）へ繋ぐ */
     view.onEnemyAttack = (enemyId, damage) => {
       const en = board.enemies.find((e) => e.id === enemyId)
@@ -1321,6 +1874,8 @@ async function boot() {
       const cardW = cardH * aspect
       const cardTex = spriteTexture('ui_card')
       const insetX = cardW * 0.1 // 本文はカード内側からさらに左右10%（>=6%指定を満たす）内側
+      // カード本文の用語リンク（[C]用語リンクの実装方針）：測定用Textは3枚で使い回し、パネル破棄時にまとめて片付ける
+      const cardMeasurer = new Text({ text: '', style: { fontFamily: FONT, fontSize: fs(0.024) } })
 
       options.forEach((opt, i) => {
         const card = new Container()
@@ -1364,28 +1919,33 @@ async function boot() {
         card.addChild(nameT)
 
         // ② 本文：固定ラベル「条件」「効果」を左に、内容を右へ1行ずつ（[B]：1文1因果、24字目安・最大2行）
+        // 用語には点線下線＋「?」でリンクを張る（[C]用語リンクの実装方針）。カード全体タップの即取得と衝突しないよう、
+        // 用語タップは layoutRichText 側で必ず e.stopPropagation() する。「1つの本文」＝このカード1枚でusedTermsを共有
         const { condition, effect } = splitDesc(opt.desc)
         const labelW = cardW * 0.16
         const contentX = insetX + labelW
         const contentWrapW = Math.max(20, cardW - contentX - insetX)
         const labelStyle = { fill: 0x8a6a3f, fontSize: cardH * 0.058, fontFamily: FONT, fontWeight: 'bold' as const }
-        const contentStyle = {
-          fill: UI.paperInk,
-          fontSize: cardH * 0.068,
-          fontFamily: FONT,
-          wordWrap: true,
-          wordWrapWidth: contentWrapW,
-          breakWords: true,
-        }
+        const cardBodyFont = cardH * 0.068
+        const cardUsedTerms = new Set<string>()
         let rowY = cardH * 0.29
-        const addRow = (label: string, content: string, contentFill: number = UI.paperInk) => {
+        const addRow = (label: string, content: string) => {
           const l = new Text({ text: label, style: labelStyle })
           l.position.set(insetX, rowY)
           card.addChild(l)
-          const c = new Text({ text: content, style: { ...contentStyle, fill: contentFill } })
-          c.position.set(contentX, rowY)
-          card.addChild(c)
-          rowY += Math.max(l.height, c.height) + cardH * 0.03
+          const bottom = layoutRichText(
+            card,
+            cardMeasurer,
+            tokenizeRich(content, cardUsedTerms),
+            contentX,
+            rowY,
+            contentWrapW,
+            cardBodyFont,
+            UI.paperInk,
+            0x7a5a1e, // 羊皮紙地でも読める、地の文より濃い褐色（金文字は明度が近く読みにくいため使わない）
+            openGlossaryTerm,
+          )
+          rowY = Math.max(rowY + l.height, bottom) + cardH * 0.03
         }
         if (condition) addRow('条件', condition)
         addRow('効果', effect)
@@ -1399,7 +1959,7 @@ async function boot() {
           card.addChild(l)
           const txt = new Text({
             text: '◆ ' + partners.map((p) => p.name).join('　◆ '),
-            style: { ...contentStyle, fill: 0xf6ecd4, fontSize: cardH * 0.06 },
+            style: { fill: 0xf6ecd4, fontSize: cardH * 0.06, fontFamily: FONT, wordWrap: true, wordWrapWidth: contentWrapW, breakWords: true },
           })
           const padX = cardH * 0.035
           const padY2 = cardH * 0.018
@@ -1462,6 +2022,7 @@ async function boot() {
         })
         panel.addChild(card)
       })
+      cardMeasurer.destroy()
       playRoot.addChild(panel)
     }
 
@@ -1584,6 +2145,30 @@ async function boot() {
       },
       metrics: () => ({ S: view.S, ox: view.root.position.x, oy: view.root.position.y, vw, vh }),
       busy: () => tw.activeCount(),
+      // 野帳シートQA用フック（実装検証：main.ts本体の open 経路と同じ関数を直接叩けるようにする）
+      openFieldNote: showFieldNote,
+      closeFieldNote,
+      fieldNoteInfo: () => (fieldNote ? { key: fieldNote.key, top: fieldNote.baseY, viewH: fieldNote.viewH, contentH: fieldNote.contentH } : null),
+      openUpgradeNote: (id?: string) => {
+        const uid = id ?? run.upgrades[0]
+        const def = UPGRADES.find((u) => u.id === uid)
+        if (def) showFieldNote(buildUpgradeEntry(def, run))
+      },
+      openSpecialNote: () => showFieldNote(buildSpecialPieceEntry()),
+      openEnemyNote: () => {
+        const e = board.enemies.find((en) => en.hp > 0)
+        if (e) showFieldNote(buildEnemyEntry(e))
+      },
+      openTermNote: (id: string) => {
+        const g = findTerm(id)
+        if (g) showFieldNote(buildGlossaryEntry(g))
+      },
+      // 実タップ検証用：実際のUI要素（野帳ボタン／所持強化アイコン）の画面座標（QA専用、挙動には無関係）
+      noteButtonPos: () => noteBtn.getGlobalPosition(),
+      upgradeIconPos: (id?: string) => {
+        const icon = upgradeIconG.get(id ?? run.upgrades[0])
+        return icon ? icon.getGlobalPosition() : null
+      },
       startRun,
       forceFloorClear: () => {
         if (inputLocked) return
