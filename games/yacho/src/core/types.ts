@@ -17,6 +17,11 @@ export type Block =
   | { type: 'hako'; hp: 1 } // 匣（Container型。壊すと陶片に変わる）
   | { type: 'touhen'; hp: 1 } // 陶片（匣の中身。隣接ダメージで回収）
   | { type: 'subi'; remaining: number } // 巣灯（Generator型。隣接ヒットで胞子排出、残0で閉鎖）
+  | { type: 'enemy'; enemyId: number } // ローグ拡張：敵の身体セル（Board.enemiesを参照。ROGUE.md §5）
+  | { type: 'seal'; turnsLeft: number } // ローグ拡張：穴潜みが封鎖したセル（残りターンで自動解除。ROGUE.md §5）
+
+/** 敵の種類（ROGUE.md §5） */
+export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'boss'
 
 export interface Cell {
   hole: boolean // 盤外の欠け
@@ -24,6 +29,8 @@ export interface Cell {
   ground: 0 | 1 | 2 // 蔦苔の層（下敷き。上でマッチ/特殊駒起爆で1層剥がれる）
   block: Block | null
   sporeToken?: boolean // ローグ拡張：設置型の胞子トークン（既存 spore 駒とは別物。RunState併用時のみ使用。ROGUE.md §3）
+  armored?: boolean // ローグ拡張：岩殻獣が付与する甲殻。1回分の追加破壊を要求する（ROGUE.md §5）
+  poisonSpore?: boolean // ローグ拡張：胞子獣が毒胞子化した駒。消すとプレイヤーHP-1（ROGUE.md §5）
 }
 
 export type GoalType =
@@ -82,6 +89,20 @@ export type BoardEvent =
   | { t: 'explode'; at: XY; cells: XY[] } // 爆発鉱石の爆発（destroy連鎖の起点）
   | { t: 'gear-trigger'; at: XY; count: number } // ギア駒起動（RunState.gearCharge計上）
   | { t: 'obstacle-spawn'; at: XY; blockType: Block['type'] } // 賭博師の壺などが生成する邪魔ピース
+  // ローグライク拡張（ROGUE.md §5/§6）：敵・ターン制・環境・層/ラン進行
+  | { t: 'enemy-damage'; id: number; amount: number; hpLeft: number } // 敵の身体セルへのダメージ
+  | { t: 'enemy-defeated'; id: number; cells: XY[] } // 敵撃破。身体セルは開放され重力/補充で埋まる
+  | { t: 'armor-applied'; at: XY } // 岩殻獣：鉱物1つに甲殻を付与
+  | { t: 'armor-broken'; at: XY } // 甲殻セルへの1回目の破壊。駒はまだ消えない
+  | { t: 'spore-poisoned'; at: XY } // 胞子獣：植物1駒を毒胞子化
+  | { t: 'poison-triggered'; at: XY; playerHpLeft: number } // 毒胞子化した駒を消してプレイヤーHP-1
+  | { t: 'cell-sealed'; at: XY; turns: number } // 穴潜み：空きセルを封鎖
+  | { t: 'cell-unsealed'; at: XY } // 封鎖の期限切れ
+  | { t: 'boss-retreat'; row: number } // ボス：累計5ダメージで1行後退（身体最上段を解放）
+  | { t: 'boss-slam'; damage: number; playerHpLeft: number } // ボス：3ターンごとの全体攻撃
+  | { t: 'env-grow'; at: XY; kind: 'plant' | 'mineral' } // 環境効果：菌糸層/結晶洞の自然増殖
+  | { t: 'floor-clear' } // 層内の敵を全滅させた
+  | { t: 'run-over' } // playerHp<=0 でラン終了
 
 export interface XY {
   x: number
