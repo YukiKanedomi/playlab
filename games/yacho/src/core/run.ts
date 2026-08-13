@@ -24,6 +24,9 @@ export interface RunRecords {
   maxChain: number // 1手内で到達した最大連鎖数
   maxDestroyed: number // 1手内の最大破壊駒数
   effectFires: number // フック発動の総回数（ラン通算）
+  /** 結果画面・主記録昇格用（夜間監査[C]7/[E]3）：1手（1回のswap/tap）内で発火した upgrade-fire イベント数の最大値。
+   *  board.ts は変更禁止のため、main.ts の handleFloorResult がイベント列（BoardEvent[]）から件数を数えて更新する。 */
+  maxFiresInOneMove: number
   critical: boolean // フック発火上限(200/解決)に達したことがあるか＝暴走のご褒美フラグ（ROGUE.md §3）
   /** 進行曲線計測用（夜間監査[B][D]）：swarm（サンドバッグ）の隣接撃破伝播（propagateSwarmDefeat）で
    *  倒れた数のラン通算。runsim.ts が「ビルド由来の撃破」と分離して集計するために使う（ラン通算のため、
@@ -61,7 +64,7 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
     gearCharge: 0,
     playerHp: 20,
     floor: 1,
-    records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, critical: false, swarmPropagationKills: 0 },
+    records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, maxFiresInOneMove: 0, critical: false, swarmPropagationKills: 0 },
     relicBoostNext: false,
     progress: {},
     startersApplied: [],

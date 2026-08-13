@@ -1912,6 +1912,10 @@ async function boot() {
       const dur = view.play(evs)
       refreshFloorHud()
       refreshProgressBadges() // 可視化第二波④：1手ごとに進捗（あれば）を反映
+      // 結果画面の主記録用（夜間監査[C]7/[E]3）：1手＝このevs全体で発火した upgrade-fire の件数。board.ts は変更禁止のため
+      // main.ts側でイベント列を数えて集計する（board.ts が触らない run.records の追加フィールド）。
+      const firesThisMove = evs.reduce((n, e) => n + (e.t === 'upgrade-fire' ? 1 : 0), 0)
+      if (firesThisMove > run.records.maxFiresInOneMove) run.records.maxFiresInOneMove = firesThisMove
       for (const e of evs) {
         if (e.t === 'poison-triggered') {
           hpHitFx(1)
@@ -2307,7 +2311,9 @@ async function boot() {
       renderBottom() // 初期状態＝未選択（[D]：未選択時はボタンが「カードを選んで比較」のまま無効化）
     }
 
-    // ---------- 記録画面（層10クリア or run-over。ROGUE.md §7/§8） ----------
+    // ---------- 結果シーン（層10クリア or run-over。ROGUE.md §7/§8） ----------
+    // 夜間監査[C]7/[E]3：旧実装はプレイシーンへパネルを重ねるだけで、背後にHUD・盤面・ビルドドックの残骸が残っていた。
+    // 拠点シーン(showMap)と同じ作法でplayRootを一度空にしてから独立に描き直す。
     const showRunResult = (victory: boolean) => {
       inputLocked = true
       victory ? sfx.fanfare() : sfx.lose()
@@ -2315,15 +2321,29 @@ async function boot() {
       saveRogueBest(reached)
       const name = buildRunName(run.upgrades)
 
+      playRoot.removeAllListeners()
+      playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
+
       const panel = new Container()
+      // 背景は層テーマの背景を流用（暗幕は薄く。[C]7）
+      const bgSprite = new Sprite()
+      bgSprite.anchor.set(0.5)
+      bgSprite.position.set(vw / 2, vh / 2)
+      const bgTex = spriteTexture(`bg_${theme}`)
+      if (bgTex) {
+        bgSprite.texture = bgTex
+        bgSprite.scale.set(Math.max(vw / bgTex.width, vh / bgTex.height))
+      }
+      panel.addChild(bgSprite)
       const dim = new Graphics()
-      dim.rect(0, 0, vw, vh).fill({ color: 0x1a130c, alpha: 0.32 })
+      dim.rect(0, 0, vw, vh).fill({ color: 0x1a130c, alpha: 0.16 })
       panel.addChild(dim)
+
       const pw = vw * 0.9
       const panelTex = spriteTexture('ui_panel') ?? spriteTexture('ui_parchment')
-      const ph = panelTex ? Math.min(vh * 0.72, (pw / panelTex.width) * panelTex.height) : vh * 0.68
+      const ph = panelTex ? Math.min(vh * 0.8, (pw / panelTex.width) * panelTex.height) : vh * 0.7
       const px0 = (vw - pw) / 2
-      const py0 = vh * 0.11
+      const py0 = Math.max(vh * 0.03, (vh - ph) / 2)
       if (panelTex) {
         const sp = new Sprite(panelTex)
         const s = Math.min(pw / panelTex.width, ph / panelTex.height)
@@ -2331,13 +2351,15 @@ async function boot() {
         sp.position.set((vw - panelTex.width * s) / 2, py0)
         panel.addChild(sp)
       }
+
+      // 1) 見出し：勝利=テーマ別バナー、敗北=コード描画の見出し（「ボス撃破○×」は削り見出し自体で勝敗を示す）
       if (victory) {
-        const ribbonTex = spriteTexture('ui_banner_word') ?? spriteTexture('ui_ribbon_clear')
+        const ribbonTex = spriteTexture(`ribbon_${theme}`) ?? spriteTexture('ui_ribbon_clear')
         if (ribbonTex) {
           const rb = new Sprite(ribbonTex)
           rb.anchor.set(0.5)
-          rb.scale.set((pw * 0.82) / ribbonTex.width)
-          rb.position.set(vw / 2, py0 + vh * 0.002)
+          rb.scale.set((pw * 0.78) / ribbonTex.width)
+          rb.position.set(vw / 2, py0 + ph * 0.1)
           panel.addChild(rb)
         }
       } else {
@@ -2346,46 +2368,112 @@ async function boot() {
           style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
         })
         t0.anchor.set(0.5)
-        t0.position.set(vw / 2, py0 + ph * 0.12)
+        t0.position.set(vw / 2, py0 + ph * 0.1)
         panel.addChild(t0)
       }
+
+      // 2) ビルド名：白文字は羊皮紙上で読めないため濃い墨色に変更（[C]7）
       const nameT = new Text({
         text: name,
-        style: { fill: 0xf4e8cf, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
+        style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
       })
       nameT.anchor.set(0.5)
-      nameT.position.set(vw / 2, py0 + ph * 0.22)
+      nameT.position.set(vw / 2, py0 + ph * 0.2)
       panel.addChild(nameT)
 
+      // 3) 主記録：最大同時発火数を昇格
       const records = [
         `とうたつ深度　${reached}層`,
+        `1手の最大発火数　${run.records.maxFiresInOneMove}`,
         `さいだい連鎖　${run.records.maxChain}`,
         `1手さいだい破壊　${run.records.maxDestroyed}`,
-        `発動した効果　${run.records.effectFires}回`,
-        `ボス撃破　${victory ? '○' : '×'}`,
       ]
+      const recordsTop = py0 + ph * 0.28
+      const recordLineH = fs(0.048)
       records.forEach((line, i) => {
         const t = new Text({
           text: line,
-          style: { fill: UI.paperInk, fontSize: fs(0.032), fontFamily: FONT, fontWeight: 'bold' },
+          style: { fill: UI.paperInk, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
         })
         t.anchor.set(0.5)
-        t.position.set(vw / 2, py0 + ph * 0.36 + i * fs(0.055))
+        t.position.set(vw / 2, recordsTop + i * recordLineH)
         panel.addChild(t)
       })
+      const recordsBottom = recordsTop + (records.length - 1) * recordLineH + recordLineH * 0.6
 
-      const bustTex2 = spriteTexture(`bust_${theme}`)
-      if (bustTex2) {
-        const ch = new Sprite(bustTex2)
-        ch.anchor.set(0.5, 1)
-        const chH = Math.min(vh * 0.16, ((pw * 0.22) / bustTex2.width) * bustTex2.height)
-        ch.scale.set(chH / bustTex2.height)
-        ch.position.set(px0 + pw * 0.1, py0 + ph + vh * 0.045)
-        panel.addChild(ch)
+      // 4) ビルドの因果図：所持強化を固有アイコンで横一列に並べ、consumes/produces が繋がるアイコン同士を線で結ぶ。
+      //    閉じた輪（サイクル）に含まれる辺は太く強調する。
+      const buttonY = py0 + ph * 0.9
+      const graphTop = recordsBottom + fs(0.02)
+      const graphBottom = buttonY - fs(0.09)
+      const graphH = Math.max(fs(0.16), graphBottom - graphTop)
+      const owned = run.upgrades.map((id) => UPGRADES.find((u) => u.id === id)).filter((u): u is UpgradeDef => !!u)
+      if (owned.length > 0) {
+        const graphLabel = new Text({
+          text: 'ビルドの因果',
+          // 羊皮紙の上で薄すぎたため墨色に（見出しとして読めること優先）
+          style: { fill: UI.paperInk, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' },
+        })
+        graphLabel.anchor.set(0.5, 0)
+        graphLabel.position.set(vw / 2, graphTop)
+        panel.addChild(graphLabel)
+
+        const rowY = graphTop + graphLabel.height + (graphH - graphLabel.height) / 2
+        const gLeft = px0 + pw * 0.1
+        const gRight = px0 + pw * 0.9
+        const n = owned.length
+        // アイコンは判別できる下限を確保する（小さすぎると外周の装飾しか見えない）
+        const iconR = n > 1 ? Math.max(fs(0.036), Math.min(fs(0.058), ((gRight - gLeft) / (n - 1)) * 0.46)) : fs(0.058)
+        const nodeX = (i: number) => (n > 1 ? gLeft + ((gRight - gLeft) / (n - 1)) * i : (gLeft + gRight) / 2)
+
+        // 辺の抽出：produces(a)とconsumes(b)が1つでも重なればa→b（アイコン同士。自己ループは対象外）
+        const edges: { from: number; to: number }[] = []
+        const adj: boolean[][] = Array.from({ length: n }, () => new Array(n).fill(false))
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            if (i === j) continue
+            const produces = owned[i].produces ?? []
+            const consumes = owned[j].consumes ?? []
+            if (produces.some((r) => consumes.includes(r))) {
+              edges.push({ from: i, to: j })
+              adj[i][j] = true
+            }
+          }
+        }
+        // 到達性の推移閉包：j→…→i が成り立つ辺i→jは閉じた輪の一部（強調対象）
+        const reach = adj.map((row) => row.slice())
+        for (let k = 0; k < n; k++)
+          for (let i = 0; i < n; i++) if (reach[i][k]) for (let j = 0; j < n; j++) if (reach[k][j]) reach[i][j] = true
+
+        const lineLayer = new Container() // 線をアイコンより奥に描く
+        panel.addChild(lineLayer)
+        for (const e of edges) {
+          const inLoop = reach[e.to][e.from]
+          const x1 = nodeX(e.from)
+          const x2 = nodeX(e.to)
+          const arc = Math.min(graphH * 0.42, Math.abs(x2 - x1) * 0.35 + fs(0.02))
+          const midX = (x1 + x2) / 2
+          const g = new Graphics()
+          g.moveTo(x1, rowY).quadraticCurveTo(midX, rowY - arc, x2, rowY)
+          if (inLoop) g.stroke({ width: Math.max(2, fs(0.006)), color: 0xf2c14e, alpha: 0.85 })
+          else g.stroke({ width: Math.max(1, fs(0.003)), color: UI.brass, alpha: 0.45 })
+          lineLayer.addChild(g)
+        }
+
+        owned.forEach((def, i) => {
+          const node = new Container()
+          const bg = new Graphics()
+          bg.circle(0, 0, iconR).fill({ color: 0x241a10, alpha: 0.92 }).stroke({ width: 1.5, color: UI.brass, alpha: 0.9 })
+          node.addChild(bg)
+          node.addChild(makeUniqueUpgradeIcon(def.id, iconR * 1.3))
+          node.position.set(nodeX(i), rowY)
+          panel.addChild(node)
+        })
       }
 
+      // 5) もういちど
       const btn = makeCoveredButton('もういちど', `next_${theme}`, pw * 0.6)
-      btn.position.set(vw / 2, py0 + ph * 0.9)
+      btn.position.set(vw / 2, buttonY)
       btn.eventMode = 'static'
       btn.cursor = 'pointer'
       btn.on('pointertap', () => {
@@ -2436,6 +2524,8 @@ async function boot() {
         if (def) showFieldNote(buildUpgradeEntry(def, run))
       },
       openSpecialNote: () => showFieldNote(buildSpecialPieceEntry()),
+      /** QA専用：結果画面を直接開く（10層まで自動で進める検証は不安定なため） */
+      forceRunEnd: (victory: boolean) => showRunResult(victory),
       openEnemyNote: () => {
         const e = board.enemies.find((en) => en.hp > 0)
         if (e) showFieldNote(buildEnemyEntry(e))
