@@ -20,8 +20,8 @@ export type Block =
   | { type: 'enemy'; enemyId: number } // ローグ拡張：敵の身体セル（Board.enemiesを参照。ROGUE.md §5）
   | { type: 'seal'; turnsLeft: number } // ローグ拡張：穴潜みが封鎖したセル（残りターンで自動解除。ROGUE.md §5）
 
-/** 敵の種類（ROGUE.md §5） */
-export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'boss'
+/** 敵の種類（ROGUE.md §5）。swarm=サンドバッグ（小型胞子虫）。第3波：ROGUE2.md §3/§11（連鎖で一掃する快感の主役） */
+export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'swarm' | 'boss'
 
 export interface Cell {
   hole: boolean // 盤外の欠け
@@ -102,6 +102,7 @@ export type BoardEvent =
   | { t: 'cell-unsealed'; at: XY } // 封鎖の期限切れ
   | { t: 'boss-retreat'; row: number } // ボス：累計5ダメージで1行後退（身体最上段を解放）
   | { t: 'boss-slam'; damage: number; playerHpLeft: number; id: number } // ボス：3ターンごとの全体攻撃（idは同上）
+  | { t: 'enemy-attack'; id: number; damage: number } // 通常敵：妨害と交互の攻撃ターン。プレイヤーHPを削る（ROGUE.md §5）
   | { t: 'env-grow'; at: XY; kind: 'plant' | 'mineral' } // 環境効果：菌糸層/結晶洞の自然増殖
   | { t: 'floor-clear' } // 層内の敵を全滅させた
   | { t: 'run-over' } // playerHp<=0 でラン終了

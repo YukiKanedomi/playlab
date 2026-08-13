@@ -11,6 +11,7 @@ export interface EnemyInstance {
   maxHp: number
   cells: XY[] // 居座るセル群（ボスは複数行ぶん）
   actionTimer: number // 2ターンごとの定期行動カウンタ（岩殻獣/胞子獣/穴潜み用。ボスは未使用）
+  attackTurn: boolean // 次の定期行動が「攻撃」か「妨害」か（交互。false=妨害から開始。ボスは未使用＝常に攻撃）
   // ボス専用状態（ROGUE.md §5 ボス行）
   bossDamageAccum: number // 前回後退からの累計ダメージ（5で1行後退）
   bossAttackTimer: number // 3ターンごとの全体攻撃カウンタ
@@ -21,8 +22,24 @@ export const ENEMY_HP: Record<EnemyKind, number> = {
   rockshell: 8, // 岩殻獣
   sporeling: 6, // 胞子獣
   burrower: 10, // 穴潜み
+  swarm: 1, // サンドバッグ＝小型胞子虫（第3波。ROGUE2.md §3：連鎖で一掃する快感の主役）
   boss: 30, // 巨大深層生物
 }
+
+/** 攻撃ターンのプレイヤーHPダメージ量（ROGUE.md §5：妨害と攻撃を交互に行う） */
+export const ENEMY_ATTACK_DAMAGE: Record<EnemyKind, number> = {
+  rockshell: 3,
+  sporeling: 2,
+  burrower: 2,
+  swarm: 1, // 妨害を持たない攻撃専業。数で圧をかける（周期はSWARM_ATTACK_PERIOD参照）
+  boss: 3, // ボスは3ターン周期の全体攻撃（既存のまま。妨害は行わない）
+}
+
+/**
+ * サンドバッグ（swarm）の攻撃周期。既存敵と同じ2ターンにすると1層6〜10体の同時攻撃で瞬時にHP20を溶かすため、
+ * バランス再設計として3ターンに緩和した（第3波・最終報告に理由記載）。HP1で連鎖撃破されやすい前提とセットの調整。
+ */
+export const SWARM_ATTACK_PERIOD = 3
 
 let nextEnemyId = 1
 
@@ -40,6 +57,7 @@ export function createEnemy(kind: EnemyKind, cells: XY[]): EnemyInstance {
     maxHp: ENEMY_HP[kind],
     cells,
     actionTimer: 0,
+    attackTurn: false, // 最初の定期行動は妨害から（チュートリアル圧力。ROGUE.md §6 層1-2の意図を踏襲）
     bossDamageAccum: 0,
     bossAttackTimer: 0,
     bossFrontRow: cells.length ? Math.min(...cells.map((c) => c.y)) : 0,
@@ -60,5 +78,19 @@ export function bossBodyCells(frontRow: number, bottomRow: number, width: number
  */
 export function turnsUntilAction(e: EnemyInstance): number {
   if (e.kind === 'boss') return 3 - (e.bossAttackTimer % 3)
+  if (e.kind === 'swarm') return SWARM_ATTACK_PERIOD - (e.actionTimer % SWARM_ATTACK_PERIOD)
   return 2 - (e.actionTimer % 2)
+}
+
+/**
+ * 敵インテント（可視化契約。ビューはこの関数を通して「次に何をしてくるか」を読む）。
+ * 通常敵は妨害/攻撃が交互（周期2ターンのまま）。ボスは常に攻撃（3ターン周期の全体攻撃）。
+ * kind='attack' のときのみ damage を持つ（妨害ターンはダメージ量が定まらないため省略）。
+ */
+export function enemyIntent(e: EnemyInstance): { kind: 'attack' | 'disrupt'; damage?: number; turns: number } {
+  const turns = turnsUntilAction(e)
+  if (e.kind === 'boss') return { kind: 'attack', damage: ENEMY_ATTACK_DAMAGE.boss, turns }
+  if (e.kind === 'swarm') return { kind: 'attack', damage: ENEMY_ATTACK_DAMAGE.swarm, turns } // 妨害を持たない（第3波）
+  const kind: 'attack' | 'disrupt' = e.attackTurn ? 'attack' : 'disrupt'
+  return kind === 'attack' ? { kind, damage: ENEMY_ATTACK_DAMAGE[e.kind], turns } : { kind, turns }
 }

@@ -1,6 +1,11 @@
 // ラン単位の永続状態（ROGUE.md §3 RunState）。
 // Board はこれを任意（コンストラクタ第2引数）で受け取り、フックの発火判定・記録集計に使う。
 // 未指定なら Board は完全に旧来の（非ローグ）挙動のまま動く。
+import { makeRng, randInt, type Rng } from './rng'
+import { UPGRADES } from './upgrades'
+
+/** ラン開始時に配布する強化の抽選プール（プレイテスト反省：連鎖の起点を最初から1つ持たせる）。20種全体を対象とする */
+export const STARTER_UPGRADE_IDS: string[] = UPGRADES.map((u) => u.id)
 
 export interface RunRecords {
   maxChain: number // 1手内で到達した最大連鎖数
@@ -18,15 +23,30 @@ export interface RunState {
   /** 遺物共鳴(#13)が次の遺物マッチ効果を2倍にするための一時フラグ。消費で false に戻る。
    *  ROGUE.md の RunState 定義には無いが、フック間で状態を1個渡すのに最小限必要（最終報告に記載）。 */
   relicBoostNext: boolean
+  /** 可視化契約：回数条件で発動する強化（自律機構/機械庭園/遺物共鳴）の進捗。board.ts が発火のたびcurを更新する。
+   *  キーは UpgradeDef.id。未所持や未発火の強化にはキーが存在しない（存在しない＝0/未着手として扱ってよい）。 */
+  progress: Record<string, { cur: number; max: number }>
+  /** スターター効果（ROGUE2.md §1 原則2。第3波）：取得済み強化のうち、starterを既に発火させたIDの集合。
+   *  Boardは構築（＝層開始）のたびrun.upgradesを見てここに無いIDのstarterだけを発火し、ここへ積む。
+   *  ラン全体で1回のみ＝層をまたいで二重発火しない（同じRunStateオブジェクトを層間で引き継ぐ前提）。 */
+  startersApplied: string[]
 }
 
-export function createRunState(upgrades: string[] = []): RunState {
+/**
+ * ラン状態を生成する。
+ * upgrades を省略した場合（＝main.ts の通常のラン開始）のみ、STARTER_UPGRADE_IDS から rng で1つ配布する
+ * （「連鎖の起点」を最初から持たせるため）。テストのように upgrades を明示指定した場合（[]含む）はそのまま使う。
+ */
+export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now())): RunState {
+  const initialUpgrades = upgrades ?? [STARTER_UPGRADE_IDS[randInt(rng, STARTER_UPGRADE_IDS.length)]]
   return {
-    upgrades,
+    upgrades: initialUpgrades,
     gearCharge: 0,
     playerHp: 20,
     floor: 1,
     records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, critical: false },
     relicBoostNext: false,
+    progress: {},
+    startersApplied: [],
   }
 }

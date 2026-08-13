@@ -4,9 +4,20 @@ import { makeRng, randInt, type Rng } from './rng'
 import type { BoardEvent, Cell, Color, EnemyKind, Goal, LevelDef, Piece, XY } from './types'
 import type { DestroyCause, Hook, HookCtx, MatchGroup } from './hooks'
 import { systemOf } from './hooks'
-import { MIMIC_SLIME_ID, PREHEAT_ID, RESONANT_SHATTER_ID, SPORE_BULLET_ID, UPGRADES, VINE_ROCKET_ID } from './upgrades'
+import {
+  AUTONOMOUS_MECHANISM_ID,
+  GEAR_TRIGGER_THRESHOLD,
+  MECHANICAL_GARDEN_ID,
+  MIMIC_SLIME_ID,
+  PREHEAT_ID,
+  RELIC_RESONANCE_ID,
+  RESONANT_SHATTER_ID,
+  SPORE_BULLET_ID,
+  UPGRADES,
+  VINE_ROCKET_ID,
+} from './upgrades'
 import type { RunState } from './run'
-import { bossBodyCells, createEnemy, type EnemyInstance } from './enemies'
+import { bossBodyCells, createEnemy, ENEMY_ATTACK_DAMAGE, SWARM_ATTACK_PERIOD, type EnemyInstance } from './enemies'
 import type { FloorDef, EnvFlag } from './floors'
 
 export const W = 8
@@ -29,6 +40,10 @@ export class Board {
   private hooksSuspended = false
   private resolveDestroyCount = 0 // 1解決あたりの破壊駒数（RunRecords.maxDestroyed用）
   private lastHookReplay: (() => void) | null = null // 模倣の粘菌(#14)用
+  /** 第3波：Board構築（＝層開始）時に発生した初期イベント（予熱供給・スターター効果）。
+   *  main.ts側のswap/tap経由イベントとは違い戻り値で受け取れないため、公開フィールドとして保持する。
+   *  ビュー側は `new Board(...)` の直後にこれを読んで発動演出を出す想定（契約。実装はビュー側の役割）。 */
+  initEvents: BoardEvent[] = []
 
   // ---- ローグライク拡張（ROGUE.md §5/§6）：敵・ターン制・環境。run が無ければ一切使われない ----
   enemies: EnemyInstance[] = []
@@ -50,10 +65,14 @@ export class Board {
     this.goalDone = def.goals.map(() => 0)
     this.subiCharge = def.subiCharge ?? 4
     if (run) this.hooks = UPGRADES.filter((u) => run.upgrades.includes(u.id)).flatMap((u) => u.hooks.map((hook) => ({ upgradeId: u.id, hook })))
+    this.initProgress()
     this.loadLayout(def.layout)
     this.fillInitial()
-    this.applyPreheat()
+    const initEv: BoardEvent[] = []
+    this.applyPreheat(initEv)
     if (floor) this.spawnFloor(floor)
+    this.applyStarters(initEv) // 第3波：敵配置の後（damageEnemyが敵を参照できるように）
+    this.initEvents = initEv
   }
 
   private loadLayout(layout: string[]) {
@@ -953,15 +972,56 @@ export class Board {
     return true
   }
 
-  /** 各層開始時（＝Board構築時）にギアを3つ追加供給する「予熱」強化の適用 */
-  private applyPreheat() {
+  /**
+   * 可視化契約：回数条件で発動する強化の進捗欄をBoard構築時に確保する（ビューが所持直後から「0/2」を出せるように）。
+   * 層をまたいでも run.progress は同じRunStateオブジェクト上で引き継がれるため、既にある値は上書きしない。
+   */
+  private initProgress() {
+    if (!this.run) return
+    const ensure = (id: string, max: number) => {
+      if (this.run!.upgrades.includes(id) && !this.run!.progress[id]) this.run!.progress[id] = { cur: 0, max }
+    }
+    ensure(AUTONOMOUS_MECHANISM_ID, GEAR_TRIGGER_THRESHOLD)
+    ensure(MECHANICAL_GARDEN_ID, GEAR_TRIGGER_THRESHOLD)
+    ensure(RELIC_RESONANCE_ID, 1) // 遺物共鳴は回数カウンタではなく「ブースト待機中」の0/1状態
+  }
+
+  /** 各層開始時（＝Board構築時）にギアを3つ追加供給する「予熱」強化の適用。第3波：発動をupgrade-fireで可視化する */
+  private applyPreheat(ev: BoardEvent[]) {
     if (!this.run?.upgrades.includes(PREHEAT_ID)) return
+    let first: XY | null = null
     for (let i = 0; i < 3; i++) {
       const cands: XY[] = []
       for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (this.at(x, y)?.piece?.kind === 'normal') cands.push({ x, y })
-      if (!cands.length) return
+      if (!cands.length) break
       const spot = cands[randInt(this.rng, cands.length)]
-      this.at(spot.x, spot.y)!.piece = { kind: 'normal', color: 0 }
+      const piece: Piece = { kind: 'normal', color: 0 }
+      this.at(spot.x, spot.y)!.piece = piece
+      ev.push({ t: 'special-born', at: spot, piece })
+      first ??= spot
+    }
+    if (first) ev.push({ t: 'upgrade-fire', id: PREHEAT_ID, at: first })
+  }
+
+  /**
+   * スターター効果（ROGUE2.md §1 原則2。第3波）：Board構築（＝層開始）のたび、取得済み強化のうち
+   * まだ starter を発火していないものだけを1回発火する。適用済み管理は RunState.startersApplied。
+   * ラン開始時に配布される初期強化（STARTER_UPGRADE_IDS）も、この仕組みで層1開始時に自然に発火する。
+   */
+  private applyStarters(ev: BoardEvent[]) {
+    if (!this.run) return
+    const ctx = this.makeCtx(ev)
+    const center: XY = { x: Math.floor(W / 2), y: Math.floor(H / 2) }
+    for (const u of UPGRADES) {
+      if (!u.starter) continue
+      if (!this.run.upgrades.includes(u.id) || this.run.startersApplied.includes(u.id)) continue
+      this.run.startersApplied.push(u.id)
+      const before = ev.length
+      u.starter(ctx)
+      const first = ev[before]
+      const at = first && 'at' in first ? (first as unknown as { at: XY }).at : center
+      ev.splice(before, 0, { t: 'upgrade-fire', id: u.id, at })
+      this.run.records.effectFires++
     }
   }
 
@@ -988,7 +1048,18 @@ export class Board {
     this.run.gearCharge++
     const count = this.run.gearCharge
     ev.push({ t: 'gear-trigger', at, count })
+    this.updateGearCountProgress(count)
     this.fireGearTriggerHooks(at, count, ev)
+  }
+
+  /** 自律機構/機械庭園（ギアN回起動で発動）の進捗を更新する。gearChargeは全強化共有の1本カウンタなので、
+   *  「今のサイクル内で何回目か」を ((count-1) % N) + 1 で求める（N回目でmaxに達し、次サイクルで1に戻る） */
+  private updateGearCountProgress(count: number) {
+    if (!this.run) return
+    const cur = ((count - 1) % GEAR_TRIGGER_THRESHOLD) + 1
+    for (const id of [AUTONOMOUS_MECHANISM_ID, MECHANICAL_GARDEN_ID]) {
+      if (this.run.upgrades.includes(id)) this.run.progress[id] = { cur, max: GEAR_TRIGGER_THRESHOLD }
+    }
   }
 
   /** 爆発鉱石・トークン等の爆発。中心含む十字1マス、または3x3（共振破砕）。destroy連鎖はclearPieceAt経由で自然に波及する */
@@ -1137,11 +1208,14 @@ export class Board {
       addObstacle: (at) => self.addObstacleAt(at, ev),
       bumpChain: (n) => (self.chain += n),
       boostNextRelic: () => {
-        if (self.run) self.run.relicBoostNext = true
+        if (!self.run) return
+        self.run.relicBoostNext = true
+        if (self.run.upgrades.includes(RELIC_RESONANCE_ID)) self.run.progress[RELIC_RESONANCE_ID] = { cur: 1, max: 1 } // 可視化契約：ブースト待機中
       },
       takeRelicBoost: () => {
         if (!self.run || !self.run.relicBoostNext) return 0
         self.run.relicBoostNext = false
+        if (self.run.upgrades.includes(RELIC_RESONANCE_ID)) self.run.progress[RELIC_RESONANCE_ID] = { cur: 0, max: 1 }
         return 2
       },
       replayLast: () => self.lastHookReplay?.(),
@@ -1325,10 +1399,33 @@ export class Board {
     }
     this.enemies = this.enemies.filter((x) => x.id !== e.id)
     ev.push({ t: 'enemy-defeated', id: e.id, cells: e.cells })
+    if (e.kind === 'swarm') this.propagateSwarmDefeat(e, ev)
     if (this.hadEnemies && this.enemies.length === 0 && !this.floorCleared) {
       this.floorCleared = true
       ev.push({ t: 'floor-clear' })
     }
+  }
+
+  /**
+   * サンドバッグ（swarm）撃破時、隣接する同種へ1ダメージを伝播する（ROGUE2.md §3・第3波：連鎖の爽快感の核）。
+   * swarmはHP1なので伝播が命中すればほぼ即座撃破→再度この関数を呼ぶ形で自然に連鎖する。
+   * 撃破済みの身体セルは直前にblockを外しているため、同じ敵への二重伝播は起きない。
+   */
+  private propagateSwarmDefeat(e: EnemyInstance, ev: BoardEvent[]) {
+    const seen = new Set<number>()
+    for (const p of e.cells)
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const n = this.enemyAt({ x: p.x + dx, y: p.y + dy })
+        if (n && n.kind === 'swarm' && n.hp > 0 && !seen.has(n.id)) {
+          seen.add(n.id)
+          this.dealEnemyDamage(n.id, 1, ev)
+        }
+      }
   }
 
   /** ターン終了処理：環境効果→穴潜みの封鎖期限→各敵の定期行動→勝敗判定。afterMoveの直後に呼ばれる */
@@ -1342,6 +1439,12 @@ export class Board {
         this.bossPeriodicAttack(e, ev)
         continue
       }
+      if (e.kind === 'swarm') {
+        // サンドバッグ：妨害を持たず常に攻撃のみ。既存敵とは別周期（SWARM_ATTACK_PERIOD＝バランス調整。理由は最終報告）
+        e.actionTimer++
+        if (e.actionTimer % SWARM_ATTACK_PERIOD === 0) this.enemyAttackAction(e, ev)
+        continue
+      }
       e.actionTimer++
       if (e.actionTimer % 2 === 0) this.performEnemyAction(e, ev)
     }
@@ -1353,10 +1456,22 @@ export class Board {
     }
   }
 
+  /** 定期行動：妨害と攻撃を交互に行う（周期2ターンは維持。ROGUE.md §5：プレイテスト反省＝敵を本当の脅威にする） */
   private performEnemyAction(e: EnemyInstance, ev: BoardEvent[]) {
-    if (e.kind === 'rockshell') this.rockshellAction(e, ev)
+    if (e.attackTurn) {
+      this.enemyAttackAction(e, ev)
+    } else if (e.kind === 'rockshell') this.rockshellAction(e, ev)
     else if (e.kind === 'sporeling') this.sporelingAction(e, ev)
     else if (e.kind === 'burrower') this.burrowerAction(e, ev)
+    e.attackTurn = !e.attackTurn
+  }
+
+  /** 通常敵の攻撃ターン：プレイヤーHPを削る（岩殻獣3/胞子獣2/穴潜み2。ENEMY_ATTACK_DAMAGE参照） */
+  private enemyAttackAction(e: EnemyInstance, ev: BoardEvent[]) {
+    if (!this.run) return
+    const damage = ENEMY_ATTACK_DAMAGE[e.kind]
+    this.run.playerHp -= damage
+    ev.push({ t: 'enemy-attack', id: e.id, damage })
   }
 
   /** 岩殻獣：鉱物1つに甲殻を付与する（ROGUE.md §5） */

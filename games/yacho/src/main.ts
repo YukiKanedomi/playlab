@@ -408,12 +408,14 @@ async function boot() {
   let inputLocked = false
   let runState: RunState | null = null
   let runSeed = 0
+  let runMaxHp = 20 // 可視化第二波①：「20 / 20」併記用の最大値。startRunで実測値に更新
   let sceneEpoch = 0 // シーン再構築の世代。跨いだ遅延コールバックは無効化
 
   const draftRng = (floor: number): Rng => makeRng((runSeed + floor * 104729 + 17) | 0)
 
   const startRun = () => {
     runState = createRunState()
+    runMaxHp = runState.playerHp
     runSeed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) | 0
     mapRoot.visible = false
     playRoot.visible = true
@@ -473,25 +475,57 @@ async function boot() {
     const ui = new Container()
     playRoot.addChild(ui)
 
-    // 探窟隊HP（左上メダリオン。旧「のこりメダリオン」を差し替え。ROGUE.md §5）
+    // 探窟隊HP（左上メダリオン。可視化第二波①：「たいりょく」焼き込み済みの新アセットへ差し替え。ROGUE.md §5）
     const badgeW = vw * 0.16
-    const plaqueTex = spriteTexture('ui_moves')
+    const plaqueTex = spriteTexture('ui_hp') ?? spriteTexture('ui_moves') // 新アセット未ロード時は旧メダリオンへ
     let badgeH = badgeW
+    let badgeX = vw * 0.035
+    let badgeY = vh * 0.022
     if (plaqueTex) {
       const sp = new Sprite(plaqueTex)
       sp.width = badgeW
       sp.height = (badgeW / plaqueTex.width) * plaqueTex.height
       badgeH = sp.height
-      sp.position.set(vw * 0.035, vh * 0.022)
+      sp.position.set(badgeX, badgeY)
       ui.addChild(sp)
     }
     const hpText = new Text({
       text: '',
-      style: { fill: 0xe5d8bb, fontSize: fs(0.064), fontFamily: FONT, fontWeight: 'bold' },
+      style: { fill: 0xe5d8bb, fontSize: fs(0.058), fontFamily: FONT, fontWeight: 'bold' },
     })
     hpText.anchor.set(0.5)
-    hpText.position.set(vw * 0.035 + badgeW / 2, vh * 0.022 + badgeH * 0.58)
+    hpText.position.set(badgeX + badgeW / 2, badgeY + badgeH * 0.52)
     ui.addChild(hpText)
+    // 「20 / 20」併記（HP制であることを一目で伝える。可視化第二波①）
+    const hpMaxText = new Text({
+      text: '',
+      style: { fill: 0xcbb98a, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' },
+    })
+    hpMaxText.anchor.set(0.5)
+    hpMaxText.position.set(badgeX + badgeW / 2, badgeY + badgeH * 0.72)
+    ui.addChild(hpMaxText)
+    // HP危険域（残5以下）の常時演出：文字を薄赤に染めゆっくり明滅させる（scaleはflashHpと競合するのでalphaのみ使う）
+    const HP_DANGER = 5
+    const HP_COLOR_NORMAL = 0xe5d8bb
+    const HP_COLOR_DANGER = 0xe0a89c
+    let hpDanger = false
+    const pulseHpDanger = () => {
+      if (!hpDanger || hpText.destroyed) return
+      tw.tween(hpText, { alpha: 0.62 }, 700, {
+        onDone: () => {
+          if (!hpDanger || hpText.destroyed) return
+          tw.tween(hpText, { alpha: 1 }, 700, { onDone: pulseHpDanger })
+        },
+      })
+    }
+    const updateHpDangerState = () => {
+      const danger = run.playerHp > 0 && run.playerHp <= HP_DANGER
+      hpText.style.fill = danger ? HP_COLOR_DANGER : HP_COLOR_NORMAL
+      if (danger === hpDanger) return
+      hpDanger = danger
+      if (danger) pulseHpDanger()
+      else hpText.alpha = 1
+    }
 
     // スコアバッジ（現状のまま）
     const scoreBadgeTex = spriteTexture('ui_score')
@@ -574,7 +608,7 @@ async function boot() {
     ui.addChild(tp)
 
     const enemyRow = new Container()
-    const enemyIconTex = spriteTexture('kokeishi')
+    const enemyIconTex = spriteTexture('e_swarm') ?? spriteTexture('kokeishi') // 主力はサンドバッグ敵なのでその顔を出す
     if (enemyIconTex) {
       const sp = new Sprite(enemyIconTex)
       sp.anchor.set(0.5)
@@ -594,15 +628,18 @@ async function boot() {
 
     const refreshFloorHud = () => {
       hpText.text = String(Math.max(0, run.playerHp))
+      hpMaxText.text = `${Math.max(0, run.playerHp)} / ${runMaxHp}`
       scoreText.text = board.score.toLocaleString()
       enemyCountText.text = String(board.enemies.length)
+      updateHpDangerState()
     }
     refreshFloorHud()
+    /** メダリオンの数字を赤くフラッシュ→通常色（または危険域の薄赤）へ戻す */
     const flashHp = () => {
       hpText.style.fill = 0xff6b5a
       tw.tween(hpText.scale, { x: 1.3, y: 1.3 }, 90, { onDone: () => tw.tween(hpText.scale, { x: 1, y: 1 }, 140) })
       tw.delay(260, () => {
-        if (!hpText.destroyed) hpText.style.fill = 0xe5d8bb
+        if (!hpText.destroyed) hpText.style.fill = hpDanger ? HP_COLOR_DANGER : HP_COLOR_NORMAL
       })
     }
     /** プレイヤー被弾の実況：画面縁の赤ビネット短フラッシュ＋HPメダリオンから「-N」が落ちる（ROGUE.md 可視化第一波③） */
@@ -631,6 +668,31 @@ async function boot() {
         delay: 150,
         onDone: () => {
           if (!dmgT.destroyed) dmgT.destroy()
+        },
+      })
+    }
+
+    /** 可視化第二波②：敵→探窟隊HUDへ飛ぶ赤い弧（軌跡＋着弾の小玉）。着弾点でHPメダリオンのフラッシュ演出に繋ぐ */
+    const enemyAttackTrailFx = (fromX: number, fromY: number, toX: number, toY: number) => {
+      const g = new Graphics()
+      const midX = (fromX + toX) / 2
+      const midY = Math.min(fromY, toY) - Math.abs(toX - fromX) * 0.18
+      g.moveTo(fromX, fromY).quadraticCurveTo(midX, midY, toX, toY).stroke({ width: fs(0.006), color: 0xe0503a, alpha: 0.8 })
+      playRoot.addChild(g)
+      tw.tween(g, { alpha: 0 }, 360, {
+        delay: 80,
+        onDone: () => {
+          if (!g.destroyed) g.destroy()
+        },
+      })
+      const spark = new Graphics()
+      spark.circle(0, 0, fs(0.014)).fill({ color: 0xffb199, alpha: 0.95 })
+      spark.position.set(fromX, fromY)
+      playRoot.addChild(spark)
+      tw.tween(spark.position, { x: toX, y: toY }, 220, {
+        ease: tw.easeInCubic,
+        onDone: () => {
+          if (!spark.destroyed) spark.destroy()
         },
       })
     }
@@ -682,6 +744,65 @@ async function boot() {
         })
       })
     }
+    // 可視化第二波④：強化アイコンの回数条件バッジ（run.progress は並行実装中。無ければ何も描かない）
+    type UpgradeProgress = Record<string, { cur: number; max: number }>
+    const getProgress = (): UpgradeProgress | undefined => (run as unknown as { progress?: UpgradeProgress }).progress
+    const progressBadgeG = new Map<string, { host: Container; text: Text }>()
+    const progressLastCur = new Map<string, number>()
+    const ensureProgressBadge = (id: string, icon: Container) => {
+      const existing = progressBadgeG.get(id)
+      if (existing) return existing
+      const host = new Container()
+      host.position.set(iconR * 0.62, iconR * 0.6)
+      const bg = new Graphics()
+      bg.circle(0, 0, iconR * 0.42)
+        .fill({ color: 0x2a1c10, alpha: 0.92 })
+        .stroke({ width: 1.2, color: 0xd9c9a0, alpha: 0.85 })
+      host.addChild(bg)
+      const txt = new Text({ text: '', style: { fill: 0xe8d9b0, fontSize: iconR * 0.4, fontFamily: FONT, fontWeight: 'bold' } })
+      txt.anchor.set(0.5)
+      host.addChild(txt)
+      icon.addChild(host)
+      const rec = { host, text: txt }
+      progressBadgeG.set(id, rec)
+      return rec
+    }
+    /** 強化の回数条件バッジを最新化。進んだ瞬間にポップ、maxへ到達（発動）した瞬間は金に一瞬光る */
+    const refreshProgressBadges = () => {
+      const progress = getProgress()
+      for (const id of ownedUpgrades) {
+        const icon = upgradeIconG.get(id)
+        if (!icon) continue
+        const p = progress?.[id]
+        if (!p) {
+          const rec = progressBadgeG.get(id)
+          if (rec) rec.host.visible = false
+          continue
+        }
+        const rec = ensureProgressBadge(id, icon)
+        rec.host.visible = true
+        rec.text.text = `${Math.min(p.cur, p.max)}/${p.max}`
+        const prevCur = progressLastCur.get(id)
+        if (prevCur !== undefined && p.cur !== prevCur) {
+          tw.tween(rec.host.scale, { x: 1.25, y: 1.25 }, 100, {
+            onDone: () => {
+              if (!rec.host.destroyed) tw.tween(rec.host.scale, { x: 1, y: 1 }, 160, { ease: tw.easeOutBack })
+            },
+          })
+          if (p.cur >= p.max) {
+            const glow = new Graphics()
+            glow.circle(0, 0, iconR * 0.5).fill({ color: 0xf2c14e, alpha: 0.9 })
+            rec.host.addChildAt(glow, 0)
+            tw.tween(glow, { alpha: 0 }, 300, {
+              onDone: () => {
+                if (!glow.destroyed) glow.destroy()
+              },
+            })
+          }
+        }
+        progressLastCur.set(id, p.cur)
+      }
+    }
     const medalTex = spriteTexture('ui_medal')
     ownedUpgrades.forEach((id, i) => {
       const def = UPGRADES.find((u) => u.id === id)
@@ -731,6 +852,7 @@ async function boot() {
     })
     boosterBar.position.set(0, boardTop + view.S * H + Math.min(vw * 0.1, vh * 0.05))
     ui.addChild(boosterBar)
+    refreshProgressBadges() // 可視化第二波④：層開始時点の進捗（あれば）を反映
 
     /** 強化発動アピール：バー内の該当アイコンをバウンス+金の一瞬発光（BoardView.onUpgradeFireから購読） */
     const bounceUpgradeIcon = (id: string) => {
@@ -751,6 +873,27 @@ async function boot() {
       })
     }
     view.onUpgradeFire = (id) => bounceUpgradeIcon(id)
+    /** 可視化第二波②：「どの敵が殴ったか」を軌跡で示してから被弾演出（既存flashHp/hpDamageFx）へ繋ぐ */
+    view.onEnemyAttack = (enemyId, damage) => {
+      const en = board.enemies.find((e) => e.id === enemyId)
+      const cell = en ? (en.kind === 'boss' ? { x: W - 1, y: en.bossFrontRow } : en.cells[0]) : null
+      if (cell) {
+        const fromX = view.root.position.x + (cell.x + 0.5) * view.S
+        const fromY = view.root.position.y + (cell.y + 0.5) * view.S
+        const toX = hpText.position.x
+        const toY = hpText.position.y
+        enemyAttackTrailFx(fromX, fromY, toX, toY)
+        tw.delay(220, () => {
+          if (!alive()) return
+          flashHp()
+          hpDamageFx(damage)
+        })
+      } else {
+        // 敵の位置が特定できない（撃破直後など）場合も被弾演出自体は必ず出す
+        flashHp()
+        hpDamageFx(damage)
+      }
+    }
 
     // ---------- 入力 ----------
     let downAt: { x: number; y: number } | null = null
@@ -803,6 +946,7 @@ async function boot() {
     const handleFloorResult = (evs: BoardEvent[]) => {
       const dur = view.play(evs)
       refreshFloorHud()
+      refreshProgressBadges() // 可視化第二波④：1手ごとに進捗（あれば）を反映
       for (const e of evs) {
         if (e.t === 'poison-triggered') {
           flashHp()
@@ -1012,6 +1156,23 @@ async function boot() {
       })
       panel.addChild(btn)
       playRoot.addChild(panel)
+    }
+
+    // 強化のスターター効果（ROGUE2.md §1 原則2）は Board 構築時に確定済み。
+    // 盤とHUDが揃ったこの時点で演出だけ再生し「選んだ強化がいきなり仕事した」を見せる
+    if (board.initEvents.length) {
+      const initEv = board.initEvents
+      board.initEvents = [] // 二重再生の防止
+      inputLocked = true
+      tw.delay(500, () => {
+        if (!alive()) return
+        const dur = view.play(initEv)
+        refreshFloorHud()
+        refreshProgressBadges()
+        tw.delay(Math.min(dur, 1400), () => {
+          if (alive()) inputLocked = false
+        })
+      })
     }
 
     // QA用フック（既存 __yacho の流儀＝シーン再構築のたびに全体を差し替え）

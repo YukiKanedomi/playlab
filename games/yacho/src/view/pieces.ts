@@ -23,6 +23,11 @@ const SPRITE_URLS: Record<string, URL> = {
   subi_open: new URL('../../assets/sprites3/o_subi_open.png', import.meta.url),
   touhen: new URL('../../assets/sprites3/o_touhen.png', import.meta.url),
   subi: new URL('../../assets/sprites3/o_subi.png', import.meta.url),
+  // 敵アート（ROGUE2.md 第3波：サンドバッグ敵＝小型胞子虫）
+  e_swarm: new URL('../../assets/sprites3/e_swarm.png', import.meta.url),
+  e_swarm_angry: new URL('../../assets/sprites3/e_swarm_angry.png', import.meta.url),
+  e_swarm_dead: new URL('../../assets/sprites3/e_swarm_dead.png', import.meta.url),
+  e_swarm_spore: new URL('../../assets/sprites3/e_swarm_spore.png', import.meta.url),
   ground_thick: new URL('../../assets/sprites3/ground_thick.png', import.meta.url),
   ground_thin: new URL('../../assets/sprites3/ground_thin.png', import.meta.url),
   moss_icon: new URL('../../assets/sprites3/moss_icon.png', import.meta.url),
@@ -36,6 +41,7 @@ const SPRITE_URLS: Record<string, URL> = {
   ui_ribbon: new URL('../../assets/ui/ribbon.png', import.meta.url),
   ui_target: new URL('../../assets/ui/target_plaque2.png', import.meta.url),
   ui_moves: new URL('../../assets/ui/moves_medallion.png', import.meta.url),
+  ui_hp: new URL('../../assets/ui/hp_medallion.png', import.meta.url), // 可視化第二波①：HPメダリオン（「たいりょく」焼き込み・ランタン刻印）
   ui_score: new URL('../../assets/ui/score_badge.png', import.meta.url),
   ui_medal: new URL('../../assets/ui/booster_socket.png', import.meta.url),
   ui_gear: new URL('../../assets/ui/gear2.png', import.meta.url),

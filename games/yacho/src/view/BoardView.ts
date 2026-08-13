@@ -6,6 +6,7 @@ import { Board, W, H } from '../core/board'
 import type { BoardEvent, EnemyKind, Piece, XY } from '../core/types'
 import type { EnemyInstance } from '../core/enemies'
 import { turnsUntilAction } from '../core/enemies'
+import * as EnemiesCore from '../core/enemies' // 可視化第二波②：enemyIntent は並行実装中。名前空間importで未着でもビルドを壊さない
 import { UPGRADES } from '../core/upgrades'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import { completeAll, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
@@ -19,13 +20,20 @@ type HpHost = Container & { __hpFill?: Graphics; __hpGeom?: { x: number; y: numb
 // 可視化第一波②：強化発動アピールのラベルに使う名前引き（idはupgrades.tsのUpgradeDef.idと一致）
 const UPGRADE_NAME = new Map(UPGRADES.map((u) => [u.id, u.name]))
 
-// 可視化第一波①：敵タップ・ツールチップの文言
-const ENEMY_INFO: Record<EnemyKind, { name: string; desc: string }> = {
-  rockshell: { name: '岩殻獣', desc: '鉱物ひとつに甲殻をまとわせる（消すのに1回余計にかかる）' },
-  sporeling: { name: '胞子獣', desc: '植物ひとつを毒胞子に変える（消すと探窟隊HP-1）' },
-  burrower: { name: '穴潜み', desc: '空きマスを2手ふさぎ、自分は別のマスへ移る' },
+// 可視化第一波①：敵タップ・ツールチップの文言。可視化第二波②：core側で妨害/攻撃の交互行動が入ったため文言更新＋swarm追加。
+// core が今後さらに敵種を増やしても即座にビルドが壊れないよう Partial にし、未知の種は showEnemyTooltip 側で汎用文言にフォールバックする
+const ENEMY_INFO: Partial<Record<EnemyKind, { name: string; desc: string }>> = {
+  rockshell: { name: '岩殻獣', desc: '妨害と攻撃を交互に行う。妨害では鉱物ひとつに甲殻をまとわせ、攻撃では探窟隊にダメージ' },
+  sporeling: { name: '胞子獣', desc: '妨害と攻撃を交互に行う。妨害では植物ひとつを毒胞子に変え、攻撃では探窟隊にダメージ' },
+  burrower: { name: '穴潜み', desc: '妨害と攻撃を交互に行う。妨害では空きマスを2手ふさいで自分は別マスへ移り、攻撃では探窟隊にダメージ' },
+  swarm: { name: 'サンドバッグ', desc: '妨害を持たない攻撃専業。1体倒すと隣接する仲間にもダメージが伝わり連鎖しやすい' },
   boss: { name: '巨大深層生物', desc: '3手ごとに探窟隊全体を打つ。ダメージで後退する' },
 }
+
+// 可視化第二波②：敵の予告（攻撃/妨害）。core側の enemyIntent（enemies.ts export）が並行実装中のため、
+// 名前空間importを any 経由で覗く防御的な参照にする（未着の間は undefined のまま turnsUntilAction にフォールバック）
+type EnemyIntent = { kind: 'attack' | 'disrupt'; damage?: number; turns: number }
+const enemyIntentFn = (EnemiesCore as unknown as { enemyIntent?: (e: EnemyInstance) => EnemyIntent }).enemyIntent
 
 // juice 実測値テーブル（ms）
 export const T = {
@@ -69,6 +77,8 @@ export class BoardView {
 
   /** 所持強化バーへの発動アピール通知（main.ts が購読してアイコンをバウンスさせる。可視化第一波②） */
   onUpgradeFire?: (id: string) => void
+  /** 敵の攻撃通知（main.ts が購読して探窟隊HUDへの軌跡＋被弾演出を鳴らす。可視化第二波②） */
+  onEnemyAttack?: (enemyId: number, damage: number) => void
 
   constructor(
     public board: Board,
@@ -341,6 +351,21 @@ export class BoardView {
       const eye = new Graphics()
       this.drawEye(eye, S / 2, S * 0.42, S * 0.14, 0xc9a0e8) // 一つ目・菫
       wrap.addChild(eye)
+    } else if (enemy.kind === 'swarm') {
+      // 小型胞子虫（ROGUE2.md 第3波）。次のターンに殴ってくるときだけ「怒り顔」差分に切り替える
+      const soon = (enemyIntentFn?.(enemy)?.turns ?? turnsUntilAction(enemy)) <= 1
+      const tex = spriteTexture(soon ? 'e_swarm_angry' : 'e_swarm') ?? spriteTexture('e_swarm')
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 6) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.circle(S / 2, S / 2, S * 0.36).fill(0xb9c7c4).stroke({ width: 2.5, color: 0x6e7a76 })
+        wrap.addChild(g)
+      }
     } else {
       // 穴潜み：暗い穴（同心円）＋二つ目
       const g = new Graphics()
@@ -353,7 +378,8 @@ export class BoardView {
       this.drawEye(eyes, S / 2 + S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
       wrap.addChild(eyes)
     }
-    this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
+    // HP1の小型胞子虫はバーが常に満タンで意味を成さないため出さない（画面のノイズを減らす）
+    if (enemy.maxHp > 1) this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
     // 可視化第一波①：敵セルのタップで名前+行動の説明ツールチップ（スワップ対象にならないセルなので入力系と衝突しない）
     wrap.eventMode = 'static'
     wrap.cursor = 'pointer'
@@ -739,11 +765,31 @@ export class BoardView {
         .lineTo(r, -r + w)
         .closePath()
         .fill({ color: col, alpha: 0.92 })
-    } else {
-      // 衝撃波形（ボスの全体攻撃の予告）
+    } else if (kind === 'boss') {
+      // 衝撃波形（ボスの全体攻撃の予告。enemyIntent未着時のフォールバック表示にも使う）
       g.arc(0, r * 0.25, r * 0.55, Math.PI * 1.15, Math.PI * 1.85).stroke({ width: r * 0.22, color: col, alpha: 0.92 })
       g.arc(0, r * 0.25, r * 1.0, Math.PI * 1.2, Math.PI * 1.8).stroke({ width: r * 0.16, color: col, alpha: 0.7 })
+    } else {
+      // 汎用フォールバック（swarm等・enemyIntent未着で攻撃/妨害の別が分からない新種）：小粒3つ
+      for (const [dx, dy] of [
+        [-r * 0.55, r * 0.25],
+        [r * 0.55, r * 0.25],
+        [0, -r * 0.55],
+      ])
+        g.circle(dx, dy, r * 0.32).fill({ color: col, alpha: 0.92 })
     }
+  }
+
+  /** 可視化第二波②：攻撃予告アイコン（斜めの刀身＋鍔）。妨害系より強く目立たせるため専用に描く */
+  private drawSwordIcon(g: Graphics, r: number) {
+    const blade = 0xfff1e4
+    g.moveTo(-r * 0.72, r * 0.82).lineTo(r * 0.58, -r * 0.78).stroke({ width: r * 0.26, color: blade })
+    g.moveTo(r * 0.58, -r * 0.78)
+      .lineTo(r * 0.22, -r * 0.3)
+      .lineTo(r * 0.84, -r * 0.46)
+      .closePath()
+      .fill(blade) // 切先
+    g.moveTo(-r * 0.18, r * 0.32).lineTo(r * 0.32, -r * 0.18).stroke({ width: r * 0.24, color: 0xe0503a }) // 鍔
   }
 
   /** 1体ぶんのバッジを再描画（新規なら生成）。位置は敵セル内側の右上隅に収め、駒には絶対にかぶらない */
@@ -769,29 +815,34 @@ export class BoardView {
     }
     const h = host!
     h.removeChildren().forEach((c) => c.destroy())
-    const bw = S * 0.32 // バッジ直径：セルの1/3程度・内側に収める（発注者の懸念：駒に絶対かぶらない）
+    // 可視化第二波②：enemyIntent が来ていれば攻撃/妨害で描き分け。未着なら常に disrupt 扱い＝旧来の見た目のまま
+    const intent = enemyIntentFn?.(en)
+    const isAttack = intent?.kind === 'attack'
+    const remaining = intent?.turns ?? turnsUntilAction(en)
+    const bw = S * (isAttack ? 0.37 : 0.32) // 攻撃バッジは妨害よりわずかに大きく
     const inset = S * 0.08
     h.position.set(cellX * S + S - bw / 2 - inset, cellY * S + bw / 2 + inset)
     const bg = new Graphics()
     bg.circle(0, 0, bw / 2)
-      .fill({ color: 0x1c1712, alpha: 0.82 })
-      .stroke({ width: 1.4, color: 0xd9c9a0, alpha: 0.75 })
+      .fill({ color: 0x1c1712, alpha: 0.86 })
+      .stroke({ width: isAttack ? 2.1 : 1.4, color: isAttack ? 0xe0503a : 0xd9c9a0, alpha: isAttack ? 0.95 : 0.75 })
     h.addChild(bg)
     const icon = new Graphics()
-    this.drawIntentIcon(icon, en.kind, bw * 0.3)
+    if (isAttack) this.drawSwordIcon(icon, bw * 0.32)
+    else this.drawIntentIcon(icon, en.kind, bw * 0.3)
     icon.position.set(-bw * 0.16, -bw * 0.02)
     h.addChild(icon)
-    const remaining = turnsUntilAction(en)
+    // 攻撃バッジはダメージ数字、妨害バッジは従来どおり残りターン数を出す
     const numT = new Text({
-      text: String(remaining),
-      style: { fill: 0xf4e8cf, fontSize: bw * 0.5, fontFamily: FONT, fontWeight: 'bold' },
+      text: isAttack ? String(intent?.damage ?? '?') : String(remaining),
+      style: { fill: isAttack ? 0xffcabb : 0xf4e8cf, fontSize: bw * (isAttack ? 0.46 : 0.5), fontFamily: FONT, fontWeight: 'bold' },
     })
     numT.anchor.set(0.5)
     numT.position.set(bw * 0.24, bw * 0.06)
     h.addChild(numT)
     const meta = h as unknown as { __pulsing?: boolean; __baseY?: number }
     meta.__baseY = h.position.y
-    const urgent = remaining <= 1
+    const urgent = remaining <= 1 // 点滅タイミングは攻撃/妨害いずれも「残りターン」基準で現行どおり
     if (urgent) {
       if (!meta.__pulsing) {
         meta.__pulsing = true
@@ -842,7 +893,7 @@ export class BoardView {
   /** 敵ブロック/ボスの顔タップ：名前+行動の説明を羊皮紙の小片で2.5秒表示 */
   private showEnemyTooltip(kind: EnemyKind, cellX: number, cellY: number) {
     if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
-    const info = ENEMY_INFO[kind]
+    const info = ENEMY_INFO[kind] ?? { name: kind, desc: '' } // core未着の新種でも汎用表示にフォールバック
     const S = this.S
     const w = Math.min(W * S * 0.86, S * 6.4) // 盤幅基準（Sは盤セル寸法でありビュー全体の比率には小さすぎるため）
     const name = new Text({ text: info.name, style: { fill: 0x4a3a24, fontSize: S * 0.32, fontFamily: FONT, fontWeight: 'bold' } })
@@ -945,6 +996,42 @@ export class BoardView {
     })
   }
 
+  /** 可視化第二波③：妨害の実行元→対象セルへ細い線を1本引く（因果＝「どの敵がやったか」を示す）。フェードのみで消える */
+  private causeLineFx(enemyId: number, to: XY, color: number, t: number) {
+    const cells = this.enemyCellsCache.get(enemyId)
+    const from = cells?.[0]
+    if (!from || (from.x === to.x && from.y === to.y)) return
+    delay(t, () => {
+      const g = new Graphics()
+      g.moveTo(this.px(from.x), this.px(from.y))
+        .lineTo(this.px(to.x), this.px(to.y))
+        .stroke({ width: this.S * 0.045, color, alpha: 0.7 })
+      this.fxLayer.addChild(g)
+      tween(g, { alpha: 0 }, 380, {
+        delay: 120,
+        onDone: () => {
+          if (!g.destroyed) g.destroy()
+        },
+      })
+    })
+  }
+
+  /** 可視化第二波②：敵の攻撃の起点（自セル上の赤い一瞬のバースト）。着弾側（探窟隊HUD）の演出は main.ts の onEnemyAttack が担う */
+  private enemyAttackTelegraphFx(enemyId: number, t: number) {
+    const cells = this.enemyCellsCache.get(enemyId)
+    if (!cells || !cells.length) return
+    const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
+    const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
+    delay(t, () => {
+      const g = new Graphics()
+      g.circle(0, 0, this.S * 0.28).fill({ color: 0xe0503a, alpha: 0.8 })
+      g.position.set(this.px(cx), this.px(cy))
+      this.fxLayer.addChild(g)
+      tween(g.scale, { x: 1.9, y: 1.9 }, 220, { ease: easeOutCubic })
+      tween(g, { alpha: 0 }, 220, { onDone: () => g.destroy() })
+    })
+  }
+
   /** 強化発動：起点セルに小さな金フラッシュ（ラベルは floatLabelFx が別途出す） */
   private upgradeFlashFx(p: XY, t: number) {
     delay(t, () => {
@@ -985,8 +1072,30 @@ export class BoardView {
     let chainSeen = 0
     let chainStartT = 0 // 連鎖セグメントの開始時刻（ビートはここから650ms刻み＝落下完了を待つ）
     const upgradeFireCounts = new Map<string, number>() // 可視化第一波②：このタイムライン内での強化ごとの発動回数
+    let disruptLabelCount = 0 // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
     for (const e of evs) {
+      // 可視化第二波②：core契約の新イベント 'enemy-attack' は BoardEvent 型に未着の可能性があるため、
+      // switch（判別可能ユニオン）の外・any経由で先取りして処理する（型が来ても来なくても安全）
+      const raw = e as unknown as { t: string; id?: number; damage?: number }
+      if (raw.t === 'enemy-attack' && typeof raw.id === 'number') {
+        const id = raw.id
+        const dmg = raw.damage ?? 0
+        this.flashIntentBadge(id, t)
+        this.enemyAttackTelegraphFx(id, t)
+        if (disruptLabelCount < 2) {
+          disruptLabelCount++
+          const cells = this.enemyCellsCache.get(id)
+          if (cells && cells.length) {
+            const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
+            const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
+            this.floatLabelFx({ x: cx, y: cy }, `こうげき！ -${dmg}`, 0xff6b5a, t + 100, -0.25)
+          }
+        }
+        delay(t, () => this.onEnemyAttack?.(id, dmg))
+        t += 260
+        continue
+      }
       switch (e.t) {
         case 'swap': {
           const a = this.sprites.get(this.key(e.a.x, e.a.y))
@@ -1229,6 +1338,11 @@ export class BoardView {
           // 可視化第一波①：予告（バッジ強発光）→実行（甲殻オーバーレイ）の順
           this.flashIntentBadge(e.id, t)
           this.makeArmorOverlay(e.at.x, e.at.y, t + 120)
+          this.causeLineFx(e.id, e.at, 0xc7ccd2, t + 100) // 可視化第二波③：どの敵がやったかの因果線
+          if (disruptLabelCount < 2) {
+            disruptLabelCount++
+            this.floatLabelFx(e.at, 'かたくなった！', 0xd8d2c2, t + 160)
+          }
           t += 320
           break
         }
@@ -1250,6 +1364,11 @@ export class BoardView {
         case 'spore-poisoned': {
           this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
           this.makePoisonOverlay(e.at.x, e.at.y, t + 120)
+          this.causeLineFx(e.id, e.at, 0xb98be0, t + 100) // 可視化第二波③：因果線
+          if (disruptLabelCount < 2) {
+            disruptLabelCount++
+            this.floatLabelFx(e.at, 'けすとダメージ！', 0xb98be0, t + 160)
+          }
           t += 320
           break
         }
@@ -1268,6 +1387,11 @@ export class BoardView {
           const g = this.makeSealBlock(e.at.x, e.at.y)
           g.scale.set(0)
           tween(g.scale, { x: 1, y: 1 }, 220, { delay: t + 120, ease: easeOutBack })
+          this.causeLineFx(e.id, e.at, 0xcbb28a, t + 100) // 可視化第二波③：因果線
+          if (disruptLabelCount < 2) {
+            disruptLabelCount++
+            this.floatLabelFx(e.at, 'ふさがれた！', 0xcbb28a, t + 160)
+          }
           t += 340
           break
         }

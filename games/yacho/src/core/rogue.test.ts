@@ -95,14 +95,14 @@ describe('ギア起動（#4手順）', () => {
 })
 
 describe('自律機構（#10）', () => {
-  it('ギアが3回起動すると、ランダムな特殊駒が1つ生成される', () => {
+  // バランス再設計（プレイテスト反省）：ギア3回起動→2回起動に緩和（ROGUE.md §4）。1回目はまだ発動しない。
+  it('ギアが2回起動すると、ランダムな特殊駒が1つ生成される', () => {
     const run = createRunState(['autonomous-mechanism'])
     const b = new Board(plain(), run)
     const ev: BoardEvent[] = []
     const triggerGear = (b as unknown as { triggerGear: (at: XY, ev: BoardEvent[]) => void }).triggerGear.bind(b)
     triggerGear({ x: 0, y: 0 }, ev)
-    triggerGear({ x: 0, y: 0 }, ev)
-    expect(ev.some((e) => e.t === 'special-born')).toBe(false) // 1・2回目はまだ発動しない
+    expect(ev.some((e) => e.t === 'special-born')).toBe(false) // 1回目はまだ発動しない
     triggerGear({ x: 0, y: 0 }, ev)
     const born = ev.find((e) => e.t === 'special-born')
     expect(born && born.t === 'special-born' && born.piece.kind !== 'normal').toBe(true)
