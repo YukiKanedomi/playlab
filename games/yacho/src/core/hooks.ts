@@ -49,6 +49,18 @@ export interface HookCtx {
   boostNextRelic(): void
   /** 模倣の粘菌(#14)：直前に発動した（自分以外の）フック効果、無ければ直前に発動した特殊駒効果をもう一度実行する（第5波・夜間監査[C]1で再実装） */
   replayLast(): void
+  /**
+   * 生成位置探索（夜間監査[D]6）：colorの駒を置くと即座にマッチが成立する空きセルを、seedCells（多くは
+   * 発生源のマッチ跡地やギア起動地点）から近い順・決定的に探して返す。マッチが成立する空きセルが無ければ、
+   * seedCells自身を除く最寄りの空きセルへ後退し、それも無ければ最後の手段としてseedCells自身へ後退する
+   * （空きセルが盤上に皆無の場合のみ null）。
+   * 従来は「マッチ跡地の隣接1マス」または完全ランダムな空きマスへ生成しており、跡地自身（＝直後に自然充填で
+   * 上書きされる無駄なマス）を選びがちで、新しいマッチにほぼ繋がらなかった（監査[B]「発火が連鎖を生まない」）。
+   */
+  growthSpot(seedCells: XY[], color: Color): XY | null
+  /** growthSpotの「変換」版（夜間監査[D]6）：既存の通常駒（色違い）の中から、colorへ変換すると即座に
+   *  マッチが成立するものをseedCellsに近い順・決定的に探す（deep-breath/変換炉が使う）。 */
+  transformSpot(seedCells: XY[], color: Color): XY | null
 }
 
 export type Hook =

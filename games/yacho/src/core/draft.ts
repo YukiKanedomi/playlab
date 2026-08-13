@@ -22,16 +22,18 @@ export function connectedOwned(owned: UpgradeDef[], cand: UpgradeDef): UpgradeDe
 }
 
 /**
- * 深度ごとの保証（監査[D]強化側2）。閉ループの部品が必ず届くようにする。
- * - 深度2まで：所持の出力を使う候補を最低1枚
- * - 深度5終了時：二段の因果が無ければコネクタを1枚強制提示
- * - 深度7終了時：ループが閉じていなければ終端候補を1枚強制提示
+ * 候補がビルドの「輪を閉じる」か（監査[D]強化側2）。
+ * 所持の出力を受け取り、かつ所持が使う資源を返す＝ A→候補→A の環が成立する。
  */
-function guaranteeNeeded(owned: UpgradeDef[], floor: number): boolean {
-  if (owned.length === 0) return false
-  if (floor <= 2) return true
-  if (floor >= 5) return true
-  return false
+export function closesLoop(owned: UpgradeDef[], cand: UpgradeDef): boolean {
+  const takesFromBuild = owned.some((o) => (o.produces ?? []).some((r) => (cand.consumes ?? []).includes(r)))
+  const feedsBuild = owned.some((o) => (cand.produces ?? []).some((r) => (o.consumes ?? []).includes(r)))
+  return takesFromBuild && feedsBuild
+}
+
+/** ビルドがすでに環を持っているか（持っていれば輪を閉じる保証は不要） */
+function hasClosedLoop(owned: UpgradeDef[]): boolean {
+  return owned.some((u) => closesLoop(owned.filter((o) => o.id !== u.id), u))
 }
 
 /**
@@ -51,11 +53,17 @@ export function pickDraftOptions(ownedIds: string[], rng: Rng, floor = 1): Upgra
   const connected = (u: UpgradeDef) => owned.some((o) => connectsTo(o, u))
   const picks: UpgradeDef[] = []
 
-  // 接続枠：保証が必要な深度では、接続候補が尽きるまで必ず先に取る
-  const wantConnected = guaranteeNeeded(owned, floor) ? 2 : 2
-  for (let i = 0; i < wantConnected; i++) {
+  // 深度5以降、まだ環が閉じていなければ「輪を閉じる候補」を1枠必ず提示する（監査[D]強化側2）。
+  // これが無いと、終盤まで並列な小効果が並ぶだけで自走ループにならない
+  if (floor >= 5 && owned.length > 0 && !hasClosedLoop(owned)) {
+    const closer = take((u) => closesLoop(owned, u))
+    if (closer) picks.push(closer)
+  }
+  // 接続枠：所持の出力を使う（または所持へ供給する）候補で埋める
+  while (picks.length < 2) {
     const p = take(connected)
-    if (p) picks.push(p)
+    if (!p) break
+    picks.push(p)
   }
   // 埋め合わせ（接続候補が足りない場合）
   while (picks.length < 2) {

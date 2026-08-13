@@ -91,22 +91,17 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'fungal-awakening',
     name: '菌糸の目覚め',
-    desc: '植物マッチ時、隣接する空きセル1つに植物が生える（列詰め前に発生）',
+    desc: '植物マッチ時、マッチ跡地の近くに植物が生える（マッチが繋がる位置を優先。列詰め前に発生）',
     hooks: [
       {
         on: 'match',
         system: 'plant',
         act: (g, ctx) => {
-          for (const p of g.cells) {
-            const empty = ctx.neighborsOf(p).find((n) => {
-              const c = ctx.at(n.x, n.y)
-              return c && !c.block && !c.piece
-            })
-            if (empty) {
-              ctx.spawnPiece(empty, g.color)
-              return
-            }
-          }
+          // 夜間監査[D]6：以前は「マッチ跡地の隣接1マス」を機械的に選んでおり、そのマス自体が跡地の一部
+          // （＝直後に自然充填で埋まる無駄なマス）になりがちで新しいマッチにほぼ繋がらなかった。
+          // growthSpotで「跡地の近く・かつマッチが即成立する外部の空きセル」を優先する。
+          const spot = ctx.growthSpot(g.cells, g.color)
+          if (spot) ctx.spawnPiece(spot, g.color)
         },
       },
     ],
@@ -133,14 +128,16 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'deep-breath',
     name: '深呼吸',
-    desc: 'キノコを消すと、盤面のどれか1つが植物に変わる',
+    desc: 'キノコを消すと、跡地の近くの1つが植物に変わる（マッチが繋がる位置を優先）',
     hooks: [
       {
         on: 'match',
         color: 4,
-        act: (_g, ctx) => {
-          const target = ctx.randomCell((c) => c.piece?.kind === 'normal')
-          if (target) ctx.transform(target, { kind: 'normal', color: ctx.rng() < 0.5 ? 1 : 4 })
+        act: (g, ctx) => {
+          // 夜間監査[D]6：以前は盤面全体から完全ランダムな駒を選んでおり、周囲の色と無関係でマッチに繋がらなかった。
+          const color = ctx.rng() < 0.5 ? 1 : 4
+          const target = ctx.transformSpot(g.cells, color)
+          if (target) ctx.transform(target, { kind: 'normal', color })
         },
       },
     ],
@@ -215,8 +212,9 @@ export const UPGRADES: UpgradeDef[] = [
         on: 'match',
         system: 'mineral',
         minSize: 4,
-        act: (_g, ctx) => {
-          const spot = ctx.randomCell((c) => !c.block && !c.piece)
+        act: (g, ctx) => {
+          // 夜間監査[D]6：以前は完全ランダムな空きマスへ生成しており、周囲の色と無関係でマッチに繋がらなかった。
+          const spot = ctx.growthSpot(g.cells, 2)
           if (spot) {
             ctx.spawnPiece(spot, 2)
             ctx.transform(spot, { kind: 'normal', color: 2, volatile: true })
@@ -329,23 +327,20 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'transformation-furnace',
     name: '変換炉',
-    desc: '遺物マッチのとき、となりの駒1つが盤面で最も多い色に変わる',
+    desc: '遺物マッチのとき、跡地の近くの駒1つが盤面で最も多い色に変わる（マッチが繋がる位置を優先）',
     hooks: [
       {
         on: 'match',
         system: 'relic',
         // 夜間監査[C]3：「2倍」の消費は fireMatchHooks 側（遺物マッチの入口）に一元化した。
         // このactは常に「1回ぶんの変換」だけを行い、2倍のときは fireMatchHooks がこのact自体を2回呼ぶ。
+        // 夜間監査[D]6：以前は「マッチ跡地の隣接1マスのうち最初に見つかった通常駒」を機械的に選んでおり、
+        // マッチ形成と無関係だった。transformSpotで「跡地の近く・かつマッチが即成立する駒」を優先する。
         act: (g, ctx) => {
           const major = ctx.mostCommonColor()
           if (major === null) return
-          for (const p of g.cells) {
-            const target = ctx.neighborsOf(p).find((n) => ctx.at(n.x, n.y)?.piece?.kind === 'normal')
-            if (target) {
-              ctx.transform(target, { kind: 'normal', color: major })
-              return
-            }
-          }
+          const target = ctx.transformSpot(g.cells, major)
+          if (target) ctx.transform(target, { kind: 'normal', color: major })
         },
       },
     ],
@@ -407,11 +402,13 @@ export const UPGRADES: UpgradeDef[] = [
     hooks: [
       {
         on: 'gearTrigger',
-        act: (_at, count, ctx) => {
+        act: (at, count, ctx) => {
           if (count % GEAR_TRIGGER_THRESHOLD !== 0) return
+          // 夜間監査[D]6：以前は完全ランダムな空きマスへ生成しており、周囲の色と無関係でマッチに繋がらなかった。
           for (let i = 0; i < 2; i++) {
-            const spot = ctx.randomCell((c) => !c.block && !c.piece)
-            if (spot) ctx.spawnPiece(spot, i === 0 ? 1 : 4)
+            const color = i === 0 ? 1 : 4
+            const spot = ctx.growthSpot([at], color)
+            if (spot) ctx.spawnPiece(spot, color)
           }
         },
       },

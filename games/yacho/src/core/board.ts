@@ -24,6 +24,9 @@ import type { FloorDef, EnvFlag } from './floors'
 export const W = 8
 export const H = 8
 
+/** growthSpot/transformSpot がマッチ形成を狙って探索する範囲（マンハッタン距離。夜間監査[D]6） */
+const GROWTH_MATCH_RADIUS = 2
+
 /**
  * 模倣の粘菌(#14)が再現するフック発火の「入力スナップショット」（夜間監査[C]1）。
  * 以前は関数(クロージャ)を保存していたため、発生時の古い ev / ctx を握ったまま別の手で再発動すると
@@ -1258,6 +1261,84 @@ export class Board {
     ev.push({ t: 'special-born', at, piece: p })
   }
 
+  /**
+   * 生成位置探索（夜間監査[D]6・HookCtx.growthSpot実装）。seedCellsから近い順・決定的（同距離はy,x昇順）に
+   * 空きセルを走査し、colorを置くと即座にマッチが成立する最初の1つを、GROWTH_MATCH_RADIUS以内に限って探す
+   * （位置依存の原則：発生源から離れた場所のマッチ機会まで拾うと「どこで起きたか」が意味を失うため範囲を絞る。
+   * 副次的に全強化が毎回確実にマッチを量産する過剰な雪だるまも防ぐ）。範囲内に無ければseedCells自身を除く
+   * 最寄りの空きセルへ、それも無ければseedCells自身へ後退する（空きセルが盤上に皆無なら null）。
+   */
+  private findGrowthSpot(seedCells: XY[], color: Color): XY | null {
+    const seedKeys = new Set(seedCells.map((p) => `${p.x},${p.y}`))
+    const dist = (p: XY) => (seedCells.length ? Math.min(...seedCells.map((s) => Math.abs(s.x - p.x) + Math.abs(s.y - p.y))) : 0)
+    const candidates: XY[] = []
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const c = this.at(x, y)
+        if (c && !c.block && !c.piece) candidates.push({ x, y })
+      }
+    if (!candidates.length) return null
+    candidates.sort((a, b) => dist(a) - dist(b) || a.y - b.y || a.x - b.x)
+    const nearby = candidates.filter((p) => dist(p) <= GROWTH_MATCH_RADIUS)
+    for (const p of nearby) if (!seedKeys.has(`${p.x},${p.y}`) && this.wouldCreateMatchAt(p, color)) return p
+    for (const p of nearby) if (this.wouldCreateMatchAt(p, color)) return p
+    for (const p of candidates) if (!seedKeys.has(`${p.x},${p.y}`)) return p
+    return candidates[0]
+  }
+
+  /**
+   * 変換位置探索（夜間監査[D]6・HookCtx.transformSpot実装）。findGrowthSpotの「変換」版：既存の通常駒
+   * （色がcolor以外）の中から、seedCellsに近い順・決定的にcolorへ変換すると即座にマッチが成立する最初の
+   * 1つを、GROWTH_MATCH_RADIUS以内に限って探す（位置依存の原則・過剰な雪だるま防止はfindGrowthSpotと同じ理由）。
+   * 範囲内に無ければ最寄りの通常駒（色違い）へ後退する（通常駒が盤上に皆無なら null）。
+   */
+  private findTransformSpot(seedCells: XY[], color: Color): XY | null {
+    const dist = (p: XY) => (seedCells.length ? Math.min(...seedCells.map((s) => Math.abs(s.x - p.x) + Math.abs(s.y - p.y))) : 0)
+    const candidates: XY[] = []
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const p = this.at(x, y)?.piece
+        if (p?.kind === 'normal' && p.color !== color) candidates.push({ x, y })
+      }
+    if (!candidates.length) return null
+    candidates.sort((a, b) => dist(a) - dist(b) || a.y - b.y || a.x - b.x)
+    for (const p of candidates) if (dist(p) <= GROWTH_MATCH_RADIUS && this.wouldCreateMatchAt(p, color)) return p
+    return candidates[0]
+  }
+
+  /** (x,y)にcolorの通常駒を置いたと仮定して、3連（縦横）または2×2正方形が即成立するか */
+  private wouldCreateMatchAt(at: XY, color: Color): boolean {
+    const colAt = (x: number, y: number): Color | null => {
+      const p = this.at(x, y)?.piece
+      return p?.kind === 'normal' ? p.color : null
+    }
+    let left = 0
+    while (colAt(at.x - 1 - left, at.y) === color) left++
+    let right = 0
+    while (colAt(at.x + 1 + right, at.y) === color) right++
+    if (left + right + 1 >= 3) return true
+    let up = 0
+    while (colAt(at.x, at.y - 1 - up) === color) up++
+    let down = 0
+    while (colAt(at.x, at.y + 1 + down) === color) down++
+    if (up + down + 1 >= 3) return true
+    for (const [ox, oy] of [
+      [at.x - 1, at.y - 1],
+      [at.x, at.y - 1],
+      [at.x - 1, at.y],
+      [at.x, at.y],
+    ]) {
+      const cells: XY[] = [
+        { x: ox, y: oy },
+        { x: ox + 1, y: oy },
+        { x: ox, y: oy + 1 },
+        { x: ox + 1, y: oy + 1 },
+      ]
+      if (cells.every((c) => (c.x === at.x && c.y === at.y) || colAt(c.x, c.y) === color)) return true
+    }
+    return false
+  }
+
   /** 邪魔ピース（苔石1層）を生成（賭博師の壺のハズレ枠） */
   private addObstacleAt(at: XY, ev: BoardEvent[]) {
     const c = this.at(at.x, at.y)
@@ -1339,6 +1420,8 @@ export class Board {
         self.run.relicBoostNext = true
         if (self.run.upgrades.includes(RELIC_RESONANCE_ID)) self.run.progress[RELIC_RESONANCE_ID] = { cur: 1, max: 1 } // 可視化契約：ブースト待機中
       },
+      growthSpot: (seedCells, color) => self.findGrowthSpot(seedCells, color),
+      transformSpot: (seedCells, color) => self.findTransformSpot(seedCells, color),
       // 模倣の粘菌(#14)：直前に発動した（自分以外の）フック効果があればそれを、無ければ直前に発動した
       // 特殊駒効果を代わりに再現する（第5波：強化ゼロでも空振りしないためのフォールバック）。
       // 夜間監査[C]1：保存してあるのは入力データのみ。ここ（現在解決中のevを束縛したmakeCtx呼び出し内）で
