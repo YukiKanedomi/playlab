@@ -4,7 +4,10 @@
 export type Color = 0 | 1 | 2 | 3 | 4
 
 export type Piece =
-  | { kind: 'normal'; color: Color; volatile?: boolean } // volatile=爆発鉱石（ローグ拡張。ROGUE.md §3）
+  // volatile=爆発鉱石（ローグ拡張。ROGUE.md §3）。charged=磁気採掘の充填済みギア（夜間監査[C]2）。
+  // どちらも駒そのものの状態のため駒に持たせる（Cell側に持たせると重力で駒だけが移動してフラグが
+  // 取り残される。実際にこの不具合を踏んだため駒側に統一した。詳細は最終報告）。
+  | { kind: 'normal'; color: Color; volatile?: boolean; charged?: boolean }
   | { kind: 'harpoon'; dir: 'h' | 'v'; origin?: 'plant' | 'mineral' | 'gear' | 'relic' } // 銛（RMロケット）。originは蔓ロケット強化用
   | { kind: 'hamushi' } // 羽虫（RMプロペラ）
   | { kind: 'hitsubo' } // 火壺（RM TNT）
@@ -88,6 +91,7 @@ export type BoardEvent =
   | { t: 'token-consumed'; at: XY; kind: 'spore' } // トークンが隣接消滅に反応して消費
   | { t: 'explode'; at: XY; cells: XY[] } // 爆発鉱石の爆発（destroy連鎖の起点）
   | { t: 'gear-trigger'; at: XY; count: number } // ギア駒起動（RunState.gearCharge計上）
+  | { t: 'gear-charged'; at: XY } // 磁気採掘：爆発に巻きこまれたギアが破壊されず充填された（夜間監査[C]2）
   | { t: 'obstacle-spawn'; at: XY; blockType: Block['type'] } // 賭博師の壺などが生成する邪魔ピース
   // 可視化第一波：強化が実際に発動した瞬間（ビューの「発動アピール」用。フック act 呼び出し1回につき1個）
   | { t: 'upgrade-fire'; id: string; at: XY }

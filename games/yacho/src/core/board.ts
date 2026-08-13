@@ -7,6 +7,7 @@ import { systemOf } from './hooks'
 import {
   AUTONOMOUS_MECHANISM_ID,
   GEAR_TRIGGER_THRESHOLD,
+  MAGNETIC_MINING_ID,
   MECHANICAL_GARDEN_ID,
   MIMIC_SLIME_ID,
   PREHEAT_ID,
@@ -22,6 +23,22 @@ import type { FloorDef, EnvFlag } from './floors'
 
 export const W = 8
 export const H = 8
+
+/**
+ * 模倣の粘菌(#14)が再現するフック発火の「入力スナップショット」（夜間監査[C]1）。
+ * 以前は関数(クロージャ)を保存していたため、発生時の古い ev / ctx を握ったまま別の手で再発動すると
+ * 現在のイベント列に結果が書き込まれない不具合があった（見かけ上の空振り・演出/記録の同期崩れ）。
+ * 関数ではなくデータだけを保存し、再実行時（replayLast）は必ず現在の ev から作った新しい ctx で act を呼び直す。
+ * 対象範囲＝「直前に発動した1件（同じ手の中とは限らない。層をまたいでも保持する）」：次にどれかのフックが
+ * 発動するたびに上書きされる、いわば「最後に鳴った鐘」。データのみの保存なので古い手をまたいでも安全に
+ * 再実行できる（＝この不具合の根治）。1手の中だけに絞る案もあり得るが、模倣の粘菌が空振りする場面を
+ * 増やすだけで得るものが無いため採らなかった（仕様として明記。詳細は最終報告）。
+ */
+type HookReplaySnapshot =
+  | { on: 'match'; upgradeId: string; hook: Extract<Hook, { on: 'match' }>; g: MatchGroup; origin: XY }
+  | { on: 'destroy'; upgradeId: string; hook: Extract<Hook, { on: 'destroy' }>; at: XY; cause: DestroyCause; piece: Piece }
+  | { on: 'sporeTouch'; upgradeId: string; hook: Extract<Hook, { on: 'sporeTouch' }>; spore: XY; neighbor: XY }
+  | { on: 'gearTrigger'; upgradeId: string; hook: Extract<Hook, { on: 'gearTrigger' }>; at: XY; count: number }
 
 export class Board {
   cells: Cell[][] = [] // [y][x]
@@ -39,8 +56,8 @@ export class Board {
   private hookFireCount = 0 // 1解決あたりのフック発火数（暴走対策の上限200）
   private hooksSuspended = false
   private resolveDestroyCount = 0 // 1解決あたりの破壊駒数（RunRecords.maxDestroyed用）
-  private lastHookReplay: (() => void) | null = null // 模倣の粘菌(#14)用
-  private lastSpecialReplay: (() => void) | null = null // 模倣の粘菌(#14)：他の強化が1つも発動していない場合のフォールバック先（第5波）
+  private lastHookReplay: HookReplaySnapshot | null = null // 模倣の粘菌(#14)用（データのみ。夜間監査[C]1）
+  private lastSpecialReplay: { at: XY; piece: Piece; combo?: Piece } | null = null // 模倣の粘菌(#14)：他の強化が1つも発動していない場合のフォールバック先（第5波・データのみ）
   /** 第3波：Board構築（＝層開始）時に発生した初期イベント（予熱供給・スターター効果）。
    *  main.ts側のswap/tap経由イベントとは違い戻り値で受け取れないため、公開フィールドとして保持する。
    *  ビュー側は `new Board(...)` の直後にこれを読んで発動演出を出す想定（契約。実装はビュー側の役割）。 */
@@ -390,10 +407,19 @@ export class Board {
     }
     for (const cl of clusters) {
       ev.push({ t: 'match', cells: cl.cells, color: cl.color, chain: this.chain })
+      // 磁気採掘（夜間監査[C]2）：このギアマッチに充填済みギアが1つでも含まれていれば、このマッチから出る
+      // ギア起動を2回にする。消費は「マッチ成立の瞬間」に1回だけ（複数の充填ギアが混ざっていても2倍が上限）。
+      let gearBoost = false
+      if (this.run && systemOf(cl.color) === 'gear') {
+        for (const p of cl.cells) {
+          const piece = this.at(p.x, p.y)?.piece
+          if (piece?.kind === 'normal' && piece.charged) gearBoost = true
+        }
+      }
       for (const p of cl.cells) {
         if (used.has(key(p))) continue
         used.add(key(p))
-        this.clearPieceAt(p, ev, cl.color)
+        this.clearPieceAt(p, ev, cl.color, 'match', gearBoost)
       }
       this.damageAround(cl.cells, ev)
       if (this.run) {
@@ -413,8 +439,12 @@ export class Board {
     return true
   }
 
-  /** 駒を消す（蔦苔剥がし・ゴール計上・スコア込み） */
-  private clearPieceAt(p: XY, ev: BoardEvent[], countColor?: Color, cause: DestroyCause = 'match') {
+  /**
+   * 駒を消す（蔦苔剥がし・ゴール計上・スコア込み）。
+   * doubleGear：磁気採掘（夜間監査[C]2）用。このマッチに充填済みギアが含まれていたとき true になり、
+   * このマッチから出るギア駒のgearTrigger発火を2回にする（onPieceDestroyedへ渡す）。
+   */
+  private clearPieceAt(p: XY, ev: BoardEvent[], countColor?: Color, cause: DestroyCause = 'match', doubleGear = false) {
     const c = this.at(p.x, p.y)
     if (!c) return
     if (c.armored) {
@@ -441,7 +471,7 @@ export class Board {
     }
     if (this.run && destroyedPiece) {
       this.resolveDestroyCount++
-      this.onPieceDestroyed(p, destroyedPiece, cause, ev)
+      this.onPieceDestroyed(p, destroyedPiece, cause, ev, doubleGear)
     }
   }
 
@@ -649,12 +679,9 @@ export class Board {
         ev.push({ t: 'upgrade-fire', id: SPORE_BULLET_ID, at })
       }
       // 模倣の粘菌(#14・第5波)：強化を1つも発動していなくても空振りしないためのフォールバック対象として、
-      // 直前に発動した特殊駒効果（種類・位置・コンボ相手）を覚えておく。replayLast()はlastHookReplayが
-      // 無いときだけこれを使う（makeCtx参照）。
-      const replayAt = at
-      const replayPiece: Piece = { ...p }
-      const replayCombo: Piece | undefined = combo ? { ...combo } : undefined
-      this.lastSpecialReplay = () => this.fireSpecial(replayAt, replayPiece, ev, replayCombo)
+      // 直前に発動した特殊駒効果（種類・位置・コンボ相手）をデータとして覚えておく（関数は保存しない。夜間監査[C]1）。
+      // replayLast()はlastHookReplayが無いときだけこれを使う（makeCtx参照）。
+      this.lastSpecialReplay = { at, piece: { ...p }, combo: combo ? { ...combo } : undefined }
     }
     ev.push({ t: 'special-fire', at, piece: p, cleared })
   }
@@ -967,6 +994,8 @@ export class Board {
     this.hookFireCount = 0
     this.hooksSuspended = false
     this.resolveDestroyCount = 0
+    // 模倣の粘菌(#14)用のlastHookReplay/lastSpecialReplayはここではリセットしない（手をまたいで保持する。
+    // 対象範囲は夜間監査[C]1のコメント＝HookReplaySnapshot定義の直前を参照）。
   }
 
   /** フック発火予算（暴走対策・上限200/解決）を1つ消費。使い切っていたら false＝以後のフックは打ち切り */
@@ -1033,13 +1062,18 @@ export class Board {
     }
   }
 
-  /** 駒が1つ破壊された直後のローグ処理（destroyフック→胞子タッチ→ギア起動→爆発鉱石連鎖）。clearPieceAtから一元的に呼ばれる */
-  private onPieceDestroyed(at: XY, piece: Piece, cause: DestroyCause, ev: BoardEvent[]) {
+  /**
+   * 駒が1つ破壊された直後のローグ処理（destroyフック→胞子タッチ→ギア起動→爆発鉱石連鎖）。clearPieceAtから一元的に呼ばれる。
+   * doubleGear：磁気採掘（夜間監査[C]2）。charged状態だったギアを含むマッチから来た破壊なら、
+   * このギア駒のgearTrigger発火を2回にする（自律機構/機械庭園/遺物共鳴などgearTrigger購読側が2回分見る）。
+   */
+  private onPieceDestroyed(at: XY, piece: Piece, cause: DestroyCause, ev: BoardEvent[], doubleGear = false) {
     if (!this.run) return
     this.fireDestroyHooks(at, cause, piece, ev)
     this.checkSporeTouch(at, ev)
     if (piece.kind === 'normal' && piece.color === 0 && (cause === 'match' || cause === 'explode')) {
       this.triggerGear(at, ev)
+      if (doubleGear) this.triggerGear(at, ev)
     }
     if (piece.kind === 'normal' && piece.volatile) {
       this.explodeAt(at, ev, this.defaultExplosionOpts())
@@ -1070,6 +1104,28 @@ export class Board {
     }
   }
 
+  /**
+   * 過回転（夜間監査[C]4）：盤上で最も遠いギア駒1個を消して起動する。距離はマンハッタン距離、
+   * 同着はスキャン順（先着）で決める（決定的）。clearPieceAt経由なので通常のギア起動と同じ後処理
+   * （gearTrigger発火・落下・補充）が自然に走る。ギアが盤上に無ければ何もしない。
+   */
+  private triggerFarthestGear(from: XY, ev: BoardEvent[]) {
+    let best: XY | null = null
+    let bestD = -1
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const c = this.at(x, y)
+        if (c?.piece?.kind === 'normal' && c.piece.color === 0) {
+          const d = Math.abs(x - from.x) + Math.abs(y - from.y)
+          if (d > bestD) {
+            bestD = d
+            best = { x, y }
+          }
+        }
+      }
+    if (best) this.clearPieceAt(best, ev, undefined, 'match')
+  }
+
   /** 爆発鉱石・トークン等の爆発。中心含む十字1マス、または3x3（共振破砕）。destroy連鎖はclearPieceAt経由で自然に波及する */
   private explodeAt(at: XY, ev: BoardEvent[], opts?: { radius?: number; shape?: 'cross' | 'square' }) {
     if (!this.run) return
@@ -1098,6 +1154,16 @@ export class Board {
         continue
       }
       if (!c.piece || c.piece.kind === 'spore') continue
+      // 磁気採掘（夜間監査[C]2）：爆発に巻きこまれたギアは破壊せず「充填」状態にして盤面に残す。
+      // destroyフックは駒が消えた後にしか発火しないため、ここ（爆発の破壊対象を決める場所）で
+      // 破壊そのものをキャンセルする必要がある。次にこのギアが「マッチ」で消えるとき、
+      // そのマッチのギア起動が2倍になる（resolveMatches側で消費）。
+      if (this.run.upgrades.includes(MAGNETIC_MINING_ID) && c.piece.kind === 'normal' && c.piece.color === 0 && !c.piece.charged) {
+        c.piece.charged = true
+        ev.push({ t: 'gear-charged', at: p })
+        ev.push({ t: 'upgrade-fire', id: MAGNETIC_MINING_ID, at: p })
+        continue
+      }
       if (c.piece.kind === 'normal') this.progressGoal({ type: 'color', color: c.piece.color }, ev)
       this.clearPieceAt(p, ev, undefined, 'explode')
       destroyed.push(p)
@@ -1248,33 +1314,68 @@ export class Board {
       transform: (at, to) => self.transformPieceAt(at, to, ev),
       convertSpecial: (at, to) => self.transformPieceAt(at, to, ev),
       explode: (at, opts) => self.explodeAt(at, ev, opts),
-      chargeGear: (at) => self.triggerGear(at, ev),
+      // 磁気採掘：指定セルのギア駒を「充填済み」にする（夜間監査[C]2）。爆発介入はexplodeAt側で直接行うため、
+      // ここは主にスターター（新しく生やしたギアをその場で充填状態にする）から使う。
+      chargeGear: (at) => {
+        const c = self.at(at.x, at.y)
+        if (c?.piece?.kind === 'normal' && c.piece.color === 0 && !c.piece.charged) {
+          c.piece.charged = true
+          ev.push({ t: 'gear-charged', at })
+        }
+      },
       damageEnemy: (target, n) => {
         const enemy = target === 'nearest' ? self.nearestEnemy(origin) : self.enemyNear(target)
         if (enemy) self.dealEnemyDamage(enemy.id, n, ev)
       },
       spawnPiece: (at, color) => self.spawnPieceAt(at, color, ev),
       addObstacle: (at) => self.addObstacleAt(at, ev),
-      bumpChain: (n) => (self.chain += n),
+      // 過回転（夜間監査[C]4）：盤上で最も遠いギア駒1個を実際に消して起動する（数値だけの連鎖延長をやめた置換）
+      triggerFarGear: (from) => self.triggerFarthestGear(from, ev),
       boostNextRelic: () => {
         if (!self.run) return
         self.run.relicBoostNext = true
         if (self.run.upgrades.includes(RELIC_RESONANCE_ID)) self.run.progress[RELIC_RESONANCE_ID] = { cur: 1, max: 1 } // 可視化契約：ブースト待機中
       },
-      takeRelicBoost: () => {
-        if (!self.run || !self.run.relicBoostNext) return 0
-        self.run.relicBoostNext = false
-        if (self.run.upgrades.includes(RELIC_RESONANCE_ID)) self.run.progress[RELIC_RESONANCE_ID] = { cur: 0, max: 1 }
-        return 2
-      },
       // 模倣の粘菌(#14)：直前に発動した（自分以外の）フック効果があればそれを、無ければ直前に発動した
-      // 特殊駒効果を代わりに再現する（第5波：強化ゼロでも空振りしないためのフォールバック）
+      // 特殊駒効果を代わりに再現する（第5波：強化ゼロでも空振りしないためのフォールバック）。
+      // 夜間監査[C]1：保存してあるのは入力データのみ。ここ（現在解決中のevを束縛したmakeCtx呼び出し内）で
+      // 新しいctxを作って act を呼び直すため、常に「今」のイベント列・盤面に対して再実行される。
       replayLast: () => {
-        if (self.lastHookReplay) {
-          self.lastHookReplay()
+        const snap = self.lastHookReplay
+        if (snap) {
+          switch (snap.on) {
+            case 'match': {
+              const replayCtx = self.makeCtx(ev, snap.origin)
+              ev.push({ t: 'upgrade-fire', id: snap.upgradeId, at: snap.origin })
+              snap.hook.act(snap.g, replayCtx)
+              break
+            }
+            case 'destroy': {
+              const replayCtx = self.makeCtx(ev, snap.at)
+              ev.push({ t: 'upgrade-fire', id: snap.upgradeId, at: snap.at })
+              snap.hook.act(snap.at, snap.cause, snap.piece, replayCtx)
+              break
+            }
+            case 'sporeTouch': {
+              const replayCtx = self.makeCtx(ev, snap.neighbor)
+              ev.push({ t: 'upgrade-fire', id: snap.upgradeId, at: snap.neighbor })
+              snap.hook.act(snap.spore, snap.neighbor, replayCtx)
+              break
+            }
+            case 'gearTrigger': {
+              const replayCtx = self.makeCtx(ev, snap.at)
+              ev.push({ t: 'upgrade-fire', id: snap.upgradeId, at: snap.at })
+              snap.hook.act(snap.at, snap.count, replayCtx)
+              break
+            }
+          }
+          self.run!.records.effectFires++
           return
         }
-        self.lastSpecialReplay?.()
+        if (self.lastSpecialReplay) {
+          const { at, piece, combo } = self.lastSpecialReplay
+          self.fireSpecial(at, piece, ev, combo)
+        }
       },
     }
   }
@@ -1283,21 +1384,28 @@ export class Board {
     if (!this.run || this.hooksSuspended) return
     const origin = g.cells[Math.floor(g.cells.length / 2)]
     const ctx = this.makeCtx(ev, origin)
+    // 遺物共鳴（夜間監査[C]3）：遺物マッチの入口で倍率を一度だけ決め、このマッチに属する全ての遺物フックへ
+    // 共通に適用する。以前は各強化が個別に takeRelicBoost() を読む設計で、読み忘れた強化（賭博師の壺・
+    // 模倣の粘菌・遺物の根）には2倍が効かなかった（変換炉だけ効いていた）。消費もここで一元化する。
+    let repeat = 1
+    if (g.system === 'relic' && this.run.relicBoostNext) {
+      repeat = 2
+      this.run.relicBoostNext = false
+      if (this.run.upgrades.includes(RELIC_RESONANCE_ID)) this.run.progress[RELIC_RESONANCE_ID] = { cur: 0, max: 1 }
+    }
     for (const { upgradeId, hook: h } of this.hooks) {
       if (h.on !== 'match') continue
       if (h.system && h.system !== g.system) continue
       if (h.color !== undefined && h.color !== g.color) continue
       if (h.minSize && g.cells.length < h.minSize) continue
-      if (!this.consumeHookBudget()) return
-      // 可視化第一波：フック act を呼ぶ直前に発動アピール用イベントを積む（ROGUE.md 可視化第一波②）
-      ev.push({ t: 'upgrade-fire', id: upgradeId, at: origin })
-      h.act(g, ctx)
-      this.run.records.effectFires++
-      if (upgradeId !== MIMIC_SLIME_ID)
-        this.lastHookReplay = () => {
-          ev.push({ t: 'upgrade-fire', id: upgradeId, at: origin })
-          h.act(g, ctx)
-        }
+      for (let i = 0; i < repeat; i++) {
+        if (!this.consumeHookBudget()) return
+        // 可視化第一波：フック act を呼ぶ直前に発動アピール用イベントを積む（ROGUE.md 可視化第一波②）
+        ev.push({ t: 'upgrade-fire', id: upgradeId, at: origin })
+        h.act(g, ctx)
+        this.run.records.effectFires++
+        if (upgradeId !== MIMIC_SLIME_ID) this.lastHookReplay = { on: 'match', upgradeId, hook: h, g, origin }
+      }
     }
   }
 
@@ -1310,10 +1418,7 @@ export class Board {
       ev.push({ t: 'upgrade-fire', id: upgradeId, at })
       h.act(at, cause, piece, ctx)
       this.run.records.effectFires++
-      this.lastHookReplay = () => {
-        ev.push({ t: 'upgrade-fire', id: upgradeId, at })
-        h.act(at, cause, piece, ctx)
-      }
+      this.lastHookReplay = { on: 'destroy', upgradeId, hook: h, at, cause, piece }
     }
   }
 
@@ -1326,10 +1431,7 @@ export class Board {
       ev.push({ t: 'upgrade-fire', id: upgradeId, at: neighbor })
       h.act(spore, neighbor, ctx)
       this.run.records.effectFires++
-      this.lastHookReplay = () => {
-        ev.push({ t: 'upgrade-fire', id: upgradeId, at: neighbor })
-        h.act(spore, neighbor, ctx)
-      }
+      this.lastHookReplay = { on: 'sporeTouch', upgradeId, hook: h, spore, neighbor }
     }
   }
 
@@ -1342,10 +1444,7 @@ export class Board {
       ev.push({ t: 'upgrade-fire', id: upgradeId, at })
       h.act(at, count, ctx)
       this.run.records.effectFires++
-      this.lastHookReplay = () => {
-        ev.push({ t: 'upgrade-fire', id: upgradeId, at })
-        h.act(at, count, ctx)
-      }
+      this.lastHookReplay = { on: 'gearTrigger', upgradeId, hook: h, at, count }
     }
   }
 

@@ -38,16 +38,16 @@ export interface HookCtx {
   transform(at: XY, to: Piece): void
   convertSpecial(at: XY, to: Piece): void
   explode(at: XY, opts?: { radius?: number; shape?: 'cross' | 'square' }): void
+  /** 磁気採掘：指定セルのギア駒を「充填済み」にする（次のギアマッチで消費され、そのマッチのギア起動が2倍になる。夜間監査[C]2） */
   chargeGear(at: XY): void
   damageEnemy(target: 'nearest' | XY, n: number): void
   spawnPiece(at: XY, color: Color): void
   addObstacle(at: XY): void
-  bumpChain(n: number): void
+  /** 過回転：盤上で最も遠いギア駒1個を消して起動する＝実際にgearTriggerを発火させる（夜間監査[C]4：数値でなく盤面の因果） */
+  triggerFarGear(from: XY): void
   /** 遺物共鳴(#13)：次に発動する遺物マッチ効果を2倍にする予約 */
   boostNextRelic(): void
-  /** 変換炉/賭博師の壺などが「今回は2倍か」を消費して読む（1回読むと予約は消える） */
-  takeRelicBoost(): number
-  /** 模倣の粘菌(#14)：直前に発動した（自分以外の）フック効果、無ければ直前に発動した特殊駒効果をもう一度実行する（第5波） */
+  /** 模倣の粘菌(#14)：直前に発動した（自分以外の）フック効果、無ければ直前に発動した特殊駒効果をもう一度実行する（第5波・夜間監査[C]1で再実装） */
   replayLast(): void
 }
 

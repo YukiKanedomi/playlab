@@ -23,13 +23,15 @@ const priv = (b: Board) => b as unknown as Priv
 
 describe('スターター効果（原則2）', () => {
   it('取得済み強化のスターターはBoard構築（層開始）直後に発火し、盤面が変わる', () => {
-    // 毒胞子(toxic-spore)：本体が胞子前提のため、スターターは胞子トークンを2個設置する（第4波でスターターを
-    // 条件付き強化のみに絞った際、意図に合う形へ差し替え。spore-bloomはstarter廃止のため対象から外れた）
+    // 毒胞子(toxic-spore)：本体が胞子前提のため、スターターは胞子トークンを設置する（第4波でスターターを
+    // 条件付き強化のみに絞った際、意図に合う形へ差し替え。spore-bloomはstarter廃止のため対象から外れた）。
+    // 夜間監査[C]10：スターター量を1個へ戻した（2個は本体より強く見えるため）。本来は敵のとなりを狙うが、
+    // このテストの盤面には敵がいないため配置はランダムへ後退する（配置自体は別テストで検証）。
     const run = createRunState(['toxic-spore'])
     const b = new Board(plain(), run)
     let tokenCells = 0
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b.at(x, y)?.sporeToken) tokenCells++
-    expect(tokenCells).toBe(2)
+    expect(tokenCells).toBe(1)
     expect(b.initEvents.some((e) => e.t === 'upgrade-fire' && e.id === 'toxic-spore')).toBe(true)
     expect(run.startersApplied).toContain('toxic-spore')
   })

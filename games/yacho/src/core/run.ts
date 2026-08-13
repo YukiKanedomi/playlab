@@ -2,10 +2,23 @@
 // Board はこれを任意（コンストラクタ第2引数）で受け取り、フックの発火判定・記録集計に使う。
 // 未指定なら Board は完全に旧来の（非ローグ）挙動のまま動く。
 import { makeRng, randInt, type Rng } from './rng'
-import { UPGRADES } from './upgrades'
+import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID } from './upgrades'
 
-/** ラン開始時に配布する強化の抽選プール（プレイテスト反省：連鎖の起点を最初から1つ持たせる）。20種全体を対象とする */
-export const STARTER_UPGRADE_IDS: string[] = UPGRADES.map((u) => u.id)
+/**
+ * ラン開始時に配布する強化の抽選プール（プレイテスト反省：連鎖の起点を最初から1つ持たせる）。
+ * 夜間監査[C]10/15：20種全体だと依存度・難度がばらばらで、前提物（遺物/爆発鉱石/特殊駒等）が
+ * 無いと機能しない強化まで初手に出てしまう。単体で即座に盤面を動かす8種だけに絞る。
+ */
+export const STARTER_UPGRADE_IDS: string[] = [
+  'spore-bloom',
+  'fungal-awakening',
+  'deep-breath',
+  'mining-habit',
+  AUTONOMOUS_MECHANISM_ID,
+  PREHEAT_ID,
+  'transformation-furnace',
+  'relic-root',
+]
 
 export interface RunRecords {
   maxChain: number // 1手内で到達した最大連鎖数

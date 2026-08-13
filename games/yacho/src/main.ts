@@ -363,10 +363,9 @@ function layoutRichText(
         .lineTo(x + Math.min(dx + dash, uw), y + t.height - 1)
         .stroke({ width: 1.4, color: linkColor, alpha: 0.9 })
     host.addChild(underline)
-    const mark = new Text({ text: '?', style: { fill: linkColor, fontSize: fontSize * 0.66, fontFamily: FONT, fontWeight: 'bold' } })
-    mark.position.set(x + uw + fontSize * 0.1, y - fontSize * 0.16)
-    host.addChild(mark)
-    const hitW = uw + mark.width + fontSize * 0.2
+    // 監査[C]8：「?」を本文ベースラインへ割り込ませると `遺物?を` と読めて文章が壊れる。
+    // 主記号は点線下線だけにし、識別は下線の色と太さで担う（校正記号に見せない）
+    const hitW = uw + fontSize * 0.2
     const hitH = t.height + fontSize * 0.3
     const hit = new Container()
     hit.position.set(x - fontSize * 0.08, y - fontSize * 0.12)
@@ -378,7 +377,7 @@ function layoutRichText(
       onTermTap(termId)
     })
     host.addChild(hit)
-    x += uw + mark.width + fontSize * 0.1
+    x += uw
   }
   const placePlain = (str: string) => {
     const t = new Text({ text: str, style: { fill: color, fontSize, fontFamily: FONT } })
@@ -676,7 +675,14 @@ function buildGlossaryEntry(g: GlossaryEntry): FieldNoteEntry {
  * 遭遇帯の「状態の語り手」に必要な最小限の集計（codex_consult_ui.md [A]：残敵/次行動、[B]：被弾予告）。
  * enemyIntent（core/enemies.ts）を読むだけで、敵AIの判定そのものには踏み込まない（core非改変の方針）。
  */
-function computeEncounterInfo(board: Board): { aliveCount: number; boss: EnemyInstance | null; pendingDamage: number; minAttackTurns: number | null } {
+function computeEncounterInfo(board: Board): {
+  aliveCount: number
+  boss: EnemyInstance | null
+  pendingDamage: number
+  minAttackTurns: number | null
+  /** 監査[C]13：最短で来る攻撃の合計ダメージ。「あと3手」だけでは危険量が読めないため併記する */
+  nextAttackDamage: number
+} {
   const aliveEnemies = board.enemies.filter((e) => e.hp > 0)
   const boss = aliveEnemies.find((e) => e.kind === 'boss') ?? null
   let pendingDamage = 0
@@ -687,7 +693,13 @@ function computeEncounterInfo(board: Board): { aliveCount: number; boss: EnemyIn
     if (intent.turns === 1) pendingDamage += intent.damage ?? 0
     if (minAttackTurns === null || intent.turns < minAttackTurns) minAttackTurns = intent.turns
   }
-  return { aliveCount: aliveEnemies.length, boss, pendingDamage, minAttackTurns }
+  let nextAttackDamage = 0
+  if (minAttackTurns !== null)
+    for (const e of aliveEnemies) {
+      const intent = enemyIntent(e)
+      if (intent.kind === 'attack' && intent.turns === minAttackTurns) nextAttackDamage += intent.damage ?? 0
+    }
+  return { aliveCount: aliveEnemies.length, boss, pendingDamage, minAttackTurns, nextAttackDamage }
 }
 
 const app = new Application()
@@ -1644,12 +1656,13 @@ async function boot() {
       } else {
         enemyChip.text.text = `残敵 ${info.aliveCount}`
       }
-      const lethal = run.playerHp > 0 && info.pendingDamage > 0 && run.playerHp - info.pendingDamage <= 0
+      const lethal = run.playerHp > 0 && info.nextAttackDamage > 0 && run.playerHp - info.nextAttackDamage <= 0
       if (lethal) {
-        actionChip.text.text = '次の攻撃で倒れる'
+        actionChip.text.text = `あと${info.minAttackTurns ?? 1}手：致死`
         actionChip.text.style.fill = 0xff8a70
       } else if (info.minAttackTurns !== null) {
-        actionChip.text.text = `次の攻撃まで あと${info.minAttackTurns}手`
+        // ダメージ量まで出す（同じ「あと3手」でもHP16と2では意味が違う）
+        actionChip.text.text = `あと${info.minAttackTurns}手：${info.nextAttackDamage}ダメージ`
         actionChip.text.style.fill = UI.badgeText
       } else {
         actionChip.text.text = '静観中'
