@@ -5,6 +5,8 @@ import { Container, Graphics, Sprite, Renderer, Text } from 'pixi.js'
 import { Board, W, H } from '../core/board'
 import type { BoardEvent, EnemyKind, Piece, XY } from '../core/types'
 import type { EnemyInstance } from '../core/enemies'
+import { turnsUntilAction } from '../core/enemies'
+import { UPGRADES } from '../core/upgrades'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import { completeAll, delay, easeInCubic, easeOutBack, easeOutCubic, tween } from '../juice/tween'
 import { sfx } from '../juice/sound'
@@ -13,6 +15,17 @@ import { sfx } from '../juice/sound'
 const FONT = '"Shippori Mincho", serif'
 // 敵ブロック・ボスの顔に HP バーの描画位置を焼き込むための拡張タグ（pieces.ts の __base 流儀に倣う）
 type HpHost = Container & { __hpFill?: Graphics; __hpGeom?: { x: number; y: number; w: number; h: number } }
+
+// 可視化第一波②：強化発動アピールのラベルに使う名前引き（idはupgrades.tsのUpgradeDef.idと一致）
+const UPGRADE_NAME = new Map(UPGRADES.map((u) => [u.id, u.name]))
+
+// 可視化第一波①：敵タップ・ツールチップの文言
+const ENEMY_INFO: Record<EnemyKind, { name: string; desc: string }> = {
+  rockshell: { name: '岩殻獣', desc: '鉱物ひとつに甲殻をまとわせる（消すのに1回余計にかかる）' },
+  sporeling: { name: '胞子獣', desc: '植物ひとつを毒胞子に変える（消すと探窟隊HP-1）' },
+  burrower: { name: '穴潜み', desc: '空きマスを2手ふさぎ、自分は別のマスへ移る' },
+  boss: { name: '巨大深層生物', desc: '3手ごとに探窟隊全体を打つ。ダメージで後退する' },
+}
 
 // juice 実測値テーブル（ms）
 export const T = {
@@ -48,6 +61,14 @@ export class BoardView {
   private bossId: number | null = null
   private enemyMeta = new Map<number, { kind: EnemyKind; maxHp: number }>() // 撃破後も参照できるよう種別/最大HPを保持
   private enemyCellsCache = new Map<number, XY[]>() // 直近の敵セル座標（enemy-damage等、座標を持たないイベント用）
+
+  // ---- 可視化第一波：敵インテント・爆発鉱石の常時発光の帳簿 ----
+  private intentG = new Map<number, Container>() // enemyId -> インテントバッジ（fxLayer・セル内右上）
+  private volatileG = new Map<string, Graphics>() // "x,y" -> 爆発鉱石の常時ゆらぎオーバーレイ
+  private tooltipG: Container | null = null // 敵タップの説明ツールチップ（同時に1個のみ）
+
+  /** 所持強化バーへの発動アピール通知（main.ts が購読してアイコンをバウンスさせる。可視化第一波②） */
+  onUpgradeFire?: (id: string) => void
 
   constructor(
     public board: Board,
@@ -134,6 +155,12 @@ export class BoardView {
     this.bossId = null
     this.enemyMeta.clear()
     this.enemyCellsCache.clear()
+    for (const g of this.volatileG.values()) if (!g.destroyed) g.destroy()
+    this.volatileG.clear()
+    for (const g of this.intentG.values()) if (!g.destroyed) g.destroy()
+    this.intentG.clear()
+    if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
+    this.tooltipG = null
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const c = this.board.at(x, y)
@@ -144,8 +171,10 @@ export class BoardView {
         if (c.armored) this.makeArmorOverlay(x, y, 0)
         if (c.poisonSpore) this.makePoisonOverlay(x, y, 0)
         if (c.sporeToken) this.makeSporeTokenSprite(x, y, 0)
+        if (c.piece?.kind === 'normal' && c.piece.volatile) this.makeVolatileOverlay(x, y)
       }
     // ボスの顔（目+HPバー）は上のループ内 makeBossSegment が前線行の処理時に生成する
+    this.updateIntentBadges()
   }
 
   private makePiece(x: number, y: number, p: Piece): Sprite {
@@ -325,6 +354,11 @@ export class BoardView {
       wrap.addChild(eyes)
     }
     this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
+    // 可視化第一波①：敵セルのタップで名前+行動の説明ツールチップ（スワップ対象にならないセルなので入力系と衝突しない）
+    wrap.eventMode = 'static'
+    wrap.cursor = 'pointer'
+    wrap.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= S && ly >= 0 && ly <= S }
+    wrap.on('pointertap', () => this.showEnemyTooltip(enemy.kind, x, y))
     this.blockLayer.addChild(wrap)
     this.blockG.set(this.key(x, y), wrap)
   }
@@ -382,6 +416,11 @@ export class BoardView {
     face.addChild(eye)
     const w = W * S * 0.5
     this.attachHpBar(face, boss.hp, boss.maxHp, w, S * 0.14, (W * S - w) / 2, S * 0.06)
+    // 可視化第一波①：ボスの顔もタップでツールチップ
+    face.eventMode = 'static'
+    face.cursor = 'pointer'
+    face.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= W * S && ly >= 0 && ly <= S }
+    face.on('pointertap', () => this.showEnemyTooltip('boss', W - 1, boss.bossFrontRow))
     this.blockLayer.addChild(face)
     this.bossFaceG.set(boss.id, face)
   }
@@ -645,6 +684,279 @@ export class BoardView {
     })
   }
 
+  // ---- 可視化第一波①：敵インテントバッジ（fxLayer・board.enemies から都度導出。専用状態は持たない） ----
+
+  /** 敵ごとのインテントバッジを最新状態へ再構成する（play()終端・syncAllから呼ぶ） */
+  private updateIntentBadges() {
+    const seen = new Set<number>()
+    for (const en of this.board.enemies) {
+      if (en.hp <= 0) continue
+      seen.add(en.id)
+      this.paintIntentBadge(en)
+    }
+    for (const [id, g] of [...this.intentG]) {
+      if (!seen.has(id)) {
+        this.intentG.delete(id)
+        if (!g.destroyed) g.destroy()
+      }
+    }
+  }
+
+  private drawIntentIcon(g: Graphics, kind: EnemyKind, r: number) {
+    const col = 0xf4e8cf
+    if (kind === 'rockshell') {
+      // 盾形（甲殻付与の予告）
+      g.moveTo(0, -r)
+        .lineTo(r * 0.82, -r * 0.4)
+        .lineTo(r * 0.82, r * 0.28)
+        .lineTo(0, r)
+        .lineTo(-r * 0.82, r * 0.28)
+        .lineTo(-r * 0.82, -r * 0.4)
+        .closePath()
+        .fill({ color: col, alpha: 0.92 })
+    } else if (kind === 'sporeling') {
+      // 雫形（毒胞子化の予告）
+      g.moveTo(0, -r)
+        .bezierCurveTo(r * 0.8, r * 0.15, r * 0.62, r, 0, r)
+        .bezierCurveTo(-r * 0.62, r, -r * 0.8, r * 0.15, 0, -r)
+        .fill({ color: col, alpha: 0.92 })
+    } else if (kind === 'burrower') {
+      // X形（封鎖の予告）
+      const w = r * 0.3
+      g.moveTo(-r, -r)
+        .lineTo(-r + w, -r)
+        .lineTo(r, r - w)
+        .lineTo(r, r)
+        .lineTo(r - w, r)
+        .lineTo(-r, -r + w)
+        .closePath()
+        .fill({ color: col, alpha: 0.92 })
+      g.moveTo(r, -r)
+        .lineTo(r - w, -r)
+        .lineTo(-r, r - w)
+        .lineTo(-r, r)
+        .lineTo(-r + w, r)
+        .lineTo(r, -r + w)
+        .closePath()
+        .fill({ color: col, alpha: 0.92 })
+    } else {
+      // 衝撃波形（ボスの全体攻撃の予告）
+      g.arc(0, r * 0.25, r * 0.55, Math.PI * 1.15, Math.PI * 1.85).stroke({ width: r * 0.22, color: col, alpha: 0.92 })
+      g.arc(0, r * 0.25, r * 1.0, Math.PI * 1.2, Math.PI * 1.8).stroke({ width: r * 0.16, color: col, alpha: 0.7 })
+    }
+  }
+
+  /** 1体ぶんのバッジを再描画（新規なら生成）。位置は敵セル内側の右上隅に収め、駒には絶対にかぶらない */
+  private paintIntentBadge(en: EnemyInstance) {
+    const S = this.S
+    let cellX: number
+    let cellY: number
+    if (en.kind === 'boss') {
+      cellX = W - 1 // ボスは全幅を占有するため、前線行の右端セルに代表させる
+      cellY = en.bossFrontRow
+    } else {
+      const c = en.cells[0]
+      if (!c) return
+      cellX = c.x
+      cellY = c.y
+    }
+    let host = this.intentG.get(en.id)
+    const isNew = !host || host.destroyed
+    if (isNew) {
+      host = new Container()
+      this.fxLayer.addChild(host)
+      this.intentG.set(en.id, host)
+    }
+    const h = host!
+    h.removeChildren().forEach((c) => c.destroy())
+    const bw = S * 0.32 // バッジ直径：セルの1/3程度・内側に収める（発注者の懸念：駒に絶対かぶらない）
+    const inset = S * 0.08
+    h.position.set(cellX * S + S - bw / 2 - inset, cellY * S + bw / 2 + inset)
+    const bg = new Graphics()
+    bg.circle(0, 0, bw / 2)
+      .fill({ color: 0x1c1712, alpha: 0.82 })
+      .stroke({ width: 1.4, color: 0xd9c9a0, alpha: 0.75 })
+    h.addChild(bg)
+    const icon = new Graphics()
+    this.drawIntentIcon(icon, en.kind, bw * 0.3)
+    icon.position.set(-bw * 0.16, -bw * 0.02)
+    h.addChild(icon)
+    const remaining = turnsUntilAction(en)
+    const numT = new Text({
+      text: String(remaining),
+      style: { fill: 0xf4e8cf, fontSize: bw * 0.5, fontFamily: FONT, fontWeight: 'bold' },
+    })
+    numT.anchor.set(0.5)
+    numT.position.set(bw * 0.24, bw * 0.06)
+    h.addChild(numT)
+    const meta = h as unknown as { __pulsing?: boolean; __baseY?: number }
+    meta.__baseY = h.position.y
+    const urgent = remaining <= 1
+    if (urgent) {
+      if (!meta.__pulsing) {
+        meta.__pulsing = true
+        this.pulseIntentBadge(h)
+      }
+    } else {
+      meta.__pulsing = false
+      h.alpha = 0.75
+      h.scale.set(1)
+    }
+  }
+
+  /** 残り1ターンの間だけ、ゆっくり点滅+浮上を繰り返す（うるさくしない：alpha 0.75⇄1・微小な上下動のみ） */
+  private pulseIntentBadge(host: Container) {
+    const meta = host as unknown as { __pulsing?: boolean; __baseY?: number }
+    if (host.destroyed || !meta.__pulsing) return
+    const baseY = meta.__baseY ?? host.position.y
+    tween(host, { alpha: 1 }, 460, {
+      onDone: () => {
+        if (host.destroyed || !meta.__pulsing) return
+        tween(host, { alpha: 0.75 }, 460, { onDone: () => this.pulseIntentBadge(host) })
+      },
+    })
+    tween(host.position, { y: baseY - this.S * 0.06 }, 460, {
+      onDone: () => {
+        if (host.destroyed || !meta.__pulsing) return
+        tween(host.position, { y: baseY }, 460)
+      },
+    })
+  }
+
+  /** 行動の予告：バッジを一瞬強く光らせてから、呼び出し側が実行イベントを再生する（予告→実行） */
+  private flashIntentBadge(enemyId: number, t: number) {
+    const g = this.intentG.get(enemyId)
+    if (!g || g.destroyed) return
+    delay(t, () => {
+      if (g.destroyed) return
+      tween(g, { alpha: 1 }, 90)
+      tween(g.scale, { x: 1.6, y: 1.6 }, 130, {
+        onDone: () => {
+          if (g.destroyed) return
+          tween(g.scale, { x: 1, y: 1 }, 170, { ease: easeOutCubic })
+        },
+      })
+    })
+  }
+
+  /** 敵ブロック/ボスの顔タップ：名前+行動の説明を羊皮紙の小片で2.5秒表示 */
+  private showEnemyTooltip(kind: EnemyKind, cellX: number, cellY: number) {
+    if (this.tooltipG && !this.tooltipG.destroyed) this.tooltipG.destroy()
+    const info = ENEMY_INFO[kind]
+    const S = this.S
+    const w = Math.min(W * S * 0.86, S * 6.4) // 盤幅基準（Sは盤セル寸法でありビュー全体の比率には小さすぎるため）
+    const name = new Text({ text: info.name, style: { fill: 0x4a3a24, fontSize: S * 0.32, fontFamily: FONT, fontWeight: 'bold' } })
+    const desc = new Text({
+      text: info.desc,
+      style: { fill: 0x4a3a24, fontSize: S * 0.22, fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.86, breakWords: true, align: 'center' },
+    })
+    const padY = S * 0.14
+    const h = name.height + desc.height + padY * 3
+    const box = new Container()
+    const bg = new Graphics()
+    bg.roundRect(-w / 2, -h / 2, w, h, h * 0.16)
+      .fill({ color: 0xe8d9b0, alpha: 0.96 })
+      .stroke({ width: 1.6, color: 0x8a6f45 })
+    box.addChild(bg)
+    name.anchor.set(0.5, 0)
+    name.position.set(0, -h / 2 + padY)
+    box.addChild(name)
+    desc.anchor.set(0.5, 0)
+    desc.position.set(0, -h / 2 + padY * 2 + name.height)
+    box.addChild(desc)
+    const px = Math.max(w / 2 + 2, Math.min(W * S - w / 2 - 2, this.px(cellX)))
+    const py = Math.max(h / 2 + 2, this.px(cellY) - S * 0.78)
+    box.position.set(px, py)
+    box.alpha = 0
+    this.fxLayer.addChild(box)
+    this.tooltipG = box
+    tween(box, { alpha: 1 }, 140)
+    const ep = this.epoch
+    delay(2500, () => {
+      if (ep !== this.epoch || box.destroyed) return
+      tween(box, { alpha: 0 }, 220, {
+        onDone: () => {
+          if (!box.destroyed) box.destroy()
+        },
+      })
+    })
+  }
+
+  // ---- 可視化第一波③：爆発鉱石の常時発光 ----
+
+  /** 爆発鉱石（volatile化した駒）の常時ゆらぐ淡いオレンジ発光。cellのpieceが差し替わる/消えるまで帳簿で管理 */
+  private makeVolatileOverlay(x: number, y: number, t = 0) {
+    const k = this.key(x, y)
+    const old = this.volatileG.get(k)
+    if (old && !old.destroyed) return // 既にある（reconcile経由の二重生成防止）
+    const S = this.S
+    const g = new Graphics()
+    g.circle(S / 2, S / 2, S * 0.42).fill({ color: 0xff8a3d, alpha: 1 })
+    g.position.set(x * S, y * S)
+    g.alpha = 0
+    this.fxLayer.addChild(g)
+    this.volatileG.set(k, g)
+    const loop = () => {
+      if (g.destroyed || this.volatileG.get(k) !== g) return
+      tween(g, { alpha: 0.42 }, 560, {
+        onDone: () => {
+          if (g.destroyed || this.volatileG.get(k) !== g) return
+          tween(g, { alpha: 0.16 }, 560, { onDone: loop })
+        },
+      })
+    }
+    tween(g, { alpha: 0.16 }, 200, { delay: t, onDone: loop })
+  }
+
+  /** 破壊された爆発鉱石の発光を片付ける（popPieceAtから共通で呼ぶ） */
+  private clearVolatileOverlay(p: XY, t: number) {
+    const k = this.key(p.x, p.y)
+    const g = this.volatileG.get(k)
+    if (!g) return
+    this.volatileG.delete(k)
+    if (!g.destroyed)
+      tween(g, { alpha: 0 }, 150, {
+        delay: t,
+        onDone: () => {
+          if (!g.destroyed) g.destroy()
+        },
+      })
+  }
+
+  // ---- 可視化第一波：小さな浮遊ラベル（因果の実況・強化発動アピール共通） ----
+
+  /** 小さな浮遊ラベル（明朝・小・上昇して消える）。token-spawn/gear-trigger/爆発鉱石変換/upgrade-fire で共用 */
+  private floatLabelFx(p: XY, text: string, color: number, t: number, yOffset = -0.15) {
+    delay(t, () => {
+      const txt = new Text({
+        text,
+        style: { fill: color, fontSize: this.S * 0.2, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
+      })
+      txt.anchor.set(0.5)
+      txt.position.set(this.px(p.x), this.px(p.y) + this.S * yOffset)
+      this.fxLayer.addChild(txt)
+      tween(txt.position, { y: txt.position.y - this.S * 0.5 }, 520, { ease: easeOutCubic })
+      tween(txt, { alpha: 0 }, 360, {
+        delay: 200,
+        onDone: () => {
+          if (!txt.destroyed) txt.destroy()
+        },
+      })
+    })
+  }
+
+  /** 強化発動：起点セルに小さな金フラッシュ（ラベルは floatLabelFx が別途出す） */
+  private upgradeFlashFx(p: XY, t: number) {
+    delay(t, () => {
+      const g = new Graphics()
+      g.circle(0, 0, this.S * 0.14).fill({ color: 0xf2c14e, alpha: 0.85 })
+      g.position.set(this.px(p.x), this.px(p.y))
+      this.fxLayer.addChild(g)
+      tween(g.scale, { x: 2.2, y: 2.2 }, 240, { ease: easeOutCubic })
+      tween(g, { alpha: 0 }, 240, { onDone: () => g.destroy() })
+    })
+  }
+
   private makeGround(x: number, y: number, level: 1 | 2) {
     const S = this.S
     const tex = spriteTexture(level === 2 ? 'ground_thick' : 'ground_thin')
@@ -672,6 +984,7 @@ export class BoardView {
     let t = 0
     let chainSeen = 0
     let chainStartT = 0 // 連鎖セグメントの開始時刻（ビートはここから650ms刻み＝落下完了を待つ）
+    const upgradeFireCounts = new Map<string, number>() // 可視化第一波②：このタイムライン内での強化ごとの発動回数
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
     for (const e of evs) {
       switch (e.t) {
@@ -750,6 +1063,11 @@ export class BoardView {
           sp.alpha = 0
           tween(sp, { alpha: 1 }, 80, { delay: t + T.pop })
           tween(sp.scale, { x: b, y: b }, T.specialBorn, { delay: t + T.pop, ease: easeOutBack })
+          // 可視化第一波③：爆発鉱石への変換（特殊駒生成イベントを共用）は一瞬明滅+ラベルで因果を示す
+          if (e.piece.kind === 'normal' && e.piece.volatile) {
+            this.makeVolatileOverlay(e.at.x, e.at.y, t + T.pop)
+            this.floatLabelFx(e.at, '爆発鉱石！', 0xff8a3d, t + T.pop, -0.2)
+          }
           break
         }
         case 'block-hit': {
@@ -847,6 +1165,7 @@ export class BoardView {
         // ---- ローグライク拡張（ROGUE.md §3/§5/§6）：フック・敵・ターン・環境 ----
         case 'token-spawn': {
           this.makeSporeTokenSprite(e.at.x, e.at.y, t)
+          this.floatLabelFx(e.at, '＋胞子', 0xbfe8ff, t, -0.3) // 可視化第一波③：因果の実況（生成系の無言解消）
           break
         }
         case 'token-consumed': {
@@ -872,6 +1191,19 @@ export class BoardView {
         }
         case 'gear-trigger': {
           this.gearRingFx(e.at, t)
+          this.floatLabelFx(e.at, `起動 x${e.count}`, 0xe8b33c, t, -0.28) // 可視化第一波③：ギアチャージ/起動の実況
+          break
+        }
+        case 'upgrade-fire': {
+          // 可視化第一波②：発動アピール。同一タイムラインで多発する場合はラベルは最初の2回まで（うるささ対策）
+          const n = (upgradeFireCounts.get(e.id) ?? 0) + 1
+          upgradeFireCounts.set(e.id, n)
+          if (n <= 2) {
+            this.floatLabelFx(e.at, UPGRADE_NAME.get(e.id) ?? e.id, 0xf2c14e, t)
+            this.upgradeFlashFx(e.at, t)
+          }
+          const id = e.id
+          delay(t, () => this.onUpgradeFire?.(id)) // バー側のバウンス演出は毎回（アイコンは常に反応させる）
           break
         }
         case 'obstacle-spawn': {
@@ -894,8 +1226,10 @@ export class BoardView {
           break
         }
         case 'armor-applied': {
-          this.makeArmorOverlay(e.at.x, e.at.y, t)
-          t += 200
+          // 可視化第一波①：予告（バッジ強発光）→実行（甲殻オーバーレイ）の順
+          this.flashIntentBadge(e.id, t)
+          this.makeArmorOverlay(e.at.x, e.at.y, t + 120)
+          t += 320
           break
         }
         case 'armor-broken': {
@@ -914,8 +1248,9 @@ export class BoardView {
           break
         }
         case 'spore-poisoned': {
-          this.makePoisonOverlay(e.at.x, e.at.y, t)
-          t += 200
+          this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
+          this.makePoisonOverlay(e.at.x, e.at.y, t + 120)
+          t += 320
           break
         }
         case 'poison-triggered': {
@@ -929,10 +1264,11 @@ export class BoardView {
           break
         }
         case 'cell-sealed': {
+          this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
           const g = this.makeSealBlock(e.at.x, e.at.y)
           g.scale.set(0)
-          tween(g.scale, { x: 1, y: 1 }, 220, { delay: t, ease: easeOutBack })
-          t += 220
+          tween(g.scale, { x: 1, y: 1 }, 220, { delay: t + 120, ease: easeOutBack })
+          t += 340
           break
         }
         case 'cell-unsealed': {
@@ -971,8 +1307,9 @@ export class BoardView {
           break
         }
         case 'boss-slam': {
-          this.shakeContainer(this.root, t)
-          t += 220
+          this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
+          this.shakeContainer(this.root, t + 120)
+          t += 340
           break
         }
         case 'env-grow': {
@@ -994,6 +1331,12 @@ export class BoardView {
       }
     }
     const total = t + T.pop + T.fall
+    // 可視化第一波①：敵の残りターン表示は「エンジン確定後」の値を見せたいのでタイムライン終端で更新
+    const ep = this.epoch
+    delay(total, () => {
+      if (ep !== this.epoch) return
+      this.updateIntentBadges()
+    })
     // タイムライン終端で必ず照合修復：稀な競合で残る位置ズレ/孤児を吸収し、描画=エンジンを保証
     delay(total + 80, () => this.reconcile())
     return total
@@ -1082,6 +1425,16 @@ export class BoardView {
           this.poisonG.delete(k)
           if (!pg.destroyed) pg.destroy()
         }
+        // 可視化第一波③：爆発鉱石の常時発光も同様に帳簿照合
+        const wantVolatile = c?.piece?.kind === 'normal' && c.piece.volatile === true
+        const vg = this.volatileG.get(k)
+        if (wantVolatile && (!vg || vg.destroyed)) {
+          if (vg) this.volatileG.delete(k)
+          this.makeVolatileOverlay(x, y, 0)
+        } else if (!wantVolatile && vg) {
+          this.volatileG.delete(k)
+          if (!vg.destroyed) vg.destroy()
+        }
       }
     // 敵ブロック（岩殻獣/胞子獣/穴潜み）：帳簿はblock照合ループ（上）でmakeBlock経由に自己修復済み。
     // ここではHPバー・メタ情報・座標キャッシュを最新化する（enemy-damage等の座標なしイベント用）
@@ -1119,6 +1472,7 @@ export class BoardView {
       this.bossFaceG.clear()
       this.bossId = null
     }
+    this.updateIntentBadges() // 可視化第一波①：撃破・生成の取りこぼしをここでも吸収
   }
 
   private popPieceAt(p: XY, t: number, byFire = false) {
@@ -1126,6 +1480,7 @@ export class BoardView {
     const sp = this.sprites.get(k)
     if (!sp) return
     this.sprites.delete(k)
+    this.clearVolatileOverlay(p, t) // 可視化第一波③：爆発鉱石の常時発光を破壊タイミングで片付ける
     const b = this.bs(sp)
     tween(sp.scale, { x: b * 1.25, y: b * 1.25 }, T.pop * 0.35, { delay: t })
     tween(sp.scale, { x: 0, y: 0 }, T.pop * 0.65, { delay: t + T.pop * 0.35, ease: easeInCubic })

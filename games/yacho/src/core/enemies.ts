@@ -52,3 +52,13 @@ export function bossBodyCells(frontRow: number, bottomRow: number, width: number
   for (let y = frontRow; y <= bottomRow; y++) for (let x = 0; x < width; x++) out.push({ x, y })
   return out
 }
+
+/**
+ * 次の定期行動までの残りターン数（可視化第一波：敵インテント表示用）。
+ * actionTimer/bossAttackTimerは「行動が発火する瞬間にちょうど周期の倍数になる」決定的カウンタなので、
+ * 新規状態を持たずに「周期 - 現在値%周期」として導出できる（board.tsの判定式と対で保つ）。
+ */
+export function turnsUntilAction(e: EnemyInstance): number {
+  if (e.kind === 'boss') return 3 - (e.bossAttackTimer % 3)
+  return 2 - (e.actionTimer % 2)
+}

@@ -40,6 +40,16 @@ const saveRogueBest = (floor: number) => {
 /** 層番号→テーマ疑似ID（themeForLevel流用。1-4=森/5-8=機械/9-10=結晶。ROGUE.md §6/§9） */
 const themeFloorId = (floor: number) => (floor <= 4 ? floor : floor <= 8 ? floor + 10 : floor + 20)
 
+/** 所持強化バーのアイコン：系統1色に対応する駒テクスチャキー（pieces.ts の n0〜n3。可視化第一波②） */
+const CATEGORY_ICON: Record<string, string> = { gear: 'n0', plant: 'n1', mineral: 'n2', relic: 'n3' }
+/** 異種シナジー強化は単一系統に還元できないため、2系統のテクスチャを斜め半分ずつ重ねる簡易表現 */
+const SYNERGY_HALVES: Record<string, [string, string]> = {
+  'vine-rocket': ['n1', 'n0'],
+  'spore-bullet': ['n0', 'n1'],
+  'mechanical-garden': ['n0', 'n1'],
+  'relic-root': ['n3', 'n1'],
+}
+
 /**
  * 層1つぶんの盤面定義。ローグは手数制・ゴール駒を廃止（ROGUE.md §6：勝敗は敵殲滅とHPで判定）。
  * 旧LevelDefの moves/goals は Board.won/lost 判定にしか使わないため、実質発火しない値で埋めて無効化する。
@@ -595,44 +605,152 @@ async function boot() {
         if (!hpText.destroyed) hpText.style.fill = 0xe5d8bb
       })
     }
+    /** プレイヤー被弾の実況：画面縁の赤ビネット短フラッシュ＋HPメダリオンから「-N」が落ちる（ROGUE.md 可視化第一波③） */
+    const hpDamageFx = (amount: number) => {
+      const vignette = new Graphics()
+      vignette.rect(0, 0, vw, vh).stroke({ width: vw * 0.05, color: 0xd6432f, alpha: 1 })
+      vignette.alpha = 0
+      playRoot.addChild(vignette)
+      tw.tween(vignette, { alpha: 0.6 }, 90, {
+        onDone: () =>
+          tw.tween(vignette, { alpha: 0 }, 260, {
+            onDone: () => {
+              if (!vignette.destroyed) vignette.destroy()
+            },
+          }),
+      })
+      const dmgT = new Text({
+        text: `-${amount}`,
+        style: { fill: 0xff6b5a, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1208, width: 3 } },
+      })
+      dmgT.anchor.set(0.5)
+      dmgT.position.set(hpText.position.x, hpText.position.y)
+      ui.addChild(dmgT)
+      tw.tween(dmgT.position, { y: dmgT.position.y + fs(0.09) }, 500, { ease: tw.easeInCubic })
+      tw.tween(dmgT, { alpha: 0 }, 380, {
+        delay: 150,
+        onDone: () => {
+          if (!dmgT.destroyed) dmgT.destroy()
+        },
+      })
+    }
 
-    // ブースター帯（モック準拠4枠・専用アイコン。機能接続はPhase 3残。現状のまま）
+    // 所持強化バー（旧ブースター4枠の装飾を、取得済み強化のアイコン列に差し替え。ROGUE.md 可視化第一波②）
     const boosterBar = new Container()
+    const upgradeIconG = new Map<string, Container>()
+    const UPGRADE_ICON_MAX = 10 // ROGUE.md §4：層1〜9クリアで最大9回ドラフト（安全側の上限）
+    const ownedUpgrades = run.upgrades.slice(0, UPGRADE_ICON_MAX)
+    const iconSpacing = Math.min(vw * 0.19, (vw * 0.86) / Math.max(1, ownedUpgrades.length))
+    const iconR = Math.min(vw * 0.055, iconSpacing * 0.4)
+    let upgradePopup: Container | null = null
+    const showUpgradePopup = (def: UpgradeDef) => {
+      if (upgradePopup && !upgradePopup.destroyed) upgradePopup.destroy()
+      const w = vw * 0.72
+      const nameT = new Text({ text: def.name, style: { fill: UI.paperInk, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' } })
+      const descT = new Text({
+        text: def.desc,
+        style: { fill: UI.paperInk, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: w * 0.88, breakWords: true },
+      })
+      const padY = vh * 0.014
+      const h = fs(0.05) + descT.height + padY * 3
+      const box = new Container()
+      const ptex = spriteTexture('ui_parchment')
+      if (ptex) {
+        const sp = new Sprite(ptex)
+        sp.width = w
+        sp.height = h
+        box.addChild(sp)
+      } else {
+        const bg = new Graphics()
+        bg.roundRect(0, 0, w, h, 12).fill(UI.paper)
+        box.addChild(bg)
+      }
+      nameT.position.set(w * 0.06, padY)
+      descT.position.set(w * 0.06, fs(0.05) + padY)
+      box.addChild(nameT, descT)
+      box.position.set((vw - w) / 2, boosterBar.position.y - h - vh * 0.012)
+      box.alpha = 0
+      ui.addChild(box)
+      upgradePopup = box
+      tw.tween(box, { alpha: 1 }, 140)
+      tw.delay(2500, () => {
+        if (!alive() || box.destroyed) return
+        tw.tween(box, { alpha: 0 }, 220, {
+          onDone: () => {
+            if (!box.destroyed) box.destroy()
+          },
+        })
+      })
+    }
     const medalTex = spriteTexture('ui_medal')
-    ;['bst_pickaxe', 'bst_lantern', 'bst_mushroom', 'bst_potion'].forEach((k, i) => {
+    ownedUpgrades.forEach((id, i) => {
+      const def = UPGRADES.find((u) => u.id === id)
+      if (!def) return
       const m = new Container()
-      const r = vw * 0.062
       if (medalTex) {
         const base = new Sprite(medalTex)
         base.anchor.set(0.5)
-        base.scale.set((r * 2.3) / Math.max(medalTex.width, medalTex.height))
-        base.alpha = 0.82 // 未所持でも枠は見せる（全体を薄くしない）
+        base.scale.set((iconR * 2.3) / Math.max(medalTex.width, medalTex.height))
         m.addChild(base)
       }
-      const tex2 = spriteTexture(k)
-      if (tex2) {
-        const glow = new Graphics()
-        glow.circle(0, -r * 0.02, r * 0.66).fill({ color: 0xe8d9b0, alpha: 0.34 })
-        m.addChild(glow)
-        const sp = new Sprite(tex2)
+      const cat = UPGRADE_CATEGORY[id]
+      const drawHalf = (texKey: string, side: 'l' | 'r') => {
+        const tex = spriteTexture(texKey)
+        if (!tex) return
+        const sp = new Sprite(tex)
         sp.anchor.set(0.5)
-        sp.scale.set((r * 1.15) / Math.max(tex2.width, tex2.height))
-        sp.position.set(0, -r * 0.02)
-        sp.alpha = 0.8 // 0個でも読める明るさ（所持時は1.0にする予定）
-        m.addChild(sp)
+        sp.scale.set((iconR * 1.2) / Math.max(tex.width, tex.height))
+        sp.position.set(0, -iconR * 0.02)
+        const mask = new Graphics()
+        if (side === 'l') mask.moveTo(-iconR, -iconR).lineTo(iconR, -iconR).lineTo(-iconR, iconR).closePath().fill(0xffffff)
+        else mask.moveTo(iconR, -iconR).lineTo(iconR, iconR).lineTo(-iconR, iconR).closePath().fill(0xffffff)
+        sp.mask = mask
+        m.addChild(mask, sp)
       }
-      const cbg = new Graphics()
-      cbg.circle(r * 0.68, r * 0.62, r * 0.28).fill(0x3a2c1c).stroke({ width: 1.5, color: UI.brass })
-      m.addChild(cbg)
-      const ct = new Text({ text: '0', style: { fill: 0xe5d8bb, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
-      ct.anchor.set(0.5)
-      ct.position.set(r * 0.68, r * 0.62)
-      m.addChild(ct)
-      m.position.set(vw / 2 + (i - 1.5) * vw * 0.17, 0)
+      if (cat === 'synergy') {
+        const [a, b] = SYNERGY_HALVES[id] ?? ['n1', 'n0']
+        drawHalf(a, 'l')
+        drawHalf(b, 'r')
+      } else {
+        const tex = spriteTexture(CATEGORY_ICON[cat] ?? 'n1')
+        if (tex) {
+          const sp = new Sprite(tex)
+          sp.anchor.set(0.5)
+          sp.scale.set((iconR * 1.25) / Math.max(tex.width, tex.height))
+          sp.position.set(0, -iconR * 0.02)
+          m.addChild(sp)
+        }
+      }
+      m.eventMode = 'static'
+      m.cursor = 'pointer'
+      m.hitArea = { contains: (x: number, y: number) => x * x + y * y <= iconR * iconR * 2.4 }
+      m.on('pointertap', () => showUpgradePopup(def))
+      m.position.set(vw / 2 + (i - (ownedUpgrades.length - 1) / 2) * iconSpacing, 0)
       boosterBar.addChild(m)
+      upgradeIconG.set(id, m)
     })
     boosterBar.position.set(0, boardTop + view.S * H + Math.min(vw * 0.1, vh * 0.05))
     ui.addChild(boosterBar)
+
+    /** 強化発動アピール：バー内の該当アイコンをバウンス+金の一瞬発光（BoardView.onUpgradeFireから購読） */
+    const bounceUpgradeIcon = (id: string) => {
+      const icon = upgradeIconG.get(id)
+      if (!icon || icon.destroyed) return
+      tw.tween(icon.scale, { x: 1.35, y: 1.35 }, 110, {
+        onDone: () => {
+          if (!icon.destroyed) tw.tween(icon.scale, { x: 1, y: 1 }, 160, { ease: tw.easeOutBack })
+        },
+      })
+      const glow = new Graphics()
+      glow.circle(0, 0, iconR * 1.15).fill({ color: 0xf2c14e, alpha: 0.55 })
+      icon.addChildAt(glow, 0)
+      tw.tween(glow, { alpha: 0 }, 260, {
+        onDone: () => {
+          if (!glow.destroyed) glow.destroy()
+        },
+      })
+    }
+    view.onUpgradeFire = (id) => bounceUpgradeIcon(id)
 
     // ---------- 入力 ----------
     let downAt: { x: number; y: number } | null = null
@@ -685,7 +803,15 @@ async function boot() {
     const handleFloorResult = (evs: BoardEvent[]) => {
       const dur = view.play(evs)
       refreshFloorHud()
-      if (evs.some((e) => e.t === 'poison-triggered' || e.t === 'boss-slam')) flashHp()
+      for (const e of evs) {
+        if (e.t === 'poison-triggered') {
+          flashHp()
+          hpDamageFx(1)
+        } else if (e.t === 'boss-slam') {
+          flashHp()
+          hpDamageFx(e.damage)
+        }
+      }
       const cleared = evs.some((e) => e.t === 'floor-clear')
       const over = evs.some((e) => e.t === 'run-over')
       if (cleared) {

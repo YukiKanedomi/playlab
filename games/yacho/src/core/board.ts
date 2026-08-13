@@ -622,9 +622,11 @@ export class Board {
             ev.push({ t: 'special-born', at: at2, piece: c2.piece })
           }
         }
+        if (n > 0) ev.push({ t: 'upgrade-fire', id: VINE_ROCKET_ID, at }) // 可視化第一波②：フック化していない強化も同様に発動アピール
       }
       if ((p.kind === 'hitsubo' || combo?.kind === 'hitsubo') && this.run.upgrades.includes(SPORE_BULLET_ID)) {
         this.spawnTokenAt(at, 'spore', ev)
+        ev.push({ t: 'upgrade-fire', id: SPORE_BULLET_ID, at })
       }
     }
     ev.push({ t: 'special-fire', at, piece: p, cleared })
@@ -1148,52 +1150,71 @@ export class Board {
 
   private fireMatchHooks(g: MatchGroup, ev: BoardEvent[]) {
     if (!this.run || this.hooksSuspended) return
-    const ctx = this.makeCtx(ev, g.cells[Math.floor(g.cells.length / 2)])
+    const origin = g.cells[Math.floor(g.cells.length / 2)]
+    const ctx = this.makeCtx(ev, origin)
     for (const { upgradeId, hook: h } of this.hooks) {
       if (h.on !== 'match') continue
       if (h.system && h.system !== g.system) continue
       if (h.color !== undefined && h.color !== g.color) continue
       if (h.minSize && g.cells.length < h.minSize) continue
       if (!this.consumeHookBudget()) return
+      // 可視化第一波：フック act を呼ぶ直前に発動アピール用イベントを積む（ROGUE.md 可視化第一波②）
+      ev.push({ t: 'upgrade-fire', id: upgradeId, at: origin })
       h.act(g, ctx)
       this.run.records.effectFires++
-      if (upgradeId !== MIMIC_SLIME_ID) this.lastHookReplay = () => h.act(g, ctx)
+      if (upgradeId !== MIMIC_SLIME_ID)
+        this.lastHookReplay = () => {
+          ev.push({ t: 'upgrade-fire', id: upgradeId, at: origin })
+          h.act(g, ctx)
+        }
     }
   }
 
   private fireDestroyHooks(at: XY, cause: DestroyCause, piece: Piece, ev: BoardEvent[]) {
     if (!this.run || this.hooksSuspended) return
     const ctx = this.makeCtx(ev, at)
-    for (const { hook: h } of this.hooks) {
+    for (const { upgradeId, hook: h } of this.hooks) {
       if (h.on !== 'destroy') continue
       if (!this.consumeHookBudget()) return
+      ev.push({ t: 'upgrade-fire', id: upgradeId, at })
       h.act(at, cause, piece, ctx)
       this.run.records.effectFires++
-      this.lastHookReplay = () => h.act(at, cause, piece, ctx)
+      this.lastHookReplay = () => {
+        ev.push({ t: 'upgrade-fire', id: upgradeId, at })
+        h.act(at, cause, piece, ctx)
+      }
     }
   }
 
   private fireSporeTouchHooks(spore: XY, neighbor: XY, ev: BoardEvent[]) {
     if (!this.run || this.hooksSuspended) return
     const ctx = this.makeCtx(ev, neighbor)
-    for (const { hook: h } of this.hooks) {
+    for (const { upgradeId, hook: h } of this.hooks) {
       if (h.on !== 'sporeTouch') continue
       if (!this.consumeHookBudget()) return
+      ev.push({ t: 'upgrade-fire', id: upgradeId, at: neighbor })
       h.act(spore, neighbor, ctx)
       this.run.records.effectFires++
-      this.lastHookReplay = () => h.act(spore, neighbor, ctx)
+      this.lastHookReplay = () => {
+        ev.push({ t: 'upgrade-fire', id: upgradeId, at: neighbor })
+        h.act(spore, neighbor, ctx)
+      }
     }
   }
 
   private fireGearTriggerHooks(at: XY, count: number, ev: BoardEvent[]) {
     if (!this.run || this.hooksSuspended) return
     const ctx = this.makeCtx(ev, at)
-    for (const { hook: h } of this.hooks) {
+    for (const { upgradeId, hook: h } of this.hooks) {
       if (h.on !== 'gearTrigger') continue
       if (!this.consumeHookBudget()) return
+      ev.push({ t: 'upgrade-fire', id: upgradeId, at })
       h.act(at, count, ctx)
       this.run.records.effectFires++
-      this.lastHookReplay = () => h.act(at, count, ctx)
+      this.lastHookReplay = () => {
+        ev.push({ t: 'upgrade-fire', id: upgradeId, at })
+        h.act(at, count, ctx)
+      }
     }
   }
 
@@ -1339,7 +1360,7 @@ export class Board {
   }
 
   /** 岩殻獣：鉱物1つに甲殻を付与する（ROGUE.md §5） */
-  private rockshellAction(_e: EnemyInstance, ev: BoardEvent[]) {
+  private rockshellAction(e: EnemyInstance, ev: BoardEvent[]) {
     const cands: XY[] = []
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
@@ -1349,11 +1370,11 @@ export class Board {
     if (!cands.length) return
     const p = cands[randInt(this.rng, cands.length)]
     this.at(p.x, p.y)!.armored = true
-    ev.push({ t: 'armor-applied', at: p })
+    ev.push({ t: 'armor-applied', at: p, id: e.id })
   }
 
   /** 胞子獣：植物1駒を毒胞子化する（ROGUE.md §5） */
-  private sporelingAction(_e: EnemyInstance, ev: BoardEvent[]) {
+  private sporelingAction(e: EnemyInstance, ev: BoardEvent[]) {
     const cands: XY[] = []
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
@@ -1363,7 +1384,7 @@ export class Board {
     if (!cands.length) return
     const p = cands[randInt(this.rng, cands.length)]
     this.at(p.x, p.y)!.poisonSpore = true
-    ev.push({ t: 'spore-poisoned', at: p })
+    ev.push({ t: 'spore-poisoned', at: p, id: e.id })
   }
 
   /** 穴潜み：空きセル1つを2ターン封鎖し、自分は別の空きセルへ移動する（ROGUE.md §5） */
@@ -1379,7 +1400,7 @@ export class Board {
     const sealAt = empties[sealIdx]
     empties.splice(sealIdx, 1)
     this.at(sealAt.x, sealAt.y)!.block = { type: 'seal', turnsLeft: 2 }
-    ev.push({ t: 'cell-sealed', at: sealAt, turns: 2 })
+    ev.push({ t: 'cell-sealed', at: sealAt, turns: 2, id: e.id })
     if (!empties.length) return
     const moveAt = empties[randInt(this.rng, empties.length)]
     for (const p of e.cells) {
@@ -1411,7 +1432,7 @@ export class Board {
     if (e.bossAttackTimer % 3 !== 0) return
     if (!this.run) return
     this.run.playerHp -= 3
-    ev.push({ t: 'boss-slam', damage: 3, playerHpLeft: this.run.playerHp })
+    ev.push({ t: 'boss-slam', damage: 3, playerHpLeft: this.run.playerHp, id: e.id })
   }
 
   /** 環境効果：菌糸層=3ターンごとに植物1つ増殖／結晶洞=3ターンごとに鉱物1つ成長（ROGUE.md §6） */

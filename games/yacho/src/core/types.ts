@@ -89,17 +89,19 @@ export type BoardEvent =
   | { t: 'explode'; at: XY; cells: XY[] } // 爆発鉱石の爆発（destroy連鎖の起点）
   | { t: 'gear-trigger'; at: XY; count: number } // ギア駒起動（RunState.gearCharge計上）
   | { t: 'obstacle-spawn'; at: XY; blockType: Block['type'] } // 賭博師の壺などが生成する邪魔ピース
+  // 可視化第一波：強化が実際に発動した瞬間（ビューの「発動アピール」用。フック act 呼び出し1回につき1個）
+  | { t: 'upgrade-fire'; id: string; at: XY }
   // ローグライク拡張（ROGUE.md §5/§6）：敵・ターン制・環境・層/ラン進行
   | { t: 'enemy-damage'; id: number; amount: number; hpLeft: number } // 敵の身体セルへのダメージ
   | { t: 'enemy-defeated'; id: number; cells: XY[] } // 敵撃破。身体セルは開放され重力/補充で埋まる
-  | { t: 'armor-applied'; at: XY } // 岩殻獣：鉱物1つに甲殻を付与
+  | { t: 'armor-applied'; at: XY; id: number } // 岩殻獣：鉱物1つに甲殻を付与（id=行動主の敵ID。可視化第一波：インテント予告に使用）
   | { t: 'armor-broken'; at: XY } // 甲殻セルへの1回目の破壊。駒はまだ消えない
-  | { t: 'spore-poisoned'; at: XY } // 胞子獣：植物1駒を毒胞子化
+  | { t: 'spore-poisoned'; at: XY; id: number } // 胞子獣：植物1駒を毒胞子化（idは同上）
   | { t: 'poison-triggered'; at: XY; playerHpLeft: number } // 毒胞子化した駒を消してプレイヤーHP-1
-  | { t: 'cell-sealed'; at: XY; turns: number } // 穴潜み：空きセルを封鎖
+  | { t: 'cell-sealed'; at: XY; turns: number; id: number } // 穴潜み：空きセルを封鎖（idは同上）
   | { t: 'cell-unsealed'; at: XY } // 封鎖の期限切れ
   | { t: 'boss-retreat'; row: number } // ボス：累計5ダメージで1行後退（身体最上段を解放）
-  | { t: 'boss-slam'; damage: number; playerHpLeft: number } // ボス：3ターンごとの全体攻撃
+  | { t: 'boss-slam'; damage: number; playerHpLeft: number; id: number } // ボス：3ターンごとの全体攻撃（idは同上）
   | { t: 'env-grow'; at: XY; kind: 'plant' | 'mineral' } // 環境効果：菌糸層/結晶洞の自然増殖
   | { t: 'floor-clear' } // 層内の敵を全滅させた
   | { t: 'run-over' } // playerHp<=0 でラン終了
