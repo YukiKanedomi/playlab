@@ -74,32 +74,35 @@ describe('サンドバッグ（swarm）：撃破の隣接伝播', () => {
 })
 
 describe('swarmを含む層の生成', () => {
-  it('FLOORS[0]（swarm6体）でBoardが構築でき、swarmがHP1で配置され、有効な初手が存在する', () => {
+  // 夜間監査[D]2：層構成をなだらかに（1〜2層は本当に素の3マッチを学ばせる）へ変更したため、
+  // 層1は6体→3体に減った。
+  it('FLOORS[0]（swarm3体）でBoardが構築でき、swarmがHP1で配置され、有効な初手が存在する', () => {
     const run = createRunState([])
     const b = new Board(plain(), run, FLOORS[0])
     const swarms = b.enemies.filter((e) => e.kind === 'swarm')
-    expect(swarms.length).toBe(6)
+    expect(swarms.length).toBe(3)
     expect(swarms.every((e) => e.hp === 1)).toBe(true)
     expect(b.hasValidMove()).toBe(true)
   })
 
-  it('層9（混成）はswarm10体＋クセ敵3種を含み、Boardが破綻なく構築できる', () => {
+  // 夜間監査[D]2：層9の混成はクセ敵3種→2種（岩殻獣+穴潜み）へ減らした
+  it('層9（混成）はswarm10体＋クセ敵2種を含み、Boardが破綻なく構築できる', () => {
     const run = createRunState([])
     const b = new Board(plain(), run, FLOORS[8])
     expect(b.enemies.filter((e) => e.kind === 'swarm').length).toBe(10)
-    expect(b.enemies.filter((e) => e.kind !== 'swarm').length).toBe(3)
+    expect(b.enemies.filter((e) => e.kind !== 'swarm').length).toBe(2)
     expect(b.hasValidMove()).toBe(true)
   })
 })
 
 describe('層編成のサンドバッグ比率（ROGUE2.md §11の是正）', () => {
-  it('全10層でswarmが主体を占め、既存3種（クセ敵/エリート枠）は各層0〜1体（層9のみ混成で3体まで）に絞られている', () => {
+  it('全10層でswarmが主体を占め、既存3種（クセ敵/エリート枠）は各層0〜1体（層9のみ混成で2体まで）に絞られている', () => {
     let swarmCount = 0
     let otherCount = 0
     FLOORS.forEach((f, i) => {
       const nonBoss = f.enemies.filter((e) => e.kind !== 'boss')
       const others = nonBoss.filter((e) => e.kind !== 'swarm')
-      const cap = i === 8 ? 3 : 1 // 層9（index8）だけ混成を許容
+      const cap = i === 8 ? 2 : 1 // 層9（index8）だけ混成を許容（夜間監査[D]2で3体→2体へ）
       expect(others.length).toBeLessThanOrEqual(cap)
       swarmCount += nonBoss.length - others.length
       otherCount += others.length

@@ -18,7 +18,7 @@ import {
   VINE_ROCKET_ID,
 } from './upgrades'
 import type { RunState } from './run'
-import { bossBodyCells, createEnemy, ENEMY_ATTACK_DAMAGE, SWARM_ATTACK_PERIOD, type EnemyInstance } from './enemies'
+import { bossBodyCells, createEnemy, ENEMY_ATTACK_DAMAGE, swarmGroupDamage, swarmShouldFire, type EnemyInstance } from './enemies'
 import type { FloorDef, EnvFlag } from './floors'
 
 export const W = 8
@@ -55,7 +55,7 @@ export class Board {
   private hooks: { upgradeId: string; hook: Hook }[] = []
   private hookFireCount = 0 // 1解決あたりのフック発火数（暴走対策の上限200）
   private hooksSuspended = false
-  private resolveDestroyCount = 0 // 1解決あたりの破壊駒数（RunRecords.maxDestroyed用）
+  resolveDestroyCount = 0 // 1解決あたりの破壊駒数（RunRecords.maxDestroyed用）。runsim.tsが1手ぶんの値を直接読むため公開している
   private lastHookReplay: HookReplaySnapshot | null = null // 模倣の粘菌(#14)用（データのみ。夜間監査[C]1）
   private lastSpecialReplay: { at: XY; piece: Piece; combo?: Piece } | null = null // 模倣の粘菌(#14)：他の強化が1つも発動していない場合のフォールバック先（第5波・データのみ）
   /** 第3波：Board構築（＝層開始）時に発生した初期イベント（予熱供給・スターター効果）。
@@ -752,7 +752,10 @@ export class Board {
     } else {
       for (const p of best) {
         const c = this.at(p.x, p.y)!
-        this.progressGoal({ type: 'color', color: (c.piece as { color: Color }).color }, ev)
+        // 計測用の長時間プレイで発見（バランス変更とは無関係の既存バグ）：このループ中に爆発鉱石の誘爆等の
+        // 副作用でbest内の別セルが先に消えていることがある。既に無ければ何もしない（防御）。
+        if (!c.piece || c.piece.kind !== 'normal') continue
+        this.progressGoal({ type: 'color', color: c.piece.color }, ev)
         this.clearPieceAt(p, ev, undefined, 'special')
         cleared.push(p) // ビューへ通知（未通知だと幽霊/空白の温床）
       }
@@ -1559,7 +1562,19 @@ export class Board {
     if (this.hadEnemies && this.enemies.length === 0 && !this.floorCleared) {
       this.floorCleared = true
       ev.push({ t: 'floor-clear' })
+      this.applyFloorClearHeal()
     }
+  }
+
+  /**
+   * 3・6・9層クリア時にプレイヤーHPを2回復する（上限20。夜間監査[D]推奨値）。
+   * 回復手段が無いMVPでは、swarmの群れ攻撃を緩和してもなお序盤事故が響くため必要。
+   * イベントは出さない（HUD/演出はmain.ts/view側の担当だが今回は不改変のため、静かにHPだけ動かす）。
+   */
+  private applyFloorClearHeal() {
+    if (!this.run) return
+    if (this.run.floor !== 3 && this.run.floor !== 6 && this.run.floor !== 9) return
+    this.run.playerHp = Math.min(20, this.run.playerHp + 2)
   }
 
   /**
@@ -1580,6 +1595,8 @@ export class Board {
         if (n && n.kind === 'swarm' && n.hp > 0 && !seen.has(n.id)) {
           seen.add(n.id)
           this.dealEnemyDamage(n.id, 1, ev)
+          // 計測用（夜間監査[B][D]）：swarmはHP1固定なので1ダメージ=必ず撃破。ビルド由来の撃破と分離集計するため加算する
+          if (this.run) this.run.records.swarmPropagationKills++
         }
       }
   }
@@ -1589,6 +1606,9 @@ export class Board {
     if (!this.run) return
     this.tickEnvironment(ev)
     this.tickSeals(ev)
+    // サンドバッグ（swarm）：個体ごとではなく群れ単位で1回だけ攻撃する（夜間監査[D]）。
+    // 全個体が同じ手数だけactionTimerを増やすため、最初に条件を満たした1体の値を群れ全体の基準として使う。
+    let swarmFired = false
     for (const e of [...this.enemies]) {
       if (e.hp <= 0) continue
       if (e.kind === 'boss') {
@@ -1596,9 +1616,11 @@ export class Board {
         continue
       }
       if (e.kind === 'swarm') {
-        // サンドバッグ：妨害を持たず常に攻撃のみ。既存敵とは別周期（SWARM_ATTACK_PERIOD＝バランス調整。理由は最終報告）
         e.actionTimer++
-        if (e.actionTimer % SWARM_ATTACK_PERIOD === 0) this.enemyAttackAction(e, ev)
+        if (!swarmFired && swarmShouldFire(e.actionTimer)) {
+          swarmFired = true
+          this.swarmGroupAttack(ev)
+        }
         continue
       }
       e.actionTimer++
@@ -1610,6 +1632,19 @@ export class Board {
       this.runOverFired = true
       ev.push({ t: 'run-over' })
     }
+  }
+
+  /**
+   * サンドバッグ（swarm）の群れ攻撃：生存数に応じたダメージを1回だけプレイヤーへ与える（夜間監査[D]推奨値）。
+   * 個体ごとに同時多数が殴る事故（旧実装：6〜10体同時被弾）をなくし、数の圧は保ちつつ被ダメージを緩やかにする。
+   */
+  private swarmGroupAttack(ev: BoardEvent[]) {
+    if (!this.run) return
+    const alive = this.enemies.filter((e) => e.kind === 'swarm' && e.hp > 0)
+    const damage = swarmGroupDamage(alive.length)
+    if (damage <= 0 || alive.length === 0) return
+    this.run.playerHp -= damage
+    ev.push({ t: 'enemy-attack', id: alive[0].id, damage }) // idは演出上の代表1体（既存のenemy-attack契約を流用）
   }
 
   /** 定期行動：妨害と攻撃を交互に行う（周期2ターンは維持。ROGUE.md §5：プレイテスト反省＝敵を本当の脅威にする） */

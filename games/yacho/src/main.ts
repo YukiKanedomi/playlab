@@ -10,7 +10,6 @@ import {
   type UpgradeDef,
   AUTONOMOUS_MECHANISM_ID,
   MECHANICAL_GARDEN_ID,
-  MIMIC_SLIME_ID,
   PREHEAT_ID,
   RELIC_RESONANCE_ID,
   RESONANT_SHATTER_ID,
@@ -18,7 +17,8 @@ import {
   VINE_ROCKET_ID,
 } from './core/upgrades'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
-import { makeRng, randInt, type Rng } from './core/rng'
+import { makeRng, type Rng } from './core/rng'
+import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
@@ -75,16 +75,6 @@ const buildFloorLevelDef = (floor: number, seed: number): LevelDef => ({
   goals: [{ type: 'color', color: 0, count: 999999 }],
   layout: Array(8).fill('........'),
 })
-
-/** 所持強化とのシナジー判定（簡易版）：系統一致 or フック種が同じ＝「因果が繋がる」とみなす（ROGUE.md §4） */
-function isSynergyWith(owned: UpgradeDef[], candidate: UpgradeDef): boolean {
-  const candCat = UPGRADE_CATEGORY[candidate.id]
-  for (const o of owned) {
-    if (UPGRADE_CATEGORY[o.id] === candCat) return true
-    for (const oh of o.hooks) for (const ch of candidate.hooks) if (oh.on === ch.on) return true
-  }
-  return false
-}
 
 // ---- ドラフトカード情報設計（codex_consult_rogue.md [B]。left切れ修正の第4波で全面差し替え） ----
 
@@ -153,28 +143,6 @@ const UPGRADE_CONSUMES: Record<string, string[]> = {
   [SPORE_BULLET_ID]: ['special'],
   [MECHANICAL_GARDEN_ID]: ['gearPiece'],
 }
-/** 発火のきっかけ（[D]接続の型③「同じきっかけで発動が重なる」用。produces/consumesで説明が付かない時のみ使う） */
-const UPGRADE_TRIGGER: Record<string, string> = {
-  'spore-bloom': '植物のマッチ',
-  'fungal-awakening': '植物のマッチ',
-  'toxic-spore': '胞子との接触',
-  'deep-breath': 'キノコのマッチ',
-  'root-eating-ore': '胞子との接触',
-  'mining-habit': '鉱物のマッチ',
-  'crystal-bud': '鉱物のマッチ',
-  'magnetic-mining': '爆発とギア',
-  [AUTONOMOUS_MECHANISM_ID]: 'ギア起動',
-  overrev: 'ギアのマッチ',
-  [PREHEAT_ID]: '層のはじめ',
-  [RELIC_RESONANCE_ID]: 'ギア起動',
-  [MIMIC_SLIME_ID]: '遺物のマッチ',
-  'transformation-furnace': '遺物のマッチ',
-  'gamblers-pot': '遺物のマッチ',
-  [VINE_ROCKET_ID]: 'レンチ銛の発射',
-  [SPORE_BULLET_ID]: '火壺の発動',
-  [MECHANICAL_GARDEN_ID]: 'ギア起動',
-  'relic-root': '遺物のマッチ',
-}
 /** カード本文「効果」の要約（接続一文に埋め込む短縮版。読点までを最大16字で切る） */
 function shortEffect(def: UpgradeDef): string {
   const head = splitDesc(def.desc).effect.split('、')[0]
@@ -191,16 +159,15 @@ interface ConnectionInfo {
  * sentenceは最も説明力の高い1件だけを代表として出す（複数を連結すると長くなりすぎるため）。
  */
 function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): ConnectionInfo {
-  const candProduces = UPGRADE_PRODUCES[candidate.id] ?? []
-  const candConsumes = UPGRADE_CONSUMES[candidate.id] ?? []
-  const candTrigger = UPGRADE_TRIGGER[candidate.id]
-  const candCat = UPGRADE_CATEGORY[candidate.id]
-  const kindRank = { produce: 0, consume: 1, trigger: 2, category: 3 } as const
+  // 資源はcore/upgrades.tsのconsumes/producesを正とする（抽選・表示・計測が同じ定義を読む。監査[C]5）
+  const candProduces: string[] = [...(candidate.produces ?? []), ...(UPGRADE_PRODUCES[candidate.id] ?? [])]
+  const candConsumes: string[] = [...(candidate.consumes ?? []), ...(UPGRADE_CONSUMES[candidate.id] ?? [])]
+  const kindRank = { produce: 0, consume: 1 } as const
   let best: { rank: number; sentence: string } | null = null
   let count = 0
   for (const o of owned) {
-    const oProduces = UPGRADE_PRODUCES[o.id] ?? []
-    const oConsumes = UPGRADE_CONSUMES[o.id] ?? []
+    const oProduces: string[] = [...(o.produces ?? []), ...(UPGRADE_PRODUCES[o.id] ?? [])]
+    const oConsumes: string[] = [...(o.consumes ?? []), ...(UPGRADE_CONSUMES[o.id] ?? [])]
     const produced = oProduces.find((r) => candConsumes.includes(r))
     const consumed = candProduces.find((r) => oConsumes.includes(r))
     let kind: keyof typeof kindRank | null = null
@@ -211,13 +178,8 @@ function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): Connecti
     } else if (consumed) {
       kind = 'consume'
       sentence = `この強化が作る${RESOURCE_LABEL[consumed]} → ${o.name}が使う`
-    } else if (candTrigger && UPGRADE_TRIGGER[o.id] === candTrigger) {
-      kind = 'trigger'
-      sentence = `${o.name}と同じ「${candTrigger}」で発動が重なる`
-    } else if (UPGRADE_CATEGORY[o.id] === candCat) {
-      kind = 'category'
-      sentence = `${o.name}と同じ${CATEGORY_LABEL[candCat] ?? ''}系統`
     }
+    // 同トリガ・同系統は「近縁」であって因果の接続ではないため数えない（監査[C]5）
     if (!kind) continue
     count++
     const rank = kindRank[kind]
@@ -226,35 +188,6 @@ function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): Connecti
   return { count, sentence: best?.sentence ?? null }
 }
 
-/**
- * ドラフト3択（ROGUE.md §4）：所持済みとシナジーする2枠＋無関係1枠。同一強化の重複なし。
- * 所持0（初回ドラフト）はシナジー元が無いので自然に3枠ともランダムになる。
- */
-function pickDraftOptions(ownedIds: string[], rng: Rng): UpgradeDef[] {
-  const owned = UPGRADES.filter((u) => ownedIds.includes(u.id))
-  let remaining = UPGRADES.filter((u) => !ownedIds.includes(u.id))
-  const take = (pred: (u: UpgradeDef) => boolean): UpgradeDef | null => {
-    const cands = remaining.filter(pred)
-    if (!cands.length) return null
-    const picked = cands[randInt(rng, cands.length)]
-    remaining = remaining.filter((u) => u.id !== picked.id)
-    return picked
-  }
-  const synergy = (u: UpgradeDef) => isSynergyWith(owned, u)
-  const picks: UpgradeDef[] = []
-  for (let i = 0; i < 2; i++) {
-    const p = take(synergy) ?? take(() => true)
-    if (p) picks.push(p)
-  }
-  const off = take((u) => !synergy(u)) ?? take(() => true)
-  if (off) picks.push(off)
-  // 表示順をシャッフル（決定的）
-  for (let i = picks.length - 1; i > 0; i--) {
-    const j = randInt(rng, i + 1)
-    ;[picks[i], picks[j]] = [picks[j], picks[i]]
-  }
-  return picks
-}
 
 // ボスの表示名（下の ENEMY_INFO.boss.name と同一の呼称。ボス以外はチップに個体名を出さないため他は複製しない）
 const BOSS_NAME = '巨大深層生物'
@@ -2042,7 +1975,7 @@ async function boot() {
     // 所持強化ストリップと読めるシナジー（因果の一文バッジ）を追加する。縦バンド予算は[D]推奨表に固定で従う：
     // 0-9%タイトル+野帳 / 9-20%所持ストリップ / 20-82%候補カード3枚(各18%・間4%) / 82-96%接続要約+確定 / 96-100%safe area
     const showDraftPanel = () => {
-      const options = pickDraftOptions(run.upgrades, draftRng(floor))
+      const options = pickDraftOptionsGraph(run.upgrades, draftRng(floor), floor)
       const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
       const connections = options.map((opt) => computeConnection(owned, opt))
       const padX = Math.max(20, vw * 0.05)

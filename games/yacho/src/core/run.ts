@@ -25,6 +25,10 @@ export interface RunRecords {
   maxDestroyed: number // 1手内の最大破壊駒数
   effectFires: number // フック発動の総回数（ラン通算）
   critical: boolean // フック発火上限(200/解決)に達したことがあるか＝暴走のご褒美フラグ（ROGUE.md §3）
+  /** 進行曲線計測用（夜間監査[B][D]）：swarm（サンドバッグ）の隣接撃破伝播（propagateSwarmDefeat）で
+   *  倒れた数のラン通算。runsim.ts が「ビルド由来の撃破」と分離して集計するために使う（ラン通算のため、
+   *  1手ぶんの値は呼び出し前後の差分で求める）。 */
+  swarmPropagationKills: number
 }
 
 export interface RunState {
@@ -57,7 +61,7 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
     gearCharge: 0,
     playerHp: 20,
     floor: 1,
-    records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, critical: false },
+    records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, critical: false, swarmPropagationKills: 0 },
     relicBoostNext: false,
     progress: {},
     startersApplied: [],
