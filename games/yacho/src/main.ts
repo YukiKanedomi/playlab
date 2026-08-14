@@ -7,7 +7,7 @@ import { createRunState, discardUpgrade, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_C
 import { applyBlessingsToFloor, isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
 import { FLOORS, type FloorDef } from './core/floors'
 import { RESOURCE_LABEL, UPGRADES, type UpgradeDef } from './core/upgrades'
-import { buildPostmortem, type DrainSample, type FloorLight } from './core/postmortem'
+import { buildPostmortem, thinningFloor, type DrainSample, type FloorLight } from './core/postmortem'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, type Rng } from './core/rng'
 import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
@@ -499,14 +499,14 @@ const ENEMY_INFO: Record<EnemyKind, EnemyInfoEntry> = {
     defeatDesc: '予告された2×2の中で駒を1つでも消せば崩落は止まる',
   },
   breathstealer: {
-    name: '息喰み',
-    oxygenDesc: `${ENEMY_PERIOD.breathstealer}手ごとに酸素を${OXYGEN_DRAIN.breathstealer}奪う`,
+    name: '灯喰み',
+    oxygenDesc: `${ENEMY_PERIOD.breathstealer}手ごとに灯を${OXYGEN_DRAIN.breathstealer}奪う`,
     disruptDesc: null,
-    defeatDesc: '深界で唯一、酸素を直接奪う相手。長居するほど損をする',
+    defeatDesc: '深界で唯一、灯を直接奪う相手。長居するほど損をする',
   },
   boss: {
     name: '深匣主',
-    oxygenDesc: `${ENEMY_PERIOD.boss}手ごとに酸素を${OXYGEN_DRAIN.boss}奪う`,
+    oxygenDesc: `${ENEMY_PERIOD.boss}手ごとに灯を${OXYGEN_DRAIN.boss}奪う`,
     disruptDesc: null,
     defeatDesc: 'まず封印匣を4枚剥がす（どんな一撃でも1枚）。核が露出したら本体のHPを削る',
   },
@@ -1700,7 +1700,8 @@ async function boot() {
       depthBadge.addChild(g)
     }
     const depthText = new Text({
-      text: `${floor}/${FLOORS.length}`, // 空白入りだと円内に収まらない
+      // 通し30層は「到達が難しくてよい」＝進捗バーではないので分母を出さない（PHASE2.md §1）。空白入りだと円内に収まらない
+      text: `深度${floor}`,
       style: { fill: 0xf4e8cf, fontSize: hudIconD * 0.3, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
     })
     depthText.anchor.set(0.5)
@@ -1994,11 +1995,11 @@ async function boot() {
       }
       const lethal = run.oxygen > 0 && info.nextOxygenLoss > 0 && run.oxygen - info.nextOxygenLoss <= 0
       if (lethal) {
-        actionChip.setText(`あと${info.minTurns ?? 1}手\n遭難`, 0xff8a70)
+        actionChip.setText(`あと${info.minTurns ?? 1}手\n灯が尽きる`, 0xff8a70)
       } else if (info.minTurns !== null) {
         // 妨害しかしない敵でもチップが必ず語る（外すと10層中8層が「静観中」になる）。
-        // PHASE2 §3「兆候は動作名＋残り手（崩落 2）」。区切りは全角空白：半角だと『酸素−3 3』が
-        // 『酸素−33』と1つの数に見えてしまう（折り返してもこの位置で割れるので語の途中では切れない）
+        // PHASE2 §3「兆候は動作名＋残り手（崩落 2）」。区切りは全角空白：半角だと『灯−3 3』が
+        // 『灯−33』と1つの数に見えてしまう（折り返してもこの位置で割れるので語の途中では切れない）
         actionChip.setText(`${info.nextLabel ?? '妨害'}　${info.minTurns}`, info.nextOxygenLoss > 0 ? 0xff8a70 : UI.badgeText)
       } else if (info.idleCount > 0) {
         // 定期行動を持たない敵（小型胞子虫）しかいない層で「静観中」と出すのは無内容。
@@ -2468,7 +2469,7 @@ async function boot() {
       mk(`深度${floor} 踏破`, bandH * 0.24, padX, bandH * rowY[0], 0, vw * 0.48)
       // 手数に星評価は付けない（[D]§3）。補給は「量」と「結果」の両方を出す
       const movesT = mk(`この層 ${movesThisFloor}手`, bandH * 0.17, vw - padX, bandH * rowY[0], 1, vw * 0.32)
-      const oxyT = mk(`酸素 +${refillAmount} → 残り${run.oxygen}`, bandH * 0.22, padX, bandH * rowY[1], 0, vw - padX * 2)
+      const oxyT = mk(`灯 +${refillAmount} → 残灯 ${run.oxygen}`, bandH * 0.22, padX, bandH * rowY[1], 0, vw - padX * 2)
       const bestT = bestDef ? mk(`最も働いた知見：${bestDef.name} ${bestFires}回`, bandH * 0.155, padX, bandH * rowY[2], 0, vw - padX * 2) : null
       const laterLines: Text[] = bestT ? [movesT, oxyT, bestT] : [movesT, oxyT]
       for (const t of laterLines) t.alpha = 0
@@ -3051,12 +3052,14 @@ async function boot() {
       // 表記は「帰還した探窟家が後続者へ残す実地記録」の文体に統一する（PHASE2.md §3 の register）。
       // 旧「とうたつ深度／さいだい連鎖」は仮名と漢字が混ざり、記録体と衝突していたため漢字へ寄せた。
       const records = [
-        `到達深度　${reached}`,
+        // 敗北時は見出しが「野帳　深度N まで」と同じ数字を出しているので、記録行では重ねない
+        ...(victory ? [`到達深度　${reached}`] : []),
         `1手の最大発火数　${run.records.maxFiresInOneMove}`,
         `最大連鎖　${run.records.maxChain}`,
         `1手の最大破壊　${run.records.maxDestroyed}`,
       ]
-      const recordsTop = py0 + ph * 0.28
+      // 灯の折れ線が下に入ったぶん、記録欄を上へ寄せる（ビルド名の下に空いていた余白をそのまま図に回す）
+      const recordsTop = py0 + ph * 0.25
       const recordLineH = fs(0.048)
       records.forEach((line, i) => {
         const t = new Text({
@@ -3070,15 +3073,65 @@ async function boot() {
       const recordsBottom = recordsTop + (records.length - 1) * recordLineH + recordLineH * 0.6
       const buttonY = py0 + ph * 0.9
 
+      // 3.4) 灯の推移（折れ線）。旧実装は「36 44 52 …」の数列で、30層になれば紙幅に収まらず読めもしない。
+      //      横軸=深度／縦軸=層を出るときの残灯。紙面の余白がないので方眼も軸ラベルも引かず、
+      //      y目盛は最大値と0の2つだけを線の左に、深度の範囲は見出しに畳む。
+      //      灯が細り始めた深度（thinningFloor）に朱の輪を置き、下の「深度Nから灯が細り始めた」の一行と対で読ませる。
+      const chartTop = recordsBottom + fs(0.014)
+      let chartBottom = recordsBottom
+      if (lightSeries.length >= 2) {
+        const first = lightSeries[0].floor
+        const last = lightSeries[lightSeries.length - 1].floor
+        const tickStyle = { fill: UI.paperInk, fontSize: fs(0.021), fontFamily: FONT, fontWeight: 'bold' as const }
+        const cap = new Text({ text: `層を出るときの灯　深度${first}〜${last}`, style: { ...tickStyle, fontSize: fs(0.022) } })
+        cap.anchor.set(0.5, 0)
+        cap.alpha = 0.82
+        cap.position.set(vw / 2, chartTop)
+        panel.addChild(cap)
+
+        const plotW = pw * 0.58
+        const plotX0 = (vw - plotW) / 2 + fs(0.018) // 左のy目盛ぶんだけ作図域を右へ寄せて、全体を紙面の中央に置く
+        const plotTop = chartTop + cap.height + fs(0.008)
+        const plotH = fs(0.055)
+        const top = Math.max(...lightSeries.map((s) => s.light), 1)
+        const px = (i: number) => plotX0 + (plotW * i) / (lightSeries.length - 1)
+        const py = (v: number) => plotTop + plotH * (1 - v / top)
+
+        const g = new Graphics()
+        g.moveTo(plotX0, plotTop).lineTo(plotX0 + plotW, plotTop).stroke({ width: 1, color: UI.paperInk, alpha: 0.22 })
+        g.moveTo(plotX0, plotTop + plotH).lineTo(plotX0 + plotW, plotTop + plotH).stroke({ width: 1, color: UI.paperInk, alpha: 0.4 })
+        lightSeries.forEach((s, i) => (i === 0 ? g.moveTo(px(i), py(s.light)) : g.lineTo(px(i), py(s.light))))
+        g.stroke({ width: Math.max(2, fs(0.006)), color: 0x2f6f96 }) // 灯＝青い液（PHASE2.md §2.7）
+        lightSeries.forEach((s, i) => g.circle(px(i), py(s.light), Math.max(1.8, fs(0.005))).fill(0x2f6f96))
+        const thin = thinningFloor(lightSeries)
+        const ti = thin === null ? -1 : lightSeries.findIndex((s) => s.floor === thin)
+        if (ti >= 0) g.circle(px(ti), py(lightSeries[ti].light), Math.max(4, fs(0.012))).stroke({ width: Math.max(2, fs(0.005)), color: 0x9c3b2c })
+        panel.addChild(g)
+
+        for (const [v, y] of [
+          [top, plotTop],
+          [0, plotTop + plotH],
+        ]) {
+          const t = new Text({ text: String(v), style: tickStyle })
+          t.anchor.set(1, 0.5)
+          t.alpha = 0.6
+          t.position.set(plotX0 - fs(0.012), y)
+          panel.addChild(t)
+        }
+        chartBottom = plotTop + plotH + fs(0.008)
+      }
+
       // 3.5) 「なぜ細ったか」と「あと一つ」（PHASE2.md §2.5②③）。
       //      見た目は既存の記録行の作法そのまま（墨色・中央揃え・はみ出したら縮める）。因果図には最低限の高さを残し、
       //      入りきらないときは行の高さと字を詰める＝この欄が下の図に重ならないことを構造で保証する。
       const pm = buildPostmortem(lightSeries, drainLog, run.upgrades)
       const pmLines = [...pm.light, ...(pm.missing ? [pm.missing.title, ...pm.missing.lines] : [])]
-      const pmTop = recordsBottom + fs(0.014)
-      let pmBottom = recordsBottom
+      const pmTop = chartBottom + fs(0.014)
+      let pmBottom = chartBottom
       if (pmLines.length) {
-        const pmRoom = buttonY - fs(0.09) - fs(0.2) - pmTop // fs(0.2) は因果図に必ず残す高さ
+        // fs(0.3) は因果図に必ず残す高さ（見出し＋「最も働いた知見」＋アイコン列。灯の折れ線が入って紙面が詰まったので、
+        // 足りないときは主役の1枚を消すのではなく、この欄の行を詰めるほうを選ぶ）
+        const pmRoom = buttonY - fs(0.09) - fs(0.3) - pmTop
         const lineH = Math.min(fs(0.036), pmRoom / pmLines.length)
         if (lineH > 0) {
           const size = Math.min(fs(0.026), lineH * 0.74)

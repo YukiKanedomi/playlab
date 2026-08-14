@@ -46,13 +46,13 @@ describe('名指しする損失', () => {
 })
 
 describe('「なぜ細ったか」の行', () => {
-  it('推移・変曲点・損失の3行を出す', () => {
+  it('変曲点・損失の2行を出す（推移そのものは結果画面の折れ線が示す）', () => {
     const lines = lightPostmortem(series(38, 41, 35, 18, 0), [
       { floor: 4, kind: 'breathstealer', amount: 3 },
       { floor: 4, kind: 'breathstealer', amount: 3 },
       { floor: 4, kind: 'breathstealer', amount: 3 },
     ])
-    expect(lines).toEqual(['層を出るときの灯　38 41 35 18 0', '深度3から灯が細り始めた', '深度4　灯喰みに3度触れた（−9）'])
+    expect(lines).toEqual(['深度3から灯が細り始めた', '深度4　灯喰みに3度触れた（−9）'])
   })
 
   it('責める語を書かない（事実だけ）', () => {
@@ -108,7 +108,7 @@ describe('「あと一つ」', () => {
 describe('結果画面の2欄', () => {
   it('見出しと行がそろう', () => {
     const pm = buildPostmortem(series(38, 30, 0), [{ floor: 3, kind: 'breathstealer', amount: 3 }], ['spore-bloom', 'root-eating-ore'])
-    expect(pm.light[0]).toBe('層を出るときの灯　38 30 0')
+    expect(pm.light[0]).toBe('深度2から灯が細り始めた')
     expect(pm.missing?.title).toBe('あと一つ　これがあれば輪が閉じた')
     expect(pm.missing?.lines[0]).toMatch(/^胞子弾　爆発鉱石を生む知見が1つあった$/)
   })

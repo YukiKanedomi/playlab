@@ -343,8 +343,8 @@ describe('インテント表（enemyIntent）', () => {
     expect(enemyIntent(kinds.sporeling).label).toBe('目星') // 印が無いうちは「目星」
     expect(enemyIntent(kinds.burrower).kind).toBe('fissure')
     expect(enemyIntent(kinds.burrower).label).toBe('掘削')
-    expect(enemyIntent(kinds.breathstealer)).toEqual({ kind: 'drain', turns: 3, oxygen: 3, label: '酸素−3' })
-    expect(enemyIntent(kinds.boss)).toEqual({ kind: 'drain', turns: 3, oxygen: 3, label: '酸素−3' })
+    expect(enemyIntent(kinds.breathstealer)).toEqual({ kind: 'drain', turns: 3, oxygen: 3, label: '灯−3' })
+    expect(enemyIntent(kinds.boss)).toEqual({ kind: 'drain', turns: 3, oxygen: 3, label: '灯−3' })
   })
 
   it('予告が立つと label が「捕食」「崩落」に変わり、予告セルが載る', () => {

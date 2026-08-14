@@ -2020,7 +2020,7 @@ export class BoardView {
             if (cells?.length) {
               const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
               const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
-              this.floatLabelFx({ x: cx, y: cy }, `酸素を奪われた −${e.amount}`, 0xff6b5a, t + 100, -0.25)
+              this.floatLabelFx({ x: cx, y: cy }, `灯を奪われた −${e.amount}`, 0xff6b5a, t + 100, -0.25)
             }
           }
           delay(t, () => this.onOxygenDrained?.(e.id, e.amount))

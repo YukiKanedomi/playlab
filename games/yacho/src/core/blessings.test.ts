@@ -185,7 +185,7 @@ describe('息を殺す（奪われる灯が3から1／灯が8へる）', () => {
     const e = b.spawnEnemy('breathstealer', [{ x: 0, y: 0 }])
     const it = enemyIntent(e, run.blessings)
     expect(it.oxygen).toBe(1)
-    expect(it.label).toBe('酸素−1')
+    expect(it.label).toBe('灯−1')
     expect(enemyIntent(e).oxygen).toBe(3) // 祝福を持たないランは素の値
   })
 })

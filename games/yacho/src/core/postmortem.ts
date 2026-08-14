@@ -68,12 +68,12 @@ export function biggestLoss(drains: DrainSample[]): LossSummary | null {
 }
 
 /**
- * 「なぜ細ったか」の行（0〜3行）。推移 → 変曲点 → 名指しする損失の順。
+ * 「なぜ細ったか」の行（0〜2行）。変曲点 → 名指しする損失の順。
+ * 推移そのものは数字を並べても読めない（30層ぶんの数列になる）ので結果画面の折れ線に任せ、ここは言葉にする2件だけを返す。
  * 事実だけを書く。数字が読めれば十分なので評価語も感嘆も付けない。
  */
 export function lightPostmortem(series: FloorLight[], drains: DrainSample[]): string[] {
   const out: string[] = []
-  if (series.length) out.push(`層を出るときの灯　${series.map((s) => s.light).join(' ')}`)
   const t = thinningFloor(series)
   if (t !== null) out.push(`深度${t}から灯が細り始めた`)
   const loss = biggestLoss(drains)
