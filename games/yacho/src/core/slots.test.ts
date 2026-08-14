@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { Board } from './board'
 import { createRunState, discardUpgrade, UPGRADE_SLOTS_DEFAULT } from './run'
 import { makeRng } from './rng'
+import { RELIC_RESONANCE_ID } from './upgrades'
 import type { LevelDef } from './types'
 
 const plain = (): LevelDef => ({
@@ -34,6 +35,13 @@ describe('知見の枠', () => {
     expect(run.startersApplied).not.toContain('toxic-spore')
     // 手放した直後に組まれる盤面では、もうこの知見は働かない
     expect(new Board(plain(), run).initEvents.some((e) => e.t === 'upgrade-fire' && e.id === 'toxic-spore')).toBe(false)
+  })
+
+  it('遺物共鳴を手放すと、待機していたブーストも一緒に消える（捨てた知見が一度だけ効いてしまわない）', () => {
+    const run = createRunState([RELIC_RESONANCE_ID], makeRng(7))
+    run.relicBoostNext = true // 採録時のおまけ／ギア起動で立った「次の遺物マッチは2倍」の待機状態
+    discardUpgrade(run, RELIC_RESONANCE_ID)
+    expect(run.relicBoostNext).toBe(false)
   })
 
   it('手放したあとで採り直すと、採録時のおまけが新品として働く', () => {

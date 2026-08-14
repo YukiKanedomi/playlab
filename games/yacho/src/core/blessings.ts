@@ -60,14 +60,16 @@ export const BLESSINGS: BlessingDef[] = [
     id: 'held-breath',
     name: '息を殺す',
     boon: '灯喰み・深匣主に奪われる灯が 3 から 1 になる',
-    curse: '灯が8へる',
+    // 実装は下限1でクランプする（受けた瞬間に尽きさせない）。残灯が8以下だと8まで減らないので、そこまで書く
+    curse: '灯が8へる（1より下にはならない）',
     drain: -2,
     light: -8,
   },
   {
     id: 'keepsake',
     name: '忘れ形見',
-    boon: '一度だけ、灯が尽きた瞬間に灯が12もどる',
+    // 実装は加算ではなく代入（尽きた地点は0以下なので、超過ぶんも帳消しにして12へ戻す）。「12ふえる」ではないと書く
+    boon: '一度だけ、灯が尽きた瞬間に灯が12にもどる',
     curse: '層を出るときの補給が2へる',
     lastLight: 12,
     supply: () => -2,
@@ -82,14 +84,15 @@ export const BLESSINGS: BlessingDef[] = [
   {
     id: 'single-minded',
     name: '一意専心',
-    boon: '課目が1つだけの層は要求が4分の3になる',
-    curse: '課目が2つある層は要求が4分の5になる',
+    // 掃討（enemy-kill）は編成数と一致していないと詰むので scaleGoal が触らない。効かない課目まで約束しない
+    boon: '課目が1つの層は掃討いがいの要求が4分の3',
+    curse: '課目が2つの層は掃討いがいの要求が4分の5',
     goalMul: { single: 0.75, multi: 1.25 },
   },
   {
     id: 'hasty-survey',
     name: '早足の測量',
-    boon: 'すべての課目の要求が2割へる',
+    boon: '掃討いがいの課目の要求が2割へる',
     curse: '盤の四隅が欠ける',
     goalMul: { single: 0.8, multi: 0.8 },
     cornerHoles: true,

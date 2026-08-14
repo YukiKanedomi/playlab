@@ -2361,8 +2361,10 @@ async function boot() {
       })
       const refill = evs.find((e) => e.t === 'oxygen-refill')
       if (refill && refill.t === 'oxygen-refill') refillAmount = refill.amount
-      // 「なぜ細ったか」の記録（PHASE2.md §2.5②）。層を出るときの灯は補給を足す前の値
-      if (refill && refill.t === 'oxygen-refill') lightSeries.push({ floor, light: refill.left - refill.amount })
+      // 「なぜ細ったか」の記録（PHASE2.md §2.5②）。層を出るときの灯は補給を足す前の値。
+      // 敵ターンで灯が0を割った同じ手に偶発マッチで課目が埋まるとクリアが優先されるので、この値は負になり得る。
+      // 灯に負数は無い（0＝尽きた）ので、run-over 側と同じく0で丸める（折れ線が0線の下へ出るのを防ぐ）
+      if (refill && refill.t === 'oxygen-refill') lightSeries.push({ floor, light: Math.max(0, refill.left - refill.amount) })
       for (const e of evs) {
         if (e.t !== 'oxygen-drained') continue
         const kind = enemyKindById.get(e.id)
@@ -2413,9 +2415,12 @@ async function boot() {
 
     const onFloorClear = () => {
       // ボス層クリア＝ラン勝利（ROGUE.md §6）。深度20/30は層が増えたときにそのまま繋がる
-      const next = floor >= FLOORS.length ? () => showRunResult(true) : showFloorRecordBand
-      // 幕主を仕留めた者に祝福を1つ（PHASE2.md §3。深度10/20）
-      if (isBlessingFloor(floor)) showBlessingPanel(next)
+      const lastFloor = floor >= FLOORS.length
+      const next = lastFloor ? () => showRunResult(true) : showFloorRecordBand
+      // 幕主を仕留めた者に祝福を1つ（PHASE2.md §3。深度10/20）。
+      // ただし最終層はここでランが終わるので、受けた祝福が一度も働かない＝選ばせない
+      // （30層化して深度10が最終層でなくなれば、この条件は自然に外れて祝福が出る）
+      if (isBlessingFloor(floor) && !lastFloor) showBlessingPanel(next)
       else next()
     }
 

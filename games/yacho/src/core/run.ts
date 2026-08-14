@@ -2,7 +2,7 @@
 // Board はこれを任意（コンストラクタ第2引数）で受け取り、フックの発火判定・記録集計に使う。
 // 未指定なら Board は完全に旧来の（非ローグ）挙動のまま動く。
 import { makeRng, randInt, type Rng } from './rng'
-import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID } from './upgrades'
+import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID, RELIC_RESONANCE_ID } from './upgrades'
 
 /**
  * ラン開始時の酸素（PLAN_LOOP.md §1.4）。1スワップ=1消費なので「最初の持ち手数」でもある。
@@ -122,4 +122,7 @@ export function discardUpgrade(run: RunState, id: string) {
   run.upgrades = run.upgrades.filter((u) => u !== id)
   run.startersApplied = run.startersApplied.filter((u) => u !== id)
   delete run.progress[id]
+  // 遺物共鳴だけは効果の待機状態を progress ではなく relicBoostNext に持つ。board.ts は所持を見ずにこれを消費するので、
+  // 落とさないと「手放したのに次の遺物マッチが一度だけ2倍になる」＝捨てた知見が効いてしまう（Codexレビュー 2026-08-15）
+  if (id === RELIC_RESONANCE_ID) run.relicBoostNext = false
 }
