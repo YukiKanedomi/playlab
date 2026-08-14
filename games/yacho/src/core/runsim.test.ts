@@ -10,6 +10,7 @@ const res = (deathFloor: number | null): SeedResult => ({
   drafts: [],
   clearedFloors: [],
   endOxygenByFloor: new Map(),
+  preSupplyOxygenByFloor: new Map(),
   deathFloor,
   stuck: false,
   minOxygenDeep: null,

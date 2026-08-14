@@ -89,6 +89,8 @@ export const MAGNETIC_MINING_ID = 'magnetic-mining'
 export const AUTONOMOUS_MECHANISM_ID = 'autonomous-mechanism'
 export const MECHANICAL_GARDEN_ID = 'mechanical-garden'
 export const RELIC_RESONANCE_ID = 'relic-resonance'
+/** 合成の知見のうち、遺物共鳴と同じ「次の遺物マッチ2倍」の待機状態を立てるもの（run.ts が手放しの後始末で見る） */
+export const RING_OF_RESONANCE_ID = 'ring-of-resonance'
 export const GEAR_TRIGGER_THRESHOLD = 2 // 旧3回→2回（通常プレイで頻繁に発火させるため）
 
 /**
@@ -641,7 +643,7 @@ export const UPGRADES: UpgradeDef[] = [
     produces: ['plant', 'spore'],
   },
   {
-    id: 'ring-of-resonance',
+    id: RING_OF_RESONANCE_ID,
     name: '共鳴の環',
     fusion: 'relic-match',
     desc: '遺物をそろえて消すと、次の遺物マッチの効果が2倍になる',

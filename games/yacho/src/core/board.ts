@@ -112,13 +112,15 @@ export class Board {
     const initEv: BoardEvent[] = []
     this.applyPreheat(initEv)
     if (floor) this.spawnFloor(floor)
-    // fillInitial の詰み防止は spawnFloor より前に走るため、敵配置で駒が消えると保証が破れる。
-    // 敵を置いた後にもう一度「有効手あり」を作り直す（有効手0で始まる層をなくす）
+    this.applyStarters(initEv) // 第3波：敵配置の後（damageEnemyが敵を参照できるように）
+    // fillInitial の詰み防止は spawnFloor より前に走るため、敵配置や採録時のおまけ（starter）で
+    // 駒が書き換わると保証が破れる。**盤面を動かす処理をすべて終えた最後に**もう一度「有効手あり」を
+    // 作り直す（有効手0で始まる層をなくす）。starter の後に置かないと、たとえば磁気採掘が最後の有効手を
+    // ギアに塗り替えた層が1手も打てない状態で始まり、遊ぶ側は投了しかできなくなる（実測：seed 515735 深度27）
     if (floor) {
       let g = 0
       while (!this.hasValidMove() && g++ < 100) this.rerollSomePieces()
     }
-    this.applyStarters(initEv) // 第3波：敵配置の後（damageEnemyが敵を参照できるように）
     this.initEvents = initEv
   }
 

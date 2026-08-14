@@ -29,10 +29,15 @@ const defOf = (id: string): UpgradeDef | undefined => UPGRADES.find((u) => u.id 
 export const PHASE28_ENABLED = true
 
 /**
- * ラン中に合成・深化できる回数の上限（**私が足した歯止め。要判断**。PHASE2 §2.8 の記載を参照）。
+ * 合成・深化の上限（**私が足した歯止め。要判断**。PHASE2 §2.8 の記載を参照）。
  * どちらも枠を食わずに強くなるので、上限が無いと PHASE2 §2 の「発火/手が深層で頭打ちになる」が壊れる
  * （120シードの実測：上限なしだと発火/手が深度21-25で 55、深度30クリア率 45%）。
  * 数字を戻すだけで上限は外せる（Infinity で無制限）。
+ *
+ * 注意：これは**ラン通算の回数**ではなく「いま持っている合成札の数／いま深化されている知見の数」の上限である
+ * （Codexレビュー2回目 2026-08-15）。合成札や深化ずみの知見を採録で手放すと枠が1つ戻り、その分もう一度
+ * 合成・深化できる。回数上限にしたければ RunState に実行回数を持つ必要があるが、§2.8 自体が未承認なので
+ * 今は実装の通りに書いておく（採否が決まってから直す）。
  */
 export const FUSION_MAX = 2
 export const DEEPEN_MAX = 3
@@ -64,10 +69,15 @@ export function applyFusion(run: RunState, opt: FusionOption) {
   run.upgrades.push(opt.def.id)
 }
 
-/** いま深化できる手持ちの知見（深化の欄を持ち、まだ深めていないもの） */
+/**
+ * いま深化できる手持ちの知見（深化の欄を持ち、まだ深めていないもの）。
+ * 並びは**所持順（採録順）**にする＝合成側と同じ規則。UPGRADES の定義順で返すと、ビューが先頭3件しか
+ * 出さない（main.ts の slice(0,3)）ため、定義が前にある植物・鉱物の知見だけが常に候補に居座り、
+ * 後ろの遺物・異種シナジーは一度も深化の札に出ないまま上限に達する（Codexレビュー2回目 2026-08-15）。
+ */
 export function deepenOptions(run: RunState): UpgradeDef[] {
   if (!PHASE28_ENABLED || run.deepened.length >= DEEPEN_MAX) return []
-  return UPGRADES.filter((u) => run.upgrades.includes(u.id) && u.deepen && !run.deepened.includes(u.id))
+  return run.upgrades.map(defOf).filter((u): u is UpgradeDef => !!u && !!u.deepen && !run.deepened.includes(u.id))
 }
 
 /** 深める：知見はそのまま、発動条件だけがゆるくなる（枠は動かない） */

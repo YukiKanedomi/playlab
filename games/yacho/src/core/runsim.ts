@@ -11,7 +11,7 @@
 // （seeds省略時は120。このファイル自体はNode専用ツールで、main.ts/viewからは一切importされない）
 import { pathToFileURL } from 'node:url'
 import { Board, H, W } from './board'
-import { createRunState, discardUpgrade, supplyForFloor, type RunState } from './run'
+import { createRunState, discardUpgrade, type RunState } from './run'
 import { applyBlessingsToFloor, blessingSupply, isBlessingFloor, pickBlessingOptions, takeBlessing } from './blessings'
 import { FLOORS, type FloorDef } from './floors'
 import { UPGRADES, type UpgradeDef } from './upgrades'
@@ -144,6 +144,10 @@ export interface SeedResult {
   drafts: DraftSample[]
   clearedFloors: number[] // クリアできた層番号
   endOxygenByFloor: Map<number, number> // 層クリア直後（補給を含む）の灯
+  /** 層を抜けた瞬間＝**補給を受ける直前**の灯。補給量は祝福・呪いで動く（blessingSupply）ので、
+   *  補給後の値から素の supplyForFloor() を引いて復元すると誤差が出る。oxygen-refill イベントの
+   *  amount からその場で記録する（Codexレビュー2回目 2026-08-15） */
+  preSupplyOxygenByFloor: Map<number, number>
   deathFloor: number | null // 力尽きた層（run-over）。生存クリアなら null
   stuck: boolean // 有効手が尽きる等の異常系で打ち切った（バランスではなくソルバー側の限界）
   /** 深度20以降で観測した灯の最小値（深度20へ到達しなければ null）。
@@ -174,6 +178,7 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
   }
   const clearedFloors: number[] = []
   const endOxygenByFloor = new Map<number, number>()
+  const preSupplyOxygenByFloor = new Map<number, number>()
   let deathFloor: number | null = null
   let stuck = false
   let minOxygenDeep: number | null = null
@@ -209,6 +214,8 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
         buildKills: Math.max(0, totalDefeated - swarmPropKills),
       })
       if (floor >= 20) minOxygenDeep = minOxygenDeep === null ? run.oxygen : Math.min(minOxygenDeep, run.oxygen)
+      // 補給前の灯は「補給イベントの left から amount を引いた値」＝実際に層を抜けた瞬間の残量
+      for (const e of evs) if (e.t === 'oxygen-refill') preSupplyOxygenByFloor.set(floor, e.left - e.amount)
       // main.ts:handleFloorResult と同じ優先順位（同一手でクリアと敗北が両方成立してもクリア扱い）
       cleared = evs.some((e) => e.t === 'floor-clear')
       over = !cleared && evs.some((e) => e.t === 'run-over')
@@ -262,6 +269,7 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
     drafts,
     clearedFloors,
     endOxygenByFloor,
+    preSupplyOxygenByFloor,
     deathFloor,
     stuck,
     minOxygenDeep,
@@ -284,8 +292,8 @@ export interface FloorAgg {
   reached: number
   cleared: number
   avgEndOxygen: number | null
-  /** 補給+7を差し引いた「実際に層を抜けた瞬間」の酸素。§10.3「層が進むほど単調に細る」はこちらで判定する
-   *  （avgEndOxygen は補給込みなので、細っていても層をまたぐと+7され、細り具合が読めない） */
+  /** 補給を受ける直前＝「実際に層を抜けた瞬間」の酸素。§10.3「層が進むほど単調に細る」はこちらで判定する
+   *  （avgEndOxygen は補給込みなので、細っていても層をまたぐと増え、細り具合が読めない） */
   avgEndOxygenPreSupply: number | null
   moveCount: number
   avgMovesPerFloor: number // 到達1回あたりの手数（層の長さ。較正の主指標）
@@ -305,7 +313,9 @@ export function aggregate(results: SeedResult[]): FloorAgg[] {
   for (let floor = 1; floor <= FLOORS.length; floor++) {
     const reached = results.filter((r) => r.clearedFloors.includes(floor) || r.deathFloor === floor).length
     const cleared = results.filter((r) => r.clearedFloors.includes(floor)).length
-    const endOxygens = results.filter((r) => r.clearedFloors.includes(floor)).map((r) => endOxygenFor(r, floor))
+    const survivors = results.filter((r) => r.clearedFloors.includes(floor))
+    const endOxygens = survivors.map((r) => endOxygenFor(r, floor))
+    const preOxygens = survivors.map((r) => r.preSupplyOxygenByFloor.get(floor)).filter((v): v is number => v !== undefined)
     const moves = results.flatMap((r) => r.moves.filter((m) => m.floor === floor))
     const chainsAsc = moves.map((m) => m.chain).sort((a, b) => a - b)
     out.push({
@@ -313,7 +323,7 @@ export function aggregate(results: SeedResult[]): FloorAgg[] {
       reached,
       cleared,
       avgEndOxygen: endOxygens.length ? avg(endOxygens) : null,
-      avgEndOxygenPreSupply: endOxygens.length ? avg(endOxygens) - supplyForFloor(floor) : null,
+      avgEndOxygenPreSupply: preOxygens.length ? avg(preOxygens) : null,
       moveCount: moves.length,
       avgMovesPerFloor: reached ? moves.length / reached : 0,
       avgFires: avg(moves.map((m) => m.fires)),
@@ -397,9 +407,13 @@ export function verdictLines(results: SeedResult[]): string[] {
   // 細ったランが次の層から消えるぶん必ず上振れする＝細っているのに数字が上がる）。
   // 集団＝深度20を抜けたラン。その者たちの深度10・深度20の残灯（補給前）と、第三幕での最小値を並べる
   const cohort = results.filter((r) => r.clearedFloors.includes(20))
-  const preAt = (f: number) => avg(cohort.map((r) => (r.endOxygenByFloor.get(f) ?? 0) - supplyForFloor(f)))
+  const preAt = (f: number) => avg(cohort.map((r) => r.preSupplyOxygenByFloor.get(f) ?? 0))
   const act3Min = avg(cohort.map((r) => r.minOxygenDeep ?? 0))
-  const thinning = cohort.length > 0 && preAt(10) > act3Min && preAt(20) > act3Min
+  // 旧判定は「深度10・深度20のどちらもが第三幕の最小より多いか」だけを見ており、**幕をまたいで灯が増えて
+  // いても OK になった**（合成・深化ONの実測：深度10 42.4 → 深度20 55.3 でも合格していた）。
+  // §10.3 の「層が進むほど単調に細る」を素直に書き直す＝幕ごとに必ず前より少ないこと（Codexレビュー2回目の
+  // 「補給前の値が較正条件」という指摘を、判定式そのものにも適用する）
+  const thinning = cohort.length > 0 && preAt(10) > preAt(20) && preAt(20) > act3Min
   out.push(
     `(d) 幕をまたいで灯が細る    : ${mark(thinning)}  ` +
       `深度20到達組(${cohort.length}件) 深度10 ${preAt(10).toFixed(1)} → 深度20 ${preAt(20).toFixed(1)} → 第三幕の最小 ${act3Min.toFixed(1)}`,

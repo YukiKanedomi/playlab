@@ -56,6 +56,15 @@ describe('合成（PHASE2.md §2.8）', () => {
     }
   })
 
+  it('共鳴の環を手放したら、予約されていた「次の遺物マッチ2倍」も消える', () => {
+    // 遺物共鳴と同じ待機状態（relicBoostNext）を立てる合成の知見なので、後始末も同じでないと
+    // 手放した札が次の遺物マッチを一度だけ2倍にしてしまう（Codexレビュー2回目 2026-08-15）
+    const run = createRunState(['ring-of-resonance'])
+    run.relicBoostNext = true
+    discardUpgrade(run, 'ring-of-resonance')
+    expect(run.relicBoostNext).toBe(false)
+  })
+
   it('合成の知見は資源ごとに1つで、語彙は RESOURCES の範囲に収まっている', () => {
     const fusions = UPGRADES.filter((u) => u.fusion)
     expect(new Set(fusions.map((u) => u.fusion)).size).toBe(fusions.length)
@@ -74,6 +83,12 @@ describe('深化（PHASE2.md §2.8）', () => {
     expect(deepenOptions(run).some((u) => u.id === 'crystal-bud')).toBe(false) // 二度は深められない
     discardUpgrade(run, 'crystal-bud')
     expect(run.deepened).not.toContain('crystal-bud')
+  })
+
+  it('深化の候補は所持順（採録順）で並ぶ＝定義順の前にある知見だけが札に居座らない', () => {
+    // ビューは先頭3件しか出さないので、並びが upgrades.ts の定義順だと後ろの系統が永久に出ない
+    const run = createRunState(['relic-root', 'mining-habit', 'spore-bloom'])
+    expect(deepenOptions(run).map((u) => u.id)).toEqual(['relic-root', 'mining-habit', 'spore-bloom'])
   })
 
   it('数値ではなく発動条件がゆるむ（結晶の芽：4つ以上 → 3つ以上）', () => {
