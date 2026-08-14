@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
 import { bossBodyCells, BOSS_SHELL_COUNT, enemyIntent, ENEMY_HP, type EnemyInstance } from './enemies'
+import { FLOORS, type FloorDef } from './floors'
 import { createRunState, OXYGEN_START } from './run'
 import type { BoardEvent, LevelDef, Piece, XY } from './types'
 
@@ -43,6 +44,16 @@ const inert = () => {
   return rows
 }
 
+/** FloorDef の目標・レイアウトをそのまま LevelDef へ流す（main.ts の buildFloorLevelDef と同じ形） */
+const levelOf = (def: FloorDef, seed = 42): LevelDef => ({
+  id: def.floor,
+  seed,
+  moves: 9999,
+  colors: 5,
+  goals: def.goals,
+  layout: def.layout,
+})
+
 interface Priv {
   clearPieceAt: (p: XY, ev: BoardEvent[]) => void
   dealEnemyDamage: (id: number, amount: number, ev: BoardEvent[], heavy?: boolean) => void
@@ -50,6 +61,8 @@ interface Priv {
   harvesterAction: (e: EnemyInstance, ev: BoardEvent[]) => void
   diggerAction: (e: EnemyInstance, ev: BoardEvent[]) => void
   resolveEnemyTurn: (ev: BoardEvent[]) => void
+  beginResolve: () => void
+  fireSpecial: (at: XY, p: Piece, ev: BoardEvent[], combo?: Piece) => void
 }
 const priv = (b: Board) => b as unknown as Priv
 
@@ -195,6 +208,21 @@ describe('裂坑掘り（burrower）', () => {
     expect(ev2.some((x) => x.t === 'cell-sealed')).toBe(false)
     expect(ev2.some((x) => x.t === 'fissure-telegraph')).toBe(true)
   })
+
+  // 回帰：実盤面（安定状態＝空きセルが存在しない）では relocateDigger が働かず敵が動かないため、
+  // 「最遠の2x2を厳密に1つ選ぶ」だと予告が盤面の同じ角に固定され、層5の狙い（盤面全域を見る）が死ぬ。
+  // 人為的に piece=null を作らないこと自体がこのテストの要件（SPEC_OXYGEN §4.11）。
+  it('層5の実盤面を20手回すと崩落の予告位置が固定されない（3種類以上出る）', () => {
+    const run = createRunState([])
+    const b = new Board(levelOf(FLOORS[4]), run, FLOORS[4])
+    const seen = new Set<string>()
+    for (let i = 0; i < 20; i++) {
+      const ev: BoardEvent[] = []
+      priv(b).resolveEnemyTurn(ev)
+      for (const x of ev) if (x.t === 'fissure-telegraph') seen.add(`${x.cells[0].x},${x.cells[0].y}`)
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(3)
+  })
 })
 
 describe('息喰み（breathstealer）', () => {
@@ -227,7 +255,10 @@ describe('深匣主（boss）', () => {
     expect(shell && shell.t === 'boss-shell-broken' ? shell.left : -1).toBe(BOSS_SHELL_COUNT - 1)
     expect(ev.some((x) => x.t === 'enemy-damage')).toBe(false) // 第1段階ではHPが削れない
     expect(boss.hp).toBe(ENEMY_HP.boss)
-    for (let i = 1; i < BOSS_SHELL_COUNT; i++) priv(b).dealEnemyDamage(boss.id, 1, ev)
+    for (let i = 1; i < BOSS_SHELL_COUNT; i++) {
+      priv(b).beginResolve() // 匣は1手1枚＝4手かけて剥がす
+      priv(b).dealEnemyDamage(boss.id, 1, ev)
+    }
     const phase = ev.find((x) => x.t === 'boss-phase')
     expect(phase && phase.t === 'boss-phase' ? phase.phase : -1).toBe(2)
     expect(boss.bossPhase).toBe(2)
@@ -243,7 +274,10 @@ describe('深匣主（boss）', () => {
     const b = new Board(plain({ goals: [{ type: 'enemy-kill', count: 1 }] }), run)
     const boss = b.spawnEnemy('boss', bossBodyCells(H - 1, H - 1, W))
     const ev: BoardEvent[] = []
-    for (let i = 0; i < BOSS_SHELL_COUNT; i++) priv(b).dealEnemyDamage(boss.id, 1, ev)
+    for (let i = 0; i < BOSS_SHELL_COUNT; i++) {
+      priv(b).beginResolve()
+      priv(b).dealEnemyDamage(boss.id, 1, ev)
+    }
     const ev2: BoardEvent[] = []
     priv(b).dealEnemyDamage(boss.id, 3, ev2)
     expect(firstDamage(ev2)).toBe(3)
@@ -252,6 +286,41 @@ describe('深匣主（boss）', () => {
     expect(ev2.some((x) => x.t === 'enemy-defeated')).toBe(true)
     expect(b.enemies.length).toBe(0)
     expect(b.goalDone[0]).toBe(1) // 撃破は enemy-kill 目標を進める
+  })
+
+  // 回帰：壺の面爆発や横向きの銛は最下行のボス身体を複数セル同時に踏むため、
+  // 抑止が無いと1手で匣4枚が全部剥がれて第2段階まで飛ぶ（§1.4「4枚剥がすと第2段階」が崩壊する）。
+  it('壺1発でボス身体を5セル巻き込んでも匣は1枚しか剥がれない（1手＝1枚）', () => {
+    const run = createRunState([])
+    const b = new Board(plain(), run)
+    setPieces(b, inert())
+    const boss = b.spawnEnemy('boss', bossBodyCells(H - 1, H - 1, W))
+    const ev: BoardEvent[] = []
+    priv(b).beginResolve()
+    priv(b).fireSpecial({ x: 3, y: 6 }, { kind: 'hitsubo' }, ev) // 半径2＝最下行の x1..5 を踏む
+    expect(ev.filter((x) => x.t === 'boss-shell-broken').length).toBe(1)
+    expect(boss.bossShellLeft).toBe(BOSS_SHELL_COUNT - 1)
+    expect(boss.bossPhase).toBe(1)
+    expect(boss.hp).toBe(ENEMY_HP.boss)
+    expect(ev.some((x) => x.t === 'boss-phase')).toBe(false)
+    const ev2: BoardEvent[] = []
+    priv(b).beginResolve() // 次の手ではまた1枚剥がれる（抑止は1解決の中だけ）
+    priv(b).fireSpecial({ x: 3, y: 6 }, { kind: 'hitsubo' }, ev2)
+    expect(ev2.filter((x) => x.t === 'boss-shell-broken').length).toBe(1)
+    expect(boss.bossShellLeft).toBe(BOSS_SHELL_COUNT - 2)
+  })
+
+  it('横向きの銛で身体8セルを貫いても匣は1枚だけ（本体HPにも届かない）', () => {
+    const run = createRunState([])
+    const b = new Board(plain(), run)
+    setPieces(b, inert())
+    const boss = b.spawnEnemy('boss', bossBodyCells(H - 1, H - 1, W))
+    const ev: BoardEvent[] = []
+    priv(b).beginResolve()
+    priv(b).fireSpecial({ x: 0, y: H - 1 }, { kind: 'harpoon', dir: 'h' }, ev)
+    expect(ev.filter((x) => x.t === 'boss-shell-broken').length).toBe(1)
+    expect(ev.some((x) => x.t === 'enemy-damage')).toBe(false)
+    expect(boss.hp).toBe(ENEMY_HP.boss)
   })
 })
 

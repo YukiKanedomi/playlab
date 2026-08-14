@@ -46,34 +46,38 @@ const plantGoal = (n: number): Goal => ({ type: 'system', system: 'plant', count
 const L_MOSS_A: string[] = ['g......g', '........', '..g..g..', '........', '..g...g.', '........', '........', 'g.g..g.g']
 // 層8：蔦苔の再試験（要求10／設置12）。2層(G)を混ぜて「同じマスを2回叩く」計画を要求する
 const L_MOSS_B: string[] = ['gg....gg', '........', '...GG...', '........', '........', '..G..G..', '........', 'gg....gg']
-// 層6：匣の単独導入（要求7／設置8）。二段手順（匣を割る→陶片を回収）を学ばせる
-const L_HAKO_A: string[] = ['........', '........', '..h..h..', '........', '.h....h.', '...hh...', '........', '..h..h..']
+// 層6：匣の単独導入（要求10／設置12）。二段手順（匣を割る→陶片を回収）を学ばせる。
+// 設置8では層が7手で終わり、消費が補給+7と釣り合って酸素カーブが平らになる（§10.3の単調減少が崩れる）ため12へ増やした
+const L_HAKO_A: string[] = ['........', '.h....h.', '..h..h..', '...hh...', '.h....h.', '...hh...', '..h..h..', '........']
 // 層9：匣＋植物の複合（要求7／設置8）
 const L_HAKO_B: string[] = ['........', '.h....h.', '..h..h..', '........', '........', '..h..h..', '.h....h.', '........']
 
 // wipeGoal に同じ配列を二度書かないよう、殲滅目標の層だけ編成を定数に括り出す
-const F2 = swarm(4)
+const F2 = swarm(5)
 const F5: FloorEnemySpawn[] = [{ kind: 'burrower', at: { x: 4, y: 4 } }]
 const F7: FloorEnemySpawn[] = [{ kind: 'rockshell', at: { x: 4, y: 4 } }]
 const F10: FloorEnemySpawn[] = [{ kind: 'boss', at: { x: 0, y: 7 } }]
 
 // 新しい敵は「その敵を倒すこと自体が目標の層」か「その妨害が目標と直接干渉する層」にだけ初出させる（§1.5）。
 // 目標数は runsim の較正値（SPEC_OXYGEN.md §10.3）。層が進むほど1手の破壊数が増える（強化の累積）ため、
-// 同じ「9〜11手」でも後半の層ほど要求数が大きくなる。行末の数字は 120シード平均の実測手数。
+// 同じ手数でも後半の層ほど要求数が大きくなる。行末の数字は 120シード平均の実測手数（_runsim.txt と対で保つ）。
+//
+// 全層を「補給(+8)より重い」9手以上に揃えてある。1層でも補給を下回ると、そこで酸素の貯金が増えて
+// 「層が進むほど細る」（§10.3）が崩れ、酸素が失敗条件として働かなくなる。目標数を減らすときはこの下限を割らないこと。
 export const FLOORS: FloorDef[] = [
   { floor: 1, enemies: [], goals: [plantGoal(32)], layout: FLAT }, // 目標と酸素だけを学ぶ入口（敵なし）9.9手
-  { floor: 2, enemies: F2, goals: [wipeGoal(F2)], layout: FLAT }, // まとめ消し（HP2＋小マッチ減衰）7.0手
+  { floor: 2, enemies: F2, goals: [wipeGoal(F2)], layout: FLAT }, // まとめ消し（HP2＋小マッチ減衰）9.3手。4体だと7.0手＝補給と釣り合って酸素が減らないため5体
   { floor: 3, enemies: swarm(2), goals: [{ type: 'tsutagoke', count: 8 }], layout: L_MOSS_A }, // 敵の隣より目標マス 10.6手
-  { floor: 4, enemies: swarm(3), goals: [plantGoal(56)], layout: FLAT }, // 妨害下の収集 11.4手
-  { floor: 5, enemies: F5, goals: [wipeGoal(F5)], layout: FLAT }, // 裂坑掘りの単独学習（盤面全域を見る）5.2手＝敵1体は短い
-  { floor: 6, enemies: [{ kind: 'burrower', at: { x: 4, y: 4 } }], goals: [{ type: 'touhen', count: 7 }], layout: L_HAKO_A }, // 既知の敵＋新目標 7.6手（匣8個ぶんが上限）
-  { floor: 7, enemies: F7, goals: [wipeGoal(F7)], layout: FLAT }, // 大きく消す 4.3手＝敵1体は短い
+  { floor: 4, enemies: swarm(3), goals: [plantGoal(56)], layout: FLAT }, // 妨害下の収集 11.6手
+  { floor: 5, enemies: F5, goals: [wipeGoal(F5), plantGoal(50)], layout: FLAT }, // 裂坑掘り＋収集 10.3手。殲滅のみだと5.2手で終わっていた（崩落が収集を邪魔する＝2軸になる）
+  { floor: 6, enemies: [{ kind: 'burrower', at: { x: 4, y: 4 } }], goals: [{ type: 'touhen', count: 10 }], layout: L_HAKO_A }, // 既知の敵＋新目標 10.4手（匣12設置・要求10）
+  { floor: 7, enemies: F7, goals: [wipeGoal(F7), plantGoal(56)], layout: FLAT }, // 大きく消す＋収集 9.8手。殲滅のみだと4.3手で終わっていた（甲殻の合間に集める＝2軸になる）
   {
     floor: 8,
     enemies: [...swarm(2), { kind: 'sporeling', at: { x: 4, y: 4 } }],
-    goals: [{ type: 'tsutagoke', count: 10 }],
+    goals: [{ type: 'tsutagoke', count: 11 }],
     layout: L_MOSS_B,
-  }, // 捕食印＝敵の隣以外を触る初出 10.4手
+  }, // 捕食印＝敵の隣以外を触る初出 10.9手
   {
     floor: 9,
     enemies: [
@@ -82,6 +86,6 @@ export const FLOORS: FloorDef[] = [
     ],
     goals: [{ type: 'touhen', count: 7 }, plantGoal(50)],
     layout: L_HAKO_B,
-  }, // 初の酸素直接ドレイン／初の2目標 9.0手
-  { floor: 10, enemies: F10, goals: [wipeGoal(F10)], layout: FLAT }, // ボスのみ（匣→核＋ドレイン）7.3手
+  }, // 初の酸素直接ドレイン 9.1手
+  { floor: 10, enemies: F10, goals: [wipeGoal(F10)], layout: FLAT }, // ボスのみ（匣→核＋ドレイン）8.7手
 ]

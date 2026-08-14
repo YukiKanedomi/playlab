@@ -15,6 +15,8 @@ import { buzz, resetMoveBudget } from '../juice/haptics'
 const FONT = '"Shippori Mincho", serif'
 // 敵ブロック・ボスの顔に HP バーの描画位置を焼き込むための拡張タグ（pieces.ts の __base 流儀に倣う）
 type HpHost = Container & { __hpFill?: Graphics; __hpGeom?: { x: number; y: number; w: number; h: number } }
+/** ボスの顔オーバーレイ。身体セル範囲＋段階を焼き込み、変化したら作り直す判定に使う */
+type BossFaceHost = Container & { __bossSpan?: string }
 
 // 可視化第一波②：強化発動アピールのラベルに使う名前引き（idはupgrades.tsのUpgradeDef.idと一致）
 const UPGRADE_NAME = new Map(UPGRADES.map((u) => [u.id, u.name]))
@@ -93,6 +95,8 @@ export class BoardView {
   uiFxLayer = new Container() // 連鎖数・強化名・ダメージ数字・ツールチップ・インテントバッジ（最前面）
   fxLayer: Container // 既存呼び出しの後方互換エイリアス（= overFxLayer）
   S: number
+  /** 盤面フレーム素材がタイル格子より外へ張り出す量(px)。HUD側が盤の実占有域を知るために公開する（枠無しなら0） */
+  framePad = 0
   sprites = new Map<string, Sprite>() // "x,y" -> 駒スプライト
   blockG = new Map<string, Container>()
   groundG = new Map<string, Container>()
@@ -235,6 +239,7 @@ export class BoardView {
         fr.width = gridW + 2 * pad
         fr.height = gridH + 2 * ((INNER * gridH + inset) / (1 - 2 * INNER))
         fr.position.set(-pad, -(INNER * gridH + inset) / (1 - 2 * INNER))
+        this.framePad = (INNER * gridH + inset) / (1 - 2 * INNER)
         this.cellLayer.addChild(fr)
       }
       return
@@ -388,6 +393,25 @@ export class BoardView {
     g.circle(cx, cy, r * 1.3).fill(0xf6f1e4)
     g.circle(cx, cy, r).fill(iris)
     g.circle(cx, cy, r * 0.42).fill(0x201812)
+  }
+
+  /**
+   * ボスの核（大きな目）。同心円3つだけだと周囲の描き込まれた駒と画風が断絶するため、
+   * 匣タイルの「歯車の輪」意匠を虹彩の外周に重ねて盤面と絵柄を揃える。
+   */
+  private drawBossEye(g: Graphics, cx: number, cy: number, r: number) {
+    g.circle(cx, cy, r * 1.34).fill(0xf6f1e4)
+    g.circle(cx, cy, r * 1.34).stroke({ width: Math.max(1, r * 0.12), color: 0x6b5238 })
+    g.circle(cx, cy, r).fill(0xe86a4a)
+    const teeth = 10
+    for (let i = 0; i < teeth; i++) {
+      const a = (i / teeth) * Math.PI * 2 + Math.PI / teeth
+      g.moveTo(cx + Math.cos(a) * r * 0.72, cy + Math.sin(a) * r * 0.72).lineTo(cx + Math.cos(a) * r * 1.0, cy + Math.sin(a) * r * 1.0)
+    }
+    g.stroke({ width: Math.max(1, r * 0.14), color: 0x8c3a24, alpha: 0.95 })
+    g.circle(cx, cy, r * 0.64).stroke({ width: Math.max(1, r * 0.1), color: 0xffd7a8, alpha: 0.75 })
+    g.circle(cx, cy, r * 0.42).fill(0x201812)
+    g.circle(cx - r * 0.17, cy - r * 0.2, r * 0.13).fill({ color: 0xfff6e6, alpha: 0.8 })
   }
 
   /** 敵の身体セル1つぶんのコンテナに HP バー（背景+塗り）を焼き込む */
@@ -558,20 +582,41 @@ export class BoardView {
     }
     const S = this.S
     this.bossId = boss.id
-    const face = new Container()
+    const face = new Container() as BossFaceHost
     face.position.set(0, (H - 1) * S)
+    // 顔もゲージも「いま身体が占めているセル範囲」に追従させる。第2段階で中央2セルへ縮んだとき
+    // 固定幅(W*S*0.5)のままだと隣の駒の上にバーが残ってしまうため、実寸から毎回導出する。
+    const xs = boss.cells.map((c) => c.x)
+    const x0c = Math.min(...xs)
+    const x1c = Math.max(...xs)
+    const span = x1c - x0c + 1
+    const cx = (x0c + span / 2) * S
+    const w = span * S * 0.86
+    const barX = cx - w / 2
     const eye = new Graphics()
-    this.drawEye(eye, (W * S) / 2, S * 0.5, S * 0.34, 0xe86a4a)
+    this.drawBossEye(eye, cx, S * 0.56, Math.min(S * 0.32, w * 0.3)) // 上端がゲージ下端(S*0.20)に触れない高さ
     face.addChild(eye)
-    const w = W * S * 0.5
     // 第1段階は「残りの匣」、第2段階は「核のHP」を同じバーで見せる（意味だけ切り替える）
     const cur = boss.bossPhase === 1 ? boss.bossShellLeft : boss.hp
     const max = boss.bossPhase === 1 ? BOSS_SHELL_COUNT : boss.maxHp
-    this.attachHpBar(face, cur, max, w, S * 0.14, (W * S - w) / 2, S * 0.06)
+    const barH = S * 0.14
+    const barY = S * 0.06
+    this.attachHpBar(face, cur, max, w, barH, barX, barY)
+    if (boss.bossPhase === 1) {
+      // 匣は連続量ではなく「枚数」。刻みを入れて残り枚数がそのまま数えられる形にする
+      const notch = new Graphics()
+      for (let i = 1; i < BOSS_SHELL_COUNT; i++) {
+        const tx = barX + (w * i) / BOSS_SHELL_COUNT
+        notch.moveTo(tx, barY).lineTo(tx, barY + barH)
+      }
+      notch.stroke({ width: Math.max(1, S * 0.022), color: 0x1c1712, alpha: 0.95 })
+      face.addChild(notch)
+    }
+    face.__bossSpan = `${x0c},${x1c},${boss.bossPhase}`
     // 可視化第一波①：ボスの顔もタップで野帳シートを開く
     face.eventMode = 'static'
     face.cursor = 'pointer'
-    face.hitArea = { contains: (lx: number, ly: number) => lx >= 0 && lx <= W * S && ly >= 0 && ly <= S }
+    face.hitArea = { contains: (lx: number, ly: number) => lx >= x0c * S && lx <= (x1c + 1) * S && ly >= 0 && ly <= S }
     face.on('pointertap', (e) => {
       e.stopPropagation()
       this.onEnemyTap?.(boss)
@@ -2176,12 +2221,16 @@ export class BoardView {
         boss.cells.map((p) => ({ ...p })),
       )
       this.bossId = boss.id
-      const face = this.bossFaceG.get(boss.id)
-      if (!face || face.destroyed) {
+      const face = this.bossFaceG.get(boss.id) as BossFaceHost | undefined
+      const xs = boss.cells.map((c) => c.x)
+      const span = `${Math.min(...xs)},${Math.max(...xs)},${boss.bossPhase}`
+      if (!face || face.destroyed || face.__bossSpan !== span) {
+        // 身体セル範囲や段階が変わったら作り直す（縮んだ身体に対して古い幅のゲージが残らない）
         this.makeBossFace(boss)
       } else {
         face.position.set(0, (H - 1) * this.S)
         this.paintBossGauge()
+        this.blockLayer.addChild(face) // 顔は常に身体の前へ（匣の再構築で背面に潜らせない）
       }
     } else {
       for (const face of this.bossFaceG.values()) if (!face.destroyed) face.destroy()

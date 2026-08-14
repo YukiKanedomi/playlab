@@ -70,6 +70,8 @@ export class Board {
   enemies: EnemyInstance[] = []
   private floorCleared = false
   private runOverFired = false
+  private resolveSeq = 0 // 解決（1手）の通し番号。beginResolve で進む
+  private bossShellHitAtSeq = -1 // 匣を剥がした解決の番号（同一解決での二重剥がし抑止。初期値-1＝未剥がし）
 
   constructor(
     public def: LevelDef,
@@ -1044,6 +1046,7 @@ export class Board {
 
   /** 1解決（1手ぶんの連鎖～浮上再安定化まで）の頭でフック予算をリセット */
   private beginResolve() {
+    this.resolveSeq++
     this.hookFireCount = 0
     this.hooksSuspended = false
     this.resolveDestroyCount = 0
@@ -1655,6 +1658,11 @@ export class Board {
     const e = this.enemies.find((x) => x.id === id)
     if (!e || e.hp <= 0) return
     if (e.kind === 'boss' && e.bossPhase === 1) {
+      // 1手（1解決）につき匣は1枚まで。壺の面爆発や横向きの銛は最下行のボス身体を複数セル同時に踏み、
+      // damageBlock 経路には damageAround のような同一敵の重複排除が無いため、ここで抑えないと
+      // 特殊駒1発で第1段階（4枚）が丸ごと消える（SPEC_OXYGEN §1.4 / §0.2 #9）。
+      if (this.bossShellHitAtSeq === this.resolveSeq) return
+      this.bossShellHitAtSeq = this.resolveSeq
       e.bossShellLeft--
       ev.push({ t: 'boss-shell-broken', id, left: Math.max(0, e.bossShellLeft) })
       if (e.bossShellLeft <= 0) this.bossEnterPhase2(e, ev)
@@ -1828,15 +1836,20 @@ export class Board {
       return
     }
     const src = e.cells[0]
-    let best: XY | null = null
+    const cands: { p: XY; d: number }[] = []
     let bestD = -1
     for (let y = 0; y + 1 < H; y++)
       for (let x = 0; x + 1 < W; x++) {
         const quad = [{ x, y }, { x: x + 1, y }, { x, y: y + 1 }, { x: x + 1, y: y + 1 }]
         if (quad.some((q) => !this.at(q.x, q.y) || this.at(q.x, q.y)!.block)) continue
         const d = Math.abs(x - src.x) + Math.abs(y - src.y)
-        if (d > bestD) { bestD = d; best = { x, y } }
+        cands.push({ p: { x, y }, d })
+        if (d > bestD) bestD = d
       }
+    // 「最遠を1つ厳密選択」だと、安定盤面では relocateDigger が動けず src が固定されるため予告が同じ角に張り付く。
+    // 最遠付近（-2まで）から毎回抽選して、予告位置が変わる＝盤面全域を見る学習（§4.11）を成立させる。
+    const far = cands.filter((c) => c.d >= bestD - 2)
+    const best = far.length ? far[randInt(this.rng, far.length)].p : null
     if (!best) return
     e.telegraph = [best, { x: best.x + 1, y: best.y }, { x: best.x, y: best.y + 1 }, { x: best.x + 1, y: best.y + 1 }]
     ev.push({ t: 'fissure-telegraph', cells: e.telegraph, id: e.id })

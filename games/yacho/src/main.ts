@@ -1,6 +1,6 @@
 // 『そろえて、しるす。』ローグライク・エントリ。拠点（旧・縦断面図マップ流用）⇄ 層プレイの2シーン構成。
 // ROGUE.md 準拠（第3弾b＝ラン進行の実装）。旧30レベル制の画面遷移は廃止。
-import { Application, Container, Graphics, Point, Sprite, Text } from 'pixi.js'
+import { Application, Container, Graphics, Point, Sprite, Text, Texture } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
@@ -22,7 +22,7 @@ import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
-import { enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
+import { BOSS_SHELL_COUNT, enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
 import { systemOf } from './core/hooks'
 import type { BoardEvent, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
 import { GLOSSARY, findTerm, type GlossaryEntry } from './core/glossary'
@@ -289,11 +289,14 @@ function layoutRichText(
     const underline = new Graphics()
     const dash = fontSize * 0.22
     const gap = fontSize * 0.16
+    // 下線は文字ボックスの「下端のさらに下」に置く（-1だと『チ』『銛』の画線に重なって取り消し線に見える）。
+    // 行間 lineH=fontSize*1.56 に対し次行のインク上端まで余裕があるため、下へ出しても行同士は衝突しない。
+    const uy = y + t.height + 0.5
     for (let dx = 0; dx < uw; dx += dash + gap)
       underline
-        .moveTo(x + dx, y + t.height - 1)
-        .lineTo(x + Math.min(dx + dash, uw), y + t.height - 1)
-        .stroke({ width: 1.4, color: linkColor, alpha: 0.9 })
+        .moveTo(x + dx, uy)
+        .lineTo(x + Math.min(dx + dash, uw), uy)
+        .stroke({ width: 1, color: linkColor, alpha: 0.9 })
     host.addChild(underline)
     // 監査[C]8：「?」を本文ベースラインへ割り込ませると `遺物?を` と読めて文章が壊れる。
     // 主記号は点線下線だけにし、識別は下線の色と太さで担う（校正記号に見せない）
@@ -454,6 +457,28 @@ function makeEnemyIconContainer(kind: EnemyKind, size: number): Container {
     sp.anchor.set(0.5)
     sp.scale.set((size * 0.86) / Math.max(tex.width, tex.height))
     c.addChild(sp)
+  } else if (kind === 'burrower') {
+    // 裂坑掘り：盤面(BoardView)と同じ「暗い穴の同心円＋二つ目」をアイコン寸法で描く
+    const g = new Graphics()
+    g.circle(0, 0, size * 0.42).fill({ color: 0x0b0d10, alpha: 0.92 })
+    g.circle(0, 0, size * 0.29).fill({ color: 0x1c2128, alpha: 0.92 })
+    g.circle(0, 0, size * 0.15).fill({ color: 0x2c333b, alpha: 0.85 })
+    for (const dx of [-size * 0.14, size * 0.14]) {
+      g.circle(dx, -size * 0.06, size * 0.117).fill(0xf6f1e4)
+      g.circle(dx, -size * 0.06, size * 0.09).fill(0xdff0ff)
+      g.circle(dx, -size * 0.06, size * 0.038).fill(0x201812)
+    }
+    c.addChild(g)
+  } else if (kind === 'breathstealer') {
+    // 息喰み：盤面と同じ「三重の同心リング（危険色）＋細い一つ目」
+    const g = new Graphics()
+    g.circle(0, 0, size * 0.42).fill({ color: 0x2a1216, alpha: 0.95 })
+    g.circle(0, 0, size * 0.3).stroke({ width: size * 0.05, color: 0xe0503a, alpha: 0.9 })
+    g.circle(0, 0, size * 0.16).fill({ color: 0x120a0c, alpha: 0.95 })
+    g.circle(0, -size * 0.16, size * 0.13).fill(0xf6f1e4)
+    g.circle(0, -size * 0.16, size * 0.1).fill(0xffd6b0)
+    g.circle(0, -size * 0.16, size * 0.042).fill(0x201812)
+    c.addChild(g)
   } else {
     const g = new Graphics()
     g.circle(0, 0, size * 0.42).fill(0x3a4048).stroke({ width: 2, color: 0x8a94a0 })
@@ -622,14 +647,20 @@ function computeEncounterInfo(board: Board): {
   nextLabel: string | null
   /** 最短で来るインテントで失う酸素の合計（0＝妨害だけ） */
   nextOxygenLoss: number
+  /** 定期行動を持たない（intent.kind==='none'）生存敵の数。＝チップが「あと何手」を語れない敵 */
+  idleCount: number
 } {
   const alive = board.enemies.filter((e) => e.hp > 0)
   const boss = alive.find((e) => e.kind === 'boss') ?? null
   let pendingOxygen = 0
   let minTurns: number | null = null
+  let idleCount = 0
   for (const e of alive) {
     const it = enemyIntent(e)
-    if (it.kind === 'none') continue
+    if (it.kind === 'none') {
+      idleCount++
+      continue
+    }
     if (it.turns === 1) pendingOxygen += it.oxygen ?? 0
     if (minTurns === null || it.turns < minTurns) minTurns = it.turns
   }
@@ -642,7 +673,7 @@ function computeEncounterInfo(board: Board): {
       nextOxygenLoss += it.oxygen ?? 0
       if (!nextLabel || it.kind === 'drain') nextLabel = it.label // 危険な予告を優先して表示する
     }
-  return { aliveCount: alive.length, boss, pendingOxygen, minTurns, nextLabel, nextOxygenLoss }
+  return { aliveCount: alive.length, boss, pendingOxygen, minTurns, nextLabel, nextOxygenLoss, idleCount }
 }
 
 const app = new Application()
@@ -684,7 +715,9 @@ async function boot() {
       c.addChild(sp)
       h = (width / tex.width) * tex.height
       const cover = new Graphics()
-      cover.roundRect(-width * 0.42, -h * 0.3, width * 0.84, h * 0.6, h * 0.22).fill({ color: 0x241a10, alpha: 0.96 })
+      // 不透明で覆う（alpha 0.96 だと素材に焼かれた「つぎへ」が透けて独自ラベルと二重に見える）。
+      // 寸法は広げない：広げるとプレート内部が全面黒板になり、テーマ別素材の質感が消えるため。
+      cover.roundRect(-width * 0.42, -h * 0.3, width * 0.84, h * 0.6, h * 0.22).fill({ color: 0x241a10, alpha: 1 })
       c.addChild(cover)
     } else {
       h = width * 0.32
@@ -951,6 +984,9 @@ async function boot() {
   let runState: RunState | null = null
   let runSeed = 0
   let sceneEpoch = 0 // シーン再構築の世代。跨いだ遅延コールバックは無効化
+  // ラン中の強化ごとの発火回数（結果画面の「いちばん働いた強化」用）。board.ts は非改変のため
+  // main.ts 側でイベント列を数える。層をまたいで積むのでシーンではなくランのスコープに置く
+  const upgradeFireCount = new Map<string, number>()
 
   const draftRng = (floor: number): Rng => makeRng((runSeed + floor * 104729 + 17) | 0)
 
@@ -1222,6 +1258,7 @@ async function boot() {
 
   const startRun = () => {
     runState = createRunState()
+    upgradeFireCount.clear()
     runSeed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) | 0
     mapRoot.visible = false
     playRoot.visible = true
@@ -1272,11 +1309,16 @@ async function boot() {
     playRoot.addChild(view.root)
     // 盤面とビルドドックの間隔（[A]必達の下限は8px。BoardView側の盤面フレーム下端の飾りに視覚的に食い込まないよう
     // 実際には少し広めに取る。92%帯の下端safe areaまでは十分な余白があるため詰める必要はない）
-    const dockGap = Math.max(8, vh * 0.035)
-    const dockTop = boardTop + boardPix + dockGap
+    const dockGap = Math.max(8, vh * 0.016)
+    // ドックのアイコンはこのyを「中心」に置くので、半径ぶんを足さないと上端が枠へ食い込む。
+    // ここでは実際の iconR（後段で所持数から決まる）の取り得る最大値で見積もる＝どの所持数でも必ず枠の下に出る
+    const dockContentHalf = Math.max(vw * 0.055 * 1.2, fs(0.09) / 2)
+    // view.framePad ＝ 盤面フレーム素材がタイル格子の外へ張り出す量。これを足さないと
+    // 「タイルからの隙間」しか確保できず、アイコンの上端が石枠の下に食い込む（上側の目標バーも同じ理由で下げる）
+    const dockTop = boardTop + boardPix + view.framePad + dockGap + dockContentHalf
     // 目標バー：遭遇帯の最下段を1行ぶん借りて盤面の真上に置く（盤面には絶対に重ねない。[A]4バンド予算の内側）
     const goalBarH = vh * 0.05
-    const goalBarY = boardTop - goalBarH - vh * 0.014
+    const goalBarY = boardTop - view.framePad - goalBarH - vh * 0.014
 
     // ---------- HUD/遭遇帯の共通レイヤー ----------
     const ui = new Container()
@@ -1291,6 +1333,14 @@ async function boot() {
     const chipTex = spriteTexture('ui_chip')
     const chipH = chipTex ? chipW * (chipTex.height / chipTex.width) : chipW * 0.46
     const chipY = encTop + vh * 0.02
+    // 敵が1体もいない層（層1）ではチップを作らない。敵編成は Board 構築時に確定し層の途中で増えないので
+    // 静的分岐で足りる（「残敵 0」「静観中」という無内容の2枠が一等地を占めるのを構造的に断つ）
+    const hasEnemies = board.enemies.length > 0
+    // 殲滅目標の層（ボス層を除く）は、左チップを「敵の正体」に振り替える。生存敵が1種類のときだけ名乗らせ、
+    // 混成なら従来どおり「残敵 N」に戻す（将来の編成変更でも嘘にならない安全弁）
+    const wipeFloor = board.goals.some((g) => g.type === 'enemy-kill') && !board.enemies.some((e) => e.kind === 'boss')
+    const wipeKinds = new Set(board.enemies.map((e) => e.kind))
+    const wipeKindName = wipeFloor && wipeKinds.size === 1 ? ENEMY_INFO[[...wipeKinds][0]].name : null
     const buildChip = (x: number) => {
       const c = new Container()
       if (chipTex) {
@@ -1321,22 +1371,68 @@ async function boot() {
       c.addChild(t)
       c.position.set(x, chipY)
       ui.addChild(c)
-      return { root: c, text: t }
+      // 文字列は敵名・行数ともに可変（『あと3手：崩落』『深匣主／HP 12 / 12』等）。
+      // どんな長さでもチップ内に必ず収めるため、設定のたびに実測して縮める（「たまたま収まる」を作らない）
+      const setText = (s: string, fill?: number) => {
+        t.scale.set(1)
+        t.text = s
+        if (fill !== undefined) t.style.fill = fill
+        const k = Math.min(1, (chipW * 0.9) / Math.max(1, t.width), (chipH * 0.86) / Math.max(1, t.height))
+        if (k < 1) t.scale.set(k)
+      }
+      return { root: c, text: t, setText }
     }
-    const enemyChip = buildChip(vw * 0.04)
-    const actionChip = buildChip(vw * 0.96 - chipW)
+    const enemyChip = hasEnemies ? buildChip(vw * 0.04) : null
+    const actionChip = hasEnemies ? buildChip(vw * 0.96 - chipW) : null
 
     let bust: Sprite | null = null
     if (bustTex) {
       bust = new Sprite(bustTex)
       bust.anchor.set(0.5, 1)
-      const bustAreaTop = chipY + chipH + vh * 0.015
-      // 目標バーを足したぶんバストの足元を1行ぶん繰り上げる（boardTop→goalBarY。バーとバストが重ならない）
-      const bustH = Math.min((goalBarY - bustAreaTop) * 0.98, vh * 0.26)
+      // バストは遭遇帯の天井から立ち上げ、左右のチップの「間」を通す（縦に積まない）。
+      // 積むと短尺機で高さ28pxまで潰れ、「状態の語り手」として機能しなくなる。
+      const bustAreaTop = encTop + vh * 0.005
+      // チップ2枚の間に空く幅（左右に余白）。チップが無い層は帯を丸ごと使える
+      const bustMaxW = hasEnemies ? vw - chipW * 2 - vw * 0.12 : vw * 0.6
+      const bustH = Math.min(
+        (goalBarY - bustAreaTop) * 0.98,
+        vh * 0.26,
+        bustMaxW * (bustTex.height / bustTex.width), // 横でもクランプ＝チップに潜り込ませない
+      )
       bust.scale.set(Math.max(1, bustH) / bustTex.height)
       bust.position.set(vw * 0.5, goalBarY + vh * 0.006)
       playRoot.addChildAt(bust, playRoot.getChildIndex(view.root))
-      bustGlow.circle(vw * 0.5, goalBarY - bust.height * 0.42, bust.width * 0.62).stroke({ width: vw * 0.018, color: 0xd6432f, alpha: 0.75 })
+      // 下端のフェードマスク：目標バーの黒地で「切断」される代わりに霞んで消える（宙に浮いた胴体に見せない）
+      {
+        const cv = document.createElement('canvas')
+        cv.width = 8
+        cv.height = 256
+        const c2 = cv.getContext('2d')!
+        const grd = c2.createLinearGradient(0, 0, 0, 256)
+        grd.addColorStop(0, 'rgba(255,255,255,1)')
+        grd.addColorStop(0.72, 'rgba(255,255,255,1)')
+        grd.addColorStop(1, 'rgba(255,255,255,0)')
+        c2.fillStyle = grd
+        c2.fillRect(0, 0, 8, 256)
+        const mk = new Sprite(Texture.from(cv))
+        mk.anchor.set(0.5, 1)
+        mk.width = bust.width * 1.1
+        mk.height = bust.height
+        mk.position.set(bust.position.x, bust.position.y)
+        playRoot.addChildAt(mk, playRoot.getChildIndex(bust))
+        bust.mask = mk
+      }
+      // 被弾予告：バストの背後に置く楕円の縁光。下端は目標バーの上端で止める（バーに絶対に被せない）。
+      // 前面のベタ円だとバストを覆い潰し、円の下半分がチップで切断されて赤い半円が残っていた。
+      const glowCx = vw * 0.5
+      const glowCy = bust.y - bust.height * 0.5
+      const glowRy = Math.max(2, goalBarY - glowCy)
+      const glowRx = Math.max(bust.width * 0.72, glowRy * 0.8)
+      bustGlow
+        .ellipse(glowCx, glowCy, glowRx, glowRy)
+        .fill({ color: 0xd6432f, alpha: 0.18 })
+        .stroke({ width: Math.max(1.5, vw * 0.005), color: 0xd6432f, alpha: 0.6 })
+      playRoot.setChildIndex(bustGlow, playRoot.getChildIndex(bust)) // バストの背後へ（ui/目標バーより下）
     }
 
     // ---------- 目標バー：層の目的を盤面の真上に1行で置く（何を何個集めるかを常に読ませる） ----------
@@ -1376,8 +1472,13 @@ async function boot() {
       else if (g.type === 'tsutagoke') add('moss_icon', 0)
       else if (g.type === 'touhen') add('touhen', 0)
       else if (g.type === 'kokeishi') add('kokeishi', 0)
-      else if (g.type === 'enemy-kill') add('e_swarm', 0)
-      else add('spore', 0)
+      else if (g.type === 'enemy-kill') {
+        // 敵種は board.enemies ではなく floorDef から引く（この関数は撃破後の飛翔演出からも呼ばれ、
+        // そのとき board.enemies は空になり得る）。これでチップの絵が盤面の敵と一致する
+        const kind = floorDef.enemies[0]?.kind
+        if (kind) c.addChild(makeEnemyIconContainer(kind, size))
+        else add('e_swarm', 0)
+      } else add('spore', 0)
       if (!c.children.length) {
         const gg = new Graphics()
         gg.circle(0, 0, size * 0.4).fill(UI.brass)
@@ -1385,7 +1486,10 @@ async function boot() {
       }
       return c
     }
-    {
+    // ボス層（目標＝ボス撃破1件のみ）では目標バーを出さない。左チップの「匣 n/4 → HP n/m」と
+    // 盤面のボスゲージが同じことを語っており、『掃討 0/1』は層クリアまで一度も動かない純粋なノイズになるため。
+    const bossOnlyGoal = board.goals.length === 1 && board.goals[0].type === 'enemy-kill' && board.enemies.some((e) => e.kind === 'boss')
+    if (!bossOnlyGoal) {
       const n = board.goals.length
       const goalGap = vw * 0.03
       const goalChipW = Math.min(vw * 0.44, (vw * 0.9 - goalGap * (n - 1)) / Math.max(1, n))
@@ -1731,35 +1835,49 @@ async function boot() {
     ui.addChild(menuBtn)
 
     /** 遭遇帯の更新：残敵/ボス情報＋次行動の要約、強奪予告の合計酸素を返す（酸素ゲージへ渡す） */
+    // ゲージの分母＝「その層のタンク容量」。層の途中では動かさない（動かすと1手ぶんの減りが見えなくなる）。
+    // 補給で貯金が乗ったぶんだけ層クリア時に広がり、使い切れば自動的に既定容量へ戻る。
+    let gaugeFull = Math.max(OXYGEN_GAUGE_FULL, run.oxygen)
     const refreshEncounter = (): number => {
       const info = computeEncounterInfo(board)
+      if (!enemyChip || !actionChip) return 0 // 敵ゼロの層はチップ自体が無い
       if (info.boss) {
         // 第1段階は匣の残り枚数、核が露出してからHP（見るべき数字が段階で変わる）
-        enemyChip.text.text =
-          info.boss.bossPhase === 1 ? `${BOSS_NAME}\n匣 ${info.boss.bossShellLeft}/4` : `${BOSS_NAME}\nHP ${Math.max(0, info.boss.hp)} / ${info.boss.maxHp}`
+        enemyChip.setText(
+          info.boss.bossPhase === 1
+            ? `${BOSS_NAME}\n匣 ${info.boss.bossShellLeft}/${BOSS_SHELL_COUNT}`
+            : `${BOSS_NAME}\nHP ${Math.max(0, info.boss.hp)} / ${info.boss.maxHp}`,
+        )
+      } else if (wipeFloor && wipeKindName) {
+        // 殲滅目標の層では数の勘定は目標バーに一本化し、左チップは「敵の正体」を名乗る
+        // （「残敵 3」と「掃討 1/4」で同じ盤面を逆向きの2つの数字で語るのをやめる）
+        enemyChip.setText(wipeKindName)
       } else {
-        enemyChip.text.text = `残敵 ${info.aliveCount}`
+        enemyChip.setText(`残敵 ${info.aliveCount}`)
       }
       const lethal = run.oxygen > 0 && info.nextOxygenLoss > 0 && run.oxygen - info.nextOxygenLoss <= 0
       if (lethal) {
-        actionChip.text.text = `あと${info.minTurns ?? 1}手：遭難`
-        actionChip.text.style.fill = 0xff8a70
+        actionChip.setText(`あと${info.minTurns ?? 1}手\n遭難`, 0xff8a70)
       } else if (info.minTurns !== null) {
-        // 妨害しかしない敵でもチップが必ず語る（外すと10層中8層が「静観中」になる）
-        actionChip.text.text = `あと${info.minTurns}手：${info.nextLabel ?? '妨害'}`
-        actionChip.text.style.fill = info.nextOxygenLoss > 0 ? 0xff8a70 : UI.badgeText
+        // 妨害しかしない敵でもチップが必ず語る（外すと10層中8層が「静観中」になる）。
+        // 改行は自分で入れる：自動折返しに任せると『酸素-3』が『酸／素-3』と語の途中で割れる
+        actionChip.setText(`あと${info.minTurns}手\n${info.nextLabel ?? '妨害'}`, info.nextOxygenLoss > 0 ? 0xff8a70 : UI.badgeText)
+      } else if (info.idleCount > 0) {
+        // 定期行動を持たない敵（小型胞子虫）しかいない層で「静観中」と出すのは無内容。
+        // 真で、かつ手を変える事実＝「4個以上のまとめ消しで倒すと隣へ伝播する」を出す
+        actionChip.setText('まとめ消しで伝播', UI.badgeText)
       } else {
-        actionChip.text.text = '静観中'
-        actionChip.text.style.fill = UI.badgeText
+        actionChip.setText('静観中', UI.badgeText)
       }
       bustGlow.visible = info.pendingOxygen > 0
+      if (bust) bust.tint = info.pendingOxygen > 0 ? 0xff9c86 : 0xffffff // 小さいバストでも必ず読める主フィードバック
       return info.pendingOxygen
     }
 
     /** oxygenOverride：補給前の値でゲージを描きたいとき（層クリアの+7は演出で見せるため即時反映しない） */
     const refreshFloorHud = (oxygenOverride?: number) => {
       const pendingDrain = refreshEncounter()
-      drawGauge(Math.max(0, oxygenOverride ?? run.oxygen), OXYGEN_GAUGE_FULL, pendingDrain)
+      drawGauge(Math.max(0, oxygenOverride ?? run.oxygen), gaugeFull, pendingDrain)
     }
     refreshFloorHud()
 
@@ -1859,45 +1977,12 @@ async function boot() {
         progressLastCur.set(id, p.cur)
       }
     }
-    const medalTex = spriteTexture('ui_medal')
     ownedUpgrades.forEach((id, i) => {
       const def = UPGRADES.find((u) => u.id === id)
       if (!def) return
-      const m = new Container()
-      if (medalTex) {
-        const base = new Sprite(medalTex)
-        base.anchor.set(0.5)
-        base.scale.set((iconR * 2.3) / Math.max(medalTex.width, medalTex.height))
-        m.addChild(base)
-      }
-      const cat = UPGRADE_CATEGORY[id]
-      const drawHalf = (texKey: string, side: 'l' | 'r') => {
-        const tex = spriteTexture(texKey)
-        if (!tex) return
-        const sp = new Sprite(tex)
-        sp.anchor.set(0.5)
-        sp.scale.set((iconR * 1.2) / Math.max(tex.width, tex.height))
-        sp.position.set(0, -iconR * 0.02)
-        const mask = new Graphics()
-        if (side === 'l') mask.moveTo(-iconR, -iconR).lineTo(iconR, -iconR).lineTo(-iconR, iconR).closePath().fill(0xffffff)
-        else mask.moveTo(iconR, -iconR).lineTo(iconR, iconR).lineTo(-iconR, iconR).closePath().fill(0xffffff)
-        sp.mask = mask
-        m.addChild(mask, sp)
-      }
-      if (cat === 'synergy') {
-        const [a, b] = SYNERGY_HALVES[id] ?? ['n1', 'n0']
-        drawHalf(a, 'l')
-        drawHalf(b, 'r')
-      } else {
-        const tex = spriteTexture(CATEGORY_ICON[cat] ?? 'n1')
-        if (tex) {
-          const sp = new Sprite(tex)
-          sp.anchor.set(0.5)
-          sp.scale.set((iconR * 1.25) / Math.max(tex.width, tex.height))
-          sp.position.set(0, -iconR * 0.02)
-          m.addChild(sp)
-        }
-      }
+      // ドラフトカード・野帳と同じ固有アイコンを使う（系統色メダルだと10個中5個が同じ葉になり判別できない上、
+      // 灰色石の台が盤面フレームの石テクスチャに溶ける）。固有アイコンが無いIDは従来の見た目へ自動フォールバック
+      const m = makeUniqueUpgradeIcon(id, iconR * 2.3)
       m.eventMode = 'static'
       m.cursor = 'pointer'
       m.hitArea = { contains: (x: number, y: number) => x * x + y * y <= iconR * iconR * 2.4 }
@@ -1906,7 +1991,7 @@ async function boot() {
       boosterBar.addChild(m)
       upgradeIconG.set(id, m)
     })
-    boosterBar.position.set(0, dockTop) // 盤面との間はdockGap（>=8px）確保済み（[A]ビルドドック必達条件）
+    boosterBar.position.set(0, dockTop) // 盤面フレーム下端との間は dockGap（>=8px）確保済み（[A]ビルドドック必達条件）
     ui.addChild(boosterBar)
     refreshProgressBadges() // 可視化第二波④：層開始時点の進捗（あれば）を反映
 
@@ -2040,12 +2125,14 @@ async function boot() {
       tw.tween(icon.scale, { x: 1.15, y: 1.15 }, 90, { ease: tw.easeOutBackSoft, channel: 'fx' })
       tw.tween(icon.position, { x: from.x + Math.cos(kickA) * kickD, y: from.y + Math.sin(kickA) * kickD }, 90, { ease: tw.easeOutCubic, channel: 'fx' })
       // B（90ms〜）弧を描いて吸われる。x と y に別のイージングを与えると経路が曲がる（ベジェ評価器は足さない）
+      // x を先に詰め、y を後から効かせる（逆にすると着弾点の高さに約160ms早く到達し、その間アイコンが
+      // HUDチップ行の上を横切ってラベルを覆う）。経路は「盤の高さで横に流れ→最後に下からチップへ吸い上がる」
       const D = Math.min(450, 320 + flightIndex * 14)
-      tw.tween(icon.position, { y: to.y }, D, { delay: 90, ease: tw.easeOutCubic, channel: 'fx' })
-      tw.tween(icon.scale, { x: 0.55, y: 0.55 }, D, { delay: 90, ease: tw.easeInQuad, channel: 'fx' })
+      tw.tween(icon.position, { y: to.y }, D, { delay: 90, ease: tw.easeInQuad, channel: 'fx' })
+      tw.tween(icon.scale, { x: 0.55, y: 0.55 }, D, { delay: 90, ease: tw.easeOutCubic, channel: 'fx' })
       tw.tween(icon.position, { x: to.x }, D, {
         delay: 90,
-        ease: tw.easeInQuad,
+        ease: tw.easeOutCubic,
         channel: 'fx',
         onDone: () => {
           flightsInAir--
@@ -2135,6 +2222,7 @@ async function boot() {
       // 結果画面の主記録用（夜間監査[C]7/[E]3）：1手＝このevs全体で発火した upgrade-fire の件数。board.ts は変更禁止のため
       // main.ts側でイベント列を数えて集計する（board.ts が触らない run.records の追加フィールド）。
       const firesThisMove = evs.reduce((n, e) => n + (e.t === 'upgrade-fire' ? 1 : 0), 0)
+      for (const e of evs) if (e.t === 'upgrade-fire') upgradeFireCount.set(e.id, (upgradeFireCount.get(e.id) ?? 0) + 1)
       if (firesThisMove > run.records.maxFiresInOneMove) run.records.maxFiresInOneMove = firesThisMove
       // 酸素を直接奪われた手はゲージ側でも必ず被弾を見せる（軌跡は onOxygenDrained が別に出す）
       for (const e of evs) if (e.t === 'oxygen-drained') oxygenDrainFx(e.amount)
@@ -2191,7 +2279,9 @@ async function boot() {
       tw.tween(bt.scale, { x: 1, y: 1 }, 320, { ease: tw.easeOutBack })
       // 補給はここで見せる（ゲージ側は補給前の値を描いてあるので、この演出のあと実値へ確定する）
       tw.delay(360, () => {
-        if (alive()) oxygenRefillFx(OXYGEN_SUPPLY_PER_FLOOR)
+        if (!alive()) return
+        gaugeFull = Math.max(OXYGEN_GAUGE_FULL, run.oxygen) // 分母が変わるのは補給演出の瞬間だけ（層途中でバーが後戻りしない）
+        oxygenRefillFx(OXYGEN_SUPPLY_PER_FLOOR)
       })
       tw.delay(1100, () => {
         if (!alive()) return
@@ -2646,13 +2736,75 @@ async function boot() {
         graphLabel.position.set(vw / 2, graphTop)
         panel.addChild(graphLabel)
 
-        const rowY = graphTop + graphLabel.height + (graphH - graphLabel.height) / 2
-        const gLeft = px0 + pw * 0.1
-        const gRight = px0 + pw * 0.9
         const n = owned.length
-        // アイコンは判別できる下限を確保する（小さすぎると外周の装飾しか見えない）
-        const iconR = n > 1 ? Math.max(fs(0.036), Math.min(fs(0.058), ((gRight - gLeft) / (n - 1)) * 0.46)) : fs(0.058)
+        // 紙の木枠を突き抜けないよう、まず幅からアイコン半径を解き、「中心」ではなく「外周」で内寸に収める。
+        // 紙面の内側は横12%〜88%なので安全域を14%〜86%に取り、その内側に外周ごと入れる
+        const avail = pw * 0.72
+        const iconR = Math.min(fs(0.058), avail / (n * 2.2))
+        const gLeft = px0 + pw * 0.14 + iconR
+        const gRight = px0 + pw * 0.86 - iconR
+        const rowY = graphBottom - iconR
         const nodeX = (i: number) => (n > 1 ? gLeft + ((gRight - gLeft) / (n - 1)) * i : (gLeft + gRight) / 2)
+
+        // 主役1枚：小メダルを10個並べても「何のビルドだったか」は読めないので、
+        // いちばん働いた強化を大きく1枚出し、小メダル列は「他に持っていたもの」の脇役に降ろす。
+        // （発火数が1件も無いランでは嘘をつかず「この探索の起点＝最初に選んだ強化」に見出しごと切り替える）
+        const heroTop = graphTop + graphLabel.height + fs(0.012)
+        let heroBottom = heroTop
+        const heroBand = rowY - iconR - fs(0.024) - heroTop
+        if (heroBand >= fs(0.11)) {
+          let bestId: string | null = null
+          let bestFires = 0
+          for (const def of owned) {
+            const c = upgradeFireCount.get(def.id) ?? 0
+            if (c > bestFires) {
+              bestFires = c
+              bestId = def.id
+            }
+          }
+          const heroDef = owned.find((u) => u.id === bestId) ?? owned[0]
+          const capLine = bestFires > 0 ? 'いちばん働いた強化' : 'この探索の起点'
+          const fitText = (t: Text, maxW: number) => {
+            if (t.width > maxW) t.scale.set(maxW / t.width)
+          }
+          const cap = new Text({ text: capLine, style: { fill: UI.paperInk, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+          cap.anchor.set(0.5, 0)
+          cap.alpha = 0.75
+          cap.position.set(vw / 2, heroTop)
+          fitText(cap, pw * 0.7)
+          panel.addChild(cap)
+          const textBudget = fs(0.03) * 1.35 + (bestFires > 0 ? fs(0.026) * 1.35 : 0) + fs(0.008)
+          const heroR = Math.max(fs(0.032), Math.min(fs(0.075), (heroBand - cap.height - textBudget) / 2))
+          const heroCy = heroTop + cap.height + fs(0.006) + heroR
+          const heroNode = new Container()
+          const heroBg = new Graphics()
+          heroBg.circle(0, 0, heroR).fill({ color: 0x241a10, alpha: 0.94 }).stroke({ width: Math.max(2, fs(0.005)), color: 0xf2c14e, alpha: 0.95 })
+          heroNode.addChild(heroBg)
+          heroNode.addChild(makeUniqueUpgradeIcon(heroDef.id, heroR * 1.3))
+          heroNode.position.set(vw / 2, heroCy)
+          panel.addChild(heroNode)
+          const heroName = new Text({
+            text: heroDef.name,
+            style: { fill: UI.paperInk, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
+          })
+          heroName.anchor.set(0.5, 0)
+          heroName.position.set(vw / 2, heroCy + heroR + fs(0.008))
+          fitText(heroName, pw * 0.72) // 強化名は可変長。紙面内に必ず収める
+          panel.addChild(heroName)
+          heroBottom = heroName.position.y + heroName.height
+          if (bestFires > 0) {
+            const fireT = new Text({
+              text: `発火 ${bestFires}回`,
+              style: { fill: UI.paperInk, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' },
+            })
+            fireT.anchor.set(0.5, 0)
+            fireT.alpha = 0.8
+            fireT.position.set(vw / 2, heroBottom + fs(0.004))
+            fitText(fireT, pw * 0.7)
+            panel.addChild(fireT)
+            heroBottom = fireT.position.y + fireT.height
+          }
+        }
 
         // 辺の抽出：produces(a)とconsumes(b)が1つでも重なればa→b（アイコン同士。自己ループは対象外）
         const edges: { from: number; to: number }[] = []
@@ -2679,7 +2831,10 @@ async function boot() {
           const inLoop = reach[e.to][e.from]
           const x1 = nodeX(e.from)
           const x2 = nodeX(e.to)
-          const arc = Math.min(graphH * 0.42, Math.abs(x2 - x1) * 0.35 + fs(0.02))
+          // 隣接する辺がメダルに埋もれて「何と何が繋がっているか」読めなくなるため、弧の高さに下限を置く。
+          // 上限は主役ブロックに触れない範囲まで（弧が名前や発火数の上に乗らない）
+          const arcCap = Math.max(iconR * 1.9, Math.min(graphH * 0.42, rowY - heroBottom - fs(0.012)))
+          const arc = Math.min(arcCap, Math.max(iconR * 1.8, Math.abs(x2 - x1) * 0.35 + fs(0.02)))
           const midX = (x1 + x2) / 2
           const g = new Graphics()
           g.moveTo(x1, rowY).quadraticCurveTo(midX, rowY - arc, x2, rowY)

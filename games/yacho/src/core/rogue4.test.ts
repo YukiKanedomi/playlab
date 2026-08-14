@@ -109,11 +109,13 @@ describe('層の生成（FLOORS）', () => {
     expect(b.hasValidMove()).toBe(true)
   })
 
-  it('層2（swarm4体）でBoardが構築でき、swarmがHP2で配置され、有効な初手が存在する', () => {
+  it('層2（swarmのみ）でBoardが構築でき、編成どおりの数がHP2で配置され、有効な初手が存在する', () => {
     const run = createRunState([])
     const b = new Board(levelOf(FLOORS[1]), run, FLOORS[1])
     const swarms = b.enemies.filter((e) => e.kind === 'swarm')
-    expect(swarms.length).toBe(4)
+    // 体数は runsim の較正で動く値なので、リテラルではなく編成と一致することを見る
+    expect(FLOORS[1].enemies.every((e) => e.kind === 'swarm')).toBe(true)
+    expect(swarms.length).toBe(FLOORS[1].enemies.length)
     expect(swarms.every((e) => e.hp === 2)).toBe(true)
     expect(b.hasValidMove()).toBe(true)
   })
