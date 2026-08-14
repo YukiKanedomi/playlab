@@ -19,7 +19,18 @@ import {
 } from './upgrades'
 import type { RunState } from './run'
 import { blessingDrain, blessingLastLight, blessingSupply, hasFreeFirstMove } from './blessings'
-import { bossBodyCells, createEnemy, ENEMY_PERIOD, OXYGEN_DRAIN, SWARM_PROPAGATE_DAMAGE, type EnemyInstance } from './enemies'
+import {
+  BELLFOOT_SHELL_MAX,
+  bossBodyCells,
+  createEnemy,
+  ENEMY_PERIOD,
+  MAW_PHASES,
+  mawNextPhase,
+  mawPhaseCells,
+  OXYGEN_DRAIN,
+  SWARM_PROPAGATE_DAMAGE,
+  type EnemyInstance,
+} from './enemies'
 import type { FloorDef } from './floors'
 
 export const W = 8
@@ -1601,6 +1612,8 @@ export class Board {
   private spawnFloor(floor: FloorDef) {
     for (const spec of floor.enemies) {
       if (spec.kind === 'boss') this.spawnEnemy('boss', bossBodyCells(H - 1, H - 1, W)) // 身体は最下行の8セルだけ（第2段階で2セルへ縮む）
+      // 奈落の喉は最下行の中央2セルに口を開ける（ボス第2段階と同じ形。左右と上から必ず届く）
+      else if (spec.kind === 'maw') this.spawnEnemy('maw', [{ x: 3, y: H - 1 }, { x: 4, y: H - 1 }])
       else this.spawnEnemy(spec.kind, [spec.at])
     }
   }
@@ -1678,6 +1691,15 @@ export class Board {
       if (e.bossShellLeft <= 0) this.bossEnterPhase2(e, ev)
       return // 第1段階では hp を削らない
     }
+    if (e.kind === 'bellfoot' && e.shell > 0) {
+      // 鐘脚：殻がある間は本体に一切通らず、量に関係なく1解決で1枚だけ剥がれる（ボスの匣と同じ規則）。
+      // 3手ごとに1枚張り直すので、小突き続けると永久に剥がせない＝一手へまとめることを要求する
+      if (e.shellSeq === this.resolveSeq) return
+      e.shellSeq = this.resolveSeq
+      e.shell--
+      ev.push({ t: 'shell-peeled', id, left: e.shell })
+      return
+    }
     e.hp = Math.max(0, e.hp - amount)
     ev.push({ t: 'enemy-damage', id, amount, hpLeft: e.hp })
     if (e.hp <= 0) this.defeatEnemy(e, ev, heavy)
@@ -1747,6 +1769,9 @@ export class Board {
         case 'rockshell': this.rockshellAction(e, ev); break
         case 'sporeling': this.harvesterAction(e, ev); break
         case 'burrower': this.diggerAction(e, ev); break
+        case 'binder': this.binderAction(e, ev); break
+        case 'bellfoot': this.bellfootAction(e, ev); break
+        case 'maw': this.mawAction(e, ev); break
         case 'breathstealer':
         case 'boss': this.drainOxygen(e, ev); break
       }
@@ -1896,10 +1921,70 @@ export class Board {
     e.cells = [to]
   }
 
-  /** 予告2x2の内側で駒が消えたら崩落を中断する */
+  /**
+   * 綴じ蟲（第二幕）：3手ごとに「1列の予告」と「その列の封鎖」を交互に行う。
+   * 裂坑掘りが2x2を塞ぐのに対しこちらは列を丸ごと落とすので、盤が縦に分断され「落ちてくる列」が読めなくなる。
+   * 予告と解除の作法（予告内で駒を1つ消せば中断）は裂坑掘りと共通にして、覚え直しをさせない。
+   */
+  private binderAction(e: EnemyInstance, ev: BoardEvent[]) {
+    if (e.telegraph) {
+      const sealed: XY[] = []
+      for (const p of e.telegraph) {
+        const c = this.at(p.x, p.y)
+        if (!c || c.block || !c.piece) continue
+        c.piece = null
+        c.block = { type: 'seal', turnsLeft: 3 }
+        sealed.push(p)
+        ev.push({ t: 'cell-sealed', at: p, turns: 3, id: e.id })
+      }
+      if (!sealed.length) ev.push({ t: 'fissure-averted', id: e.id })
+      e.telegraph = null
+      return
+    }
+    // 自分の列は選ばない（本体が身体セルで塞いでいる列を封鎖しても盤面が変わらない）
+    const cols: number[] = []
+    for (let x = 0; x < W; x++) {
+      if (e.cells.some((p) => p.x === x)) continue
+      let free = 0
+      for (let y = 0; y < H; y++) if (this.at(x, y)?.piece) free++
+      if (free >= 4) cols.push(x) // 駒が半分も無い列は塞いでも効かないので候補にしない
+    }
+    if (!cols.length) return
+    const col = cols[randInt(this.rng, cols.length)]
+    const cells: XY[] = []
+    for (let y = 0; y < H; y++) if (this.at(col, y)?.piece) cells.push({ x: col, y })
+    e.telegraph = cells
+    ev.push({ t: 'fissure-telegraph', cells, id: e.id })
+  }
+
+  /** 鐘脚（第三幕）：3手ごとに殻を1枚張り直す。剥がすより速く張られるので、まとめて剥がしきる手が要る */
+  private bellfootAction(e: EnemyInstance, ev: BoardEvent[]) {
+    if (e.shell >= BELLFOOT_SHELL_MAX) return
+    e.shell++
+    ev.push({ t: 'shell-raised', id: e.id, left: e.shell })
+  }
+
+  /**
+   * 奈落の喉（終幕の特殊ラスボス）：3手ごとに盤面の使用可能域そのものを切り替える。
+   * 封鎖の期限（3手）と周期（3手）が一致しているので、次の相が来る手にちょうど前の相が解ける
+   * ＝新しい状態を1つも持たずに「割れる→狭まる→開く」が回る（既存の seal/tickSeals の再利用）。
+   */
+  private mawAction(e: EnemyInstance, ev: BoardEvent[]) {
+    // actionTimer はこの手ぶんが既に加算済みなので、いま入る相は「1つ前」の値で決まる
+    const phase = (mawNextPhase(e) + MAW_PHASES - 1) % MAW_PHASES
+    for (const p of mawPhaseCells(phase, W, H)) {
+      const c = this.at(p.x, p.y)
+      if (!c || c.block || !c.piece) continue
+      c.piece = null
+      c.block = { type: 'seal', turnsLeft: 3 }
+      ev.push({ t: 'cell-sealed', at: p, turns: 3, id: e.id })
+    }
+  }
+
+  /** 予告2x2の内側で駒が消えたら崩落を中断する（綴じ蟲の列予告も同じ作法で中断する） */
   private checkFissureAverted(p: XY, ev: BoardEvent[]) {
     for (const e of this.enemies) {
-      if (e.kind !== 'burrower' || !e.telegraph) continue
+      if ((e.kind !== 'burrower' && e.kind !== 'binder') || !e.telegraph) continue
       if (!e.telegraph.some((q) => q.x === p.x && q.y === p.y)) continue
       e.telegraph = null
       ev.push({ t: 'fissure-averted', id: e.id })

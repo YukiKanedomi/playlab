@@ -5,7 +5,7 @@
 //   祝福 … 灯・課目・深度・盤面形状というランの会計と規則だけを変える。最大3つ・同名重複なし
 // したがってここには Hook が1つも無い（盤面のイベントには一切触らない）。新しい資源も作らない。
 // 呪いを別アイテムとして増やさず、必ず祝福と同じ1枚に書くのは「隠しデメリットを作らない」ため。
-import { OXYGEN_SUPPLY_PER_FLOOR, UPGRADE_SLOTS_DEFAULT, type RunState } from './run'
+import { supplyForFloor, UPGRADE_SLOTS_DEFAULT, type RunState } from './run'
 import { randInt, type Rng } from './rng'
 import type { FloorDef } from './floors'
 import type { Goal, GoalType } from './types'
@@ -46,7 +46,7 @@ export const BLESSINGS: BlessingDef[] = [
     boon: '灯が12ふえる',
     curse: '層を出るときの補給が半分になる',
     light: 12,
-    supply: () => -Math.floor(OXYGEN_SUPPLY_PER_FLOOR / 2),
+    supply: (floor) => -Math.floor(supplyForFloor(floor) / 2),
   },
   {
     id: 'first-bell',
@@ -120,7 +120,7 @@ export function takeBlessing(run: RunState, id: string) {
 
 /** その深度で層を出るときの補給（基準値に祝福・呪いを足したもの） */
 export function blessingSupply(ids: string[], floor: number): number {
-  let n = OXYGEN_SUPPLY_PER_FLOOR
+  let n = supplyForFloor(floor)
   for (const b of byId(ids)) n += b.supply?.(floor) ?? 0
   return Math.max(0, n)
 }
@@ -155,6 +155,9 @@ export function pickBlessingOptions(ids: string[], rng: Rng, n = 3, floor = 1): 
   return out
 }
 
+/** 巣灯1基あたりの胞子排出数。LevelDef.subiCharge の既定値（board.ts）で、ローグ層はこれを上書きしていない */
+const SUBI_CHARGE_DEFAULT = 4
+
 /** 課目の材料が盤に置かれた数。ここを超える要求は達成不能なので、呪いの増量の上限に使う */
 function materialCap(type: GoalType, layout: string[]): number | null {
   const count = (score: (ch: string) => number) => {
@@ -162,8 +165,11 @@ function materialCap(type: GoalType, layout: string[]): number | null {
     for (const row of layout) for (const ch of row) n += score(ch)
     return n
   }
-  if (type === 'tsutagoke') return count((ch) => (ch === 'g' ? 1 : ch === 'G' ? 2 : 0)) // 蔦苔は層の合計
+  // 蔦苔は「マスが0層になった瞬間」に1進むので、上限は層数ではなくマス数（2層のマスも1しか進まない）
+  if (type === 'tsutagoke') return count((ch) => (ch === 'g' || ch === 'G' ? 1 : 0))
   if (type === 'touhen') return count((ch) => (ch === 'h' ? 1 : 0)) // 匣1つから陶片1つ
+  if (type === 'kokeishi') return count((ch) => (ch === 'k' || ch === 'K' ? 1 : 0)) // 2層('K')でも壊れるのは1個体
+  if (type === 'spore') return count((ch) => (ch === 's' ? 1 : 0)) * SUBI_CHARGE_DEFAULT // 巣灯1基が出せる胞子の数
   return null // 色・系統は補充で無限に湧くので上限なし
 }
 

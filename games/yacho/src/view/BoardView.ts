@@ -521,9 +521,41 @@ export class BoardView {
       const eye = new Graphics()
       this.drawEye(eye, S / 2, S * 0.34, S * 0.1, 0xffd6b0)
       wrap.addChild(eye)
+    } else if (enemy.kind === 'binder') {
+      // 綴じ蟲：列を綴じる＝縦の綴じ糸。専用アートが来るまでのコード描画（PHASE2.md §5 の納品単位は未達）
+      const g = new Graphics()
+      g.roundRect(S * 0.18, 3, S * 0.64, S - 6, S * 0.16).fill({ color: 0x1d2a2e, alpha: 0.95 }).stroke({ width: 2.5, color: 0x6d8f96 })
+      for (const ty of [0.3, 0.5, 0.7]) g.moveTo(S * 0.24, S * ty).lineTo(S * 0.76, S * ty).stroke({ width: 2, color: 0x9ec8cf, alpha: 0.75 })
+      wrap.addChild(g)
+      const eye = new Graphics()
+      this.drawEye(eye, S / 2, S * 0.24, S * 0.1, 0xa8e6ef)
+      wrap.addChild(eye)
+    } else if (enemy.kind === 'bellfoot') {
+      // 鐘脚：釣鐘の胴＋残り殻の枚数だけ外側にリングを重ねる（殻が張り直されると輪が増える）
+      const g = new Graphics()
+      g.moveTo(S * 0.5, S * 0.16)
+        .lineTo(S * 0.82, S * 0.74)
+        .lineTo(S * 0.18, S * 0.74)
+        .closePath()
+        .fill({ color: 0x3a2f1c, alpha: 0.95 })
+        .stroke({ width: 2.5, color: 0xb99a52 })
+      for (let i = 0; i < enemy.shell; i++)
+        g.circle(S / 2, S * 0.52, S * (0.34 + i * 0.06)).stroke({ width: 2, color: 0xe0c070, alpha: 0.7 - i * 0.2 })
+      wrap.addChild(g)
+      const eye = new Graphics()
+      this.drawEye(eye, S / 2, S * 0.56, S * 0.1, 0xffe6a8)
+      wrap.addChild(eye)
+    } else if (enemy.kind === 'maw') {
+      // 奈落の喉：生きものというより地形。牙の並ぶ暗い裂け目
+      const g = new Graphics()
+      g.roundRect(1, S * 0.18, S - 2, S * 0.72, S * 0.1).fill({ color: 0x08090c, alpha: 0.96 }).stroke({ width: 2.5, color: 0x5a4a6b })
+      for (const tx of [0.2, 0.45, 0.7]) g.moveTo(S * tx, S * 0.24).lineTo(S * (tx + 0.12), S * 0.46).lineTo(S * (tx + 0.24), S * 0.24).fill(0xcfc2dd)
+      wrap.addChild(g)
     }
-    // HP1の小型胞子虫はバーが常に満タンで意味を成さないため出さない（画面のノイズを減らす）
-    if (enemy.maxHp > 1) this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
+    // HP1の小型胞子虫はバーが常に満タンで意味を成さないため出さない（画面のノイズを減らす）。
+    // 複数セルの身体（奈落の喉）は先頭セルにだけ出す＝reconcile が更新するのも先頭セルのバーだけ
+    const isLeadCell = enemy.cells[0]?.x === x && enemy.cells[0]?.y === y
+    if (enemy.maxHp > 1 && isLeadCell) this.attachHpBar(wrap, enemy.hp, enemy.maxHp, S * 0.72, S * 0.1, (S - S * 0.72) / 2, S * 0.06)
     // 可視化第一波①：敵セルのタップで野帳シートを開く（スワップ対象にならないセルなので入力系と衝突しない）
     wrap.eventMode = 'static'
     wrap.cursor = 'pointer'
@@ -2204,10 +2236,10 @@ export class BoardView {
         if (g && !g.destroyed) this.paintHpBar(g, en.hp, en.maxHp)
       }
     }
-    // 崩落予告の枠：telegraph を持つ裂坑掘りぶんだけ残す（他のオーバーレイと同じ帳簿照合）
+    // 予告枠：telegraph を持つ敵ぶんだけ残す（裂坑掘りの2x2／綴じ蟲の列／奈落の喉の次の相。同じ帳簿照合）
     const wantFissure = new Set<number>()
     for (const en of this.board.enemies) {
-      if (en.kind !== 'burrower' || !en.telegraph) continue
+      if (!en.telegraph) continue
       wantFissure.add(en.id)
       const fg = this.fissureG.get(en.id)
       if (!fg || fg.destroyed) this.makeFissureFrame(en.id, en.telegraph, 0)

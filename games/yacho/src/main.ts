@@ -14,7 +14,7 @@ import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
-import { BOSS_SHELL_COUNT, enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
+import { BELLFOOT_SHELL_MAX, BOSS_SHELL_COUNT, enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
 import { systemOf } from './core/hooks'
 import type { BoardEvent, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
 import { GLOSSARY, findTerm, type GlossaryEntry } from './core/glossary'
@@ -44,8 +44,8 @@ const saveRogueBest = (floor: number) => {
   if (floor > loadRogueBest()) localStorage.setItem(ROGUE_BEST_KEY, String(floor))
 }
 
-/** 層番号→テーマ疑似ID（themeForLevel流用。1-4=森/5-8=機械/9-10=結晶。ROGUE.md §6/§9） */
-const themeFloorId = (floor: number) => (floor <= 4 ? floor : floor <= 8 ? floor + 10 : floor + 20)
+/** 深度→テーマ疑似ID（themeForLevel流用）。30層化にあわせて幕ごとに絵を変える：第一幕=森／第二幕=機械／第三幕・終幕=結晶 */
+const themeFloorId = (floor: number) => (floor <= 10 ? 1 : floor <= 20 ? 11 : 21)
 
 /** 所持強化バーのアイコン：系統1色に対応する駒テクスチャキー（pieces.ts の n0〜n3。可視化第一波②） */
 const CATEGORY_ICON: Record<string, string> = { gear: 'n0', plant: 'n1', mineral: 'n2', relic: 'n3' }
@@ -430,6 +430,24 @@ function makeEnemyIconContainer(kind: EnemyKind, size: number): Container {
     g.circle(0, -size * 0.16, size * 0.1).fill(0xffd6b0)
     g.circle(0, -size * 0.16, size * 0.042).fill(0x201812)
     c.addChild(g)
+  } else if (kind === 'binder') {
+    // 綴じ蟲：盤面と同じ「縦長の胴＋横に渡る綴じ糸」
+    const g = new Graphics()
+    g.roundRect(-size * 0.28, -size * 0.42, size * 0.56, size * 0.84, size * 0.14).fill(0x1d2a2e).stroke({ width: 2, color: 0x6d8f96 })
+    for (const ty of [-0.16, 0, 0.16]) g.moveTo(-size * 0.24, size * ty).lineTo(size * 0.24, size * ty).stroke({ width: 1.6, color: 0x9ec8cf })
+    c.addChild(g)
+  } else if (kind === 'bellfoot') {
+    // 鐘脚：釣鐘の胴＋殻のリング
+    const g = new Graphics()
+    g.moveTo(0, -size * 0.36).lineTo(size * 0.34, size * 0.26).lineTo(-size * 0.34, size * 0.26).closePath().fill(0x3a2f1c).stroke({ width: 2, color: 0xb99a52 })
+    g.circle(0, 0, size * 0.4).stroke({ width: 1.6, color: 0xe0c070, alpha: 0.7 })
+    c.addChild(g)
+  } else if (kind === 'maw') {
+    // 奈落の喉：牙の並ぶ裂け目
+    const g = new Graphics()
+    g.roundRect(-size * 0.44, -size * 0.3, size * 0.88, size * 0.6, size * 0.1).fill(0x08090c).stroke({ width: 2, color: 0x5a4a6b })
+    for (const tx of [-0.34, -0.1, 0.14]) g.moveTo(size * tx, -size * 0.24).lineTo(size * (tx + 0.1), size * 0.02).lineTo(size * (tx + 0.2), -size * 0.24).fill(0xcfc2dd)
+    c.addChild(g)
   } else {
     const g = new Graphics()
     g.circle(0, 0, size * 0.42).fill(0x3a4048).stroke({ width: 2, color: 0x8a94a0 })
@@ -504,11 +522,29 @@ const ENEMY_INFO: Record<EnemyKind, EnemyInfoEntry> = {
     disruptDesc: null,
     defeatDesc: '深界で唯一、灯を直接奪う相手。長居するほど損をする',
   },
+  binder: {
+    name: '綴じ蟲',
+    oxygenDesc: null,
+    disruptDesc: `1列を予告し、${ENEMY_PERIOD.binder}手後にその列を丸ごと3手ふさぐ（その列は落ちてこない）`,
+    defeatDesc: '予告された列の中で駒を1つでも消せば綴じは止まる',
+  },
+  bellfoot: {
+    name: '鐘脚',
+    oxygenDesc: null,
+    disruptDesc: `${ENEMY_PERIOD.bellfoot}手ごとに殻を1枚張り直す（最大${BELLFOOT_SHELL_MAX}枚）`,
+    defeatDesc: '殻がある間は本体に一切通らず、1手で剥がせる殻は1枚だけ。小突き続けても張り直しに追いつかれる',
+  },
   boss: {
     name: '深匣主',
     oxygenDesc: `${ENEMY_PERIOD.boss}手ごとに灯を${OXYGEN_DRAIN.boss}奪う`,
     disruptDesc: null,
     defeatDesc: 'まず封印匣を4枚剥がす（どんな一撃でも1枚）。核が露出したら本体のHPを削る',
+  },
+  maw: {
+    name: '奈落の喉',
+    oxygenDesc: null,
+    disruptDesc: `${ENEMY_PERIOD.maw}手ごとに盤が変わる（割れる → 狭まる → 開く）。灯は1も奪わない`,
+    defeatDesc: '狭まった盤でも一手を作れるかだけが問われる。塞がったマスは3手で必ず開く',
   },
 }
 

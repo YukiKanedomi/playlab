@@ -5,19 +5,30 @@ import { makeRng, randInt, type Rng } from './rng'
 import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID, RELIC_RESONANCE_ID } from './upgrades'
 
 /**
- * ラン開始時の酸素（PLAN_LOOP.md §1.4）。1スワップ=1消費なので「最初の持ち手数」でもある。
- * SPEC_OXYGEN.md §1.1 の初期値は24だったが、層9の息喰み・層10のボスが手数と別に酸素を奪う
- * （3手ごとに-3＝実質2倍の消費）ぶんが予算に入っていなかったため、runsim 較正で34へ上げた（§10.3）。
- * さらに全層を9〜12手へ引き上げた（層5・層7が数手で終わる問題の是正）ぶん、10層ぶんの総消費が増えたので38へ。
+ * ラン開始時の灯（PLAN_LOOP.md §1.4）。1スワップ=1消費なので「最初の持ち手数」でもある。
+ * 10層構成では38だったが、30層化（PHASE2.md §1）で層の総数が3倍になったので 120シードの較正で44に置いた。
+ * この値は主に「第一幕をどこまで安全にするか」を決める（深い遭難の分布を決めるのは SUPPLY_BY_ACT の方）。
  */
-export const OXYGEN_START = 38
+export const OXYGEN_START = 44
 /**
- * 層クリアの補給。上限は設けない＝早く終えた残りがそのまま次層への貯金になる。
- * 7→8：予算（START + 9回ぶんの補給）を保ったまま補給を上げると、深層の残酸素だけが下がる
- * （残酸素_n = START + (n-1)×補給 − 累積消費 なので、予算固定なら補給1上げるごとに層8の残量が2減る）。
- * ただし「補給 < 各層の消費」でないと酸素が細らないので、全層が9手以上になるまで上げられなかった（§10.3）。
+ * 層クリアの補給の基準値（＝第一幕の値）。上限は設けない＝早く終えた残りがそのまま次層への貯金になる。
+ * 実際に使う値は深度で変わるので、必ず supplyForFloor() / blessingSupply() を通すこと。
  */
-export const OXYGEN_SUPPLY_PER_FLOOR = 8
+export const OXYGEN_SUPPLY_PER_FLOOR = 12
+
+/**
+ * 深度ごとの補給（PHASE2.md §1 の三幕構成）。補給点では光胞子から灯を継ぐ（§2.7）が、
+ * 深くなるほど光胞子が痩せて継げる量が減る。第一幕＝貯める／第二幕＝細り始める／第三幕＝尽きる。
+ *
+ * 30層を平らな補給で通すと**強いビルドの消費が補給を下回り、二度と細らなくなる**（120シードの実測で
+ * 39%が一度も危険域に入らないまま深度30へ到達した）。層あたりの手数は6〜12に縛られていて上げられず、
+ * 灯喰みの奪う量も「先に落とせば効かない」ので強いビルドには課金されない。幕ごとに補給を落とすのが
+ * 「深いほど細る」を全ビルドに効かせる唯一の手だった（较正の記録：assets_src/_runsim.txt）。
+ */
+export const SUPPLY_BY_ACT = [12, 10, 3]
+export function supplyForFloor(floor: number): number {
+  return SUPPLY_BY_ACT[Math.min(SUPPLY_BY_ACT.length - 1, Math.max(0, Math.floor((floor - 1) / 10)))]
+}
 /** HUD塗りの満タン基準（表示専用。貯金で超えたら満タンに丸める） */
 export const OXYGEN_GAUGE_FULL = OXYGEN_START
 /** 警告（炎ゆらぎ＋数字の朱化）。絶対量で判定する */

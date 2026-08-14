@@ -1,17 +1,18 @@
 // 進行曲線の計測スクリプト（夜間監査[B][D]対応）。
-// 10層を通しで自動プレイし、深度（層）別に次を記録する：
+// FLOORS の全層（30層＋終幕31）を通しで自動プレイし、深度別に次を記録する：
 //   1手あたりの強化発火数 / 最大連鎖 / 1手最大破壊数 / swarm伝播による撃破数（ビルド由来と分離） / 残酸素 / 到達率
 // ドラフトは main.ts の pickDraftOptions と同じ規則（UPGRADE_CATEGORY一致 or フック種一致＝シナジー2枠＋無関係1枠）を
 // ここに複製して使う。main.ts/view は Pixi 依存でNodeから直接importできない上、core は元々Pixi非依存の設計
 // （board.tsの冒頭コメント参照）なので、ロジックだけを同等実装として core 側に置く（UIコードは一切importしない）。
 //
-// テストとして常時実行はしない（100+シードのフル10層プレイは重いため）。単発で明示的に実行する：
+// テストとして常時実行はしない（100+シードのフル31層プレイは重いため）。単発で明示的に実行する：
 //   npx esbuild games/yacho/src/core/runsim.ts --bundle --platform=node --format=esm --outfile=<tmp>/runsim.mjs
 //   node <tmp>/runsim.mjs [seeds] > games/yacho/assets_src/_runsim.txt
 // （seeds省略時は120。このファイル自体はNode専用ツールで、main.ts/viewからは一切importされない）
 import { pathToFileURL } from 'node:url'
 import { Board, H, W } from './board'
-import { createRunState, discardUpgrade, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './run'
+import { createRunState, discardUpgrade, supplyForFloor, type RunState } from './run'
+import { applyBlessingsToFloor, blessingSupply, isBlessingFloor, pickBlessingOptions, takeBlessing } from './blessings'
 import { FLOORS, type FloorDef } from './floors'
 import { UPGRADES, type UpgradeDef } from './upgrades'
 import { makeRng, randInt, type Rng } from './rng'
@@ -64,6 +65,8 @@ function targetCells(b: Board): XY[] {
       if (c.ground > 0 && want('tsutagoke')) out.push({ x, y })
       if ((c.block?.type === 'hako' || c.block?.type === 'touhen') && want('touhen')) out.push({ x, y })
       if (c.block?.type === 'kokeishi' && want('kokeishi')) out.push({ x, y })
+      // 光胞子（第二幕の新課目）：巣灯を叩かないと胞子が生まれないので、巣灯そのものを狙い先に入れる
+      if (c.block?.type === 'subi' && want('spore')) out.push({ x, y })
       const p = c.piece
       if (p?.kind === 'normal' && (wantColors.has(p.color) || wantSystems.has(systemOf(p.color)))) out.push({ x, y })
     }
@@ -131,20 +134,28 @@ export interface SeedResult {
   moves: MoveSample[]
   drafts: DraftSample[]
   clearedFloors: number[] // クリアできた層番号
-  endOxygenByFloor: Map<number, number> // 層クリア直後（補給+7を含む）の酸素
+  endOxygenByFloor: Map<number, number> // 層クリア直後（補給を含む）の灯
   deathFloor: number | null // 力尽きた層（run-over）。生存クリアなら null
   stuck: boolean // 有効手が尽きる等の異常系で打ち切った（バランスではなくソルバー側の限界）
-  /** 層8以降で観測した酸素の最小値（層8へ到達しなければ null）。
+  /** 深度20以降で観測した灯の最小値（深度20へ到達しなければ null）。
    *  §10.3 の「残酸素平均」は生存者だけの平均＝遭難したランが除かれるぶん必ず上振れするので、
    *  「深層で本当に酸素が危なくなったか」は遭難ランも含むこの実測最小値で見る。 */
   minOxygenDeep: number | null
-  /** 10層クリアしたランが最後に残していた酸素（層10クリアの補給+7を除いた実残量）。クリアできなければ null */
+  /** 終幕まで踏破したランが最後に残していた灯（最終層の補給を除いた実残量）。踏破できなければ null */
   finalOxygen: number | null
 }
 
-/** 1シードぶん、10層を通しで自動プレイする */
+/** 1シードぶん、FLOORS の全層（30層＋終幕）を通しで自動プレイする */
 export function simulateSeed(seed: number): SeedResult {
   const run = createRunState(undefined, makeRng(seed))
+  // 祝福はラン開始時に1つ、深度10/20の幕主のあとに各1つ（PHASE2.md §3）。main.ts と同じ規則をここでも通す
+  // ＝祝福を計測に入れないと、補給・課目・盤面形状が実プレイと違う値のまま較正することになる
+  const blessRng = makeRng((seed ^ 0x9e3779b9) >>> 0)
+  const takeOneBlessing = (floor: number) => {
+    const opts = pickBlessingOptions(run.blessings, blessRng, 3, floor)
+    if (opts.length) takeBlessing(run, opts[randInt(blessRng, opts.length)].id)
+  }
+  takeOneBlessing(1)
   const moves: MoveSample[] = []
   const drafts: DraftSample[] = []
   // 知見ごとの発火回数（ラン通算）。捨てる1つを決める規則がこれだけを見る
@@ -158,10 +169,12 @@ export function simulateSeed(seed: number): SeedResult {
   let stuck = false
   let minOxygenDeep: number | null = null
 
-  for (let floor = 1; floor <= 10; floor++) {
+  for (let floor = 1; floor <= FLOORS.length; floor++) {
     run.floor = floor
     const floorSeed = (seed + floor * 7919) | 0
-    const board = new Board(buildFloorLevelDef(floor, floorSeed, FLOORS[floor - 1]), run, FLOORS[floor - 1])
+    // 祝福・呪いは課目と盤面形状も書き換える（main.ts:1352 と同じ経路を通す）
+    const def = applyBlessingsToFloor(FLOORS[floor - 1], run.blessings)
+    const board = new Board(buildFloorLevelDef(floor, floorSeed, def), run, def)
     countFires(board.initEvents) // 採録時のおまけ（starter）もその知見の働きとして数える
     const moveRng = makeRng((floorSeed ^ 0x5bd1e995) >>> 0) // 盤面seedとは別系統の決定的乱数（手選択・ドラフト選択用）
     let cleared = false
@@ -186,7 +199,7 @@ export function simulateSeed(seed: number): SeedResult {
         swarmPropKills,
         buildKills: Math.max(0, totalDefeated - swarmPropKills),
       })
-      if (floor >= 8) minOxygenDeep = minOxygenDeep === null ? run.oxygen : Math.min(minOxygenDeep, run.oxygen)
+      if (floor >= 20) minOxygenDeep = minOxygenDeep === null ? run.oxygen : Math.min(minOxygenDeep, run.oxygen)
       // main.ts:handleFloorResult と同じ優先順位（同一手でクリアと敗北が両方成立してもクリア扱い）
       cleared = evs.some((e) => e.t === 'floor-clear')
       over = !cleared && evs.some((e) => e.t === 'run-over')
@@ -197,8 +210,9 @@ export function simulateSeed(seed: number): SeedResult {
       break
     }
     clearedFloors.push(floor)
-    endOxygenByFloor.set(floor, run.oxygen) // 資源はHPから酸素へ一本化（PLAN_LOOP.md §1.4）。補給+7を含んだ値
-    if (floor < 10) {
+    endOxygenByFloor.set(floor, run.oxygen) // 資源はHPから酸素へ一本化（PLAN_LOOP.md §1.4）。補給を含んだ値
+    if (isBlessingFloor(floor)) takeOneBlessing(floor) // 幕主のあとに祝福を1つ（深度10/20）
+    if (floor < FLOORS.length) {
       const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
       const options = pickDraftOptions(run.upgrades, makeRng((seed + floor * 104729 + 17) | 0), floor)
       const choice = pickDraftChoice(owned, options, moveRng)
@@ -213,7 +227,7 @@ export function simulateSeed(seed: number): SeedResult {
       run.upgrades.push(choice.id)
     }
   }
-  const won = clearedFloors.includes(10)
+  const won = clearedFloors.includes(FLOORS.length)
   return {
     seed,
     moves,
@@ -223,7 +237,7 @@ export function simulateSeed(seed: number): SeedResult {
     deathFloor,
     stuck,
     minOxygenDeep,
-    finalOxygen: won ? run.oxygen - OXYGEN_SUPPLY_PER_FLOOR : null,
+    finalOxygen: won ? run.oxygen - blessingSupply(run.blessings, FLOORS.length) : null,
   }
 }
 
@@ -260,7 +274,7 @@ export interface FloorAgg {
 
 export function aggregate(results: SeedResult[]): FloorAgg[] {
   const out: FloorAgg[] = []
-  for (let floor = 1; floor <= 10; floor++) {
+  for (let floor = 1; floor <= FLOORS.length; floor++) {
     const reached = results.filter((r) => r.clearedFloors.includes(floor) || r.deathFloor === floor).length
     const cleared = results.filter((r) => r.clearedFloors.includes(floor)).length
     const endOxygens = results.filter((r) => r.clearedFloors.includes(floor)).map((r) => endOxygenFor(r, floor))
@@ -271,7 +285,7 @@ export function aggregate(results: SeedResult[]): FloorAgg[] {
       reached,
       cleared,
       avgEndOxygen: endOxygens.length ? avg(endOxygens) : null,
-      avgEndOxygenPreSupply: endOxygens.length ? avg(endOxygens) - OXYGEN_SUPPLY_PER_FLOOR : null,
+      avgEndOxygenPreSupply: endOxygens.length ? avg(endOxygens) - supplyForFloor(floor) : null,
       moveCount: moves.length,
       avgMovesPerFloor: reached ? moves.length / reached : 0,
       avgFires: avg(moves.map((m) => m.fires)),
@@ -296,10 +310,10 @@ function endOxygenFor(r: SeedResult, floor: number): number {
 // 「ぎりぎりクリアできないが次はいいビルドが作れる気がする」は勝率では測れない。深度5で尽きるのと
 // 深度9で尽きるのでは意味が違うので、**遭難した深度の分布**を主指標として別に集計する。
 
-/** 終盤とみなす最も浅い深度＝最終3層の先頭 */
-const LATE_FROM = Math.max(1, FLOORS.length - 2)
-/** 中央値の合格帯。PHASE2 は30層で20〜24を目標にしているので、層数の比でいまの層数へ移す */
-const MEDIAN_BAND: [number, number] = [Math.round((FLOORS.length * 20) / 30), Math.round((FLOORS.length * 24) / 30)]
+/** 終盤とみなす最も浅い深度。PHASE2 §2.5①「深度25以上での遭難が全体の35%以上」の 25 */
+const LATE_FROM = 25
+/** 中央値の合格帯。PHASE2 §2.5①「遭難深度の中央値 20〜24」 */
+const MEDIAN_BAND: [number, number] = [20, 24]
 
 export interface DeathDepthStats {
   /** 遭難したランの遭難深度の中央値。1件も遭難しなければ null */
@@ -339,66 +353,65 @@ export function verdictLines(results: SeedResult[]): string[] {
   const mark = (ok: boolean) => (ok ? 'OK' : 'NG')
   const out: string[] = []
 
-  const totals = results.map((r) => r.moves.length)
-  const avgTotal = avg(totals)
-  out.push(`(a) 総手数 85〜100        : ${mark(avgTotal >= 85 && avgTotal <= 100)}  平均 ${avgTotal.toFixed(1)}`)
+  // PHASE2 §2.5①（惜しい負けを量産する）。30層化で最上位の合否指標になった2本を先頭に置く
+  const dd = deathDepthStats(results)
+  const medOk = dd.median !== null && dd.median >= dd.medianBand[0] && dd.median <= dd.medianBand[1]
+  out.push(`(a) 遭難深度の中央値 20〜24 : ${mark(medOk)}  ${dd.median ?? '-'}（遭難${dd.deaths}件）`)
+  out.push(`(b) 深度25以上の遭難 35%以上: ${mark(dd.latePct >= 35)}  全${results.length}ラン中${dd.lateDeaths}件=${dd.latePct.toFixed(1)}%`)
 
   const badFloors = aggs.filter((a) => a.reached > 0 && (a.avgMovesPerFloor < 6 || a.avgMovesPerFloor > 12))
   out.push(
-    `(b) 手数/層 各層6〜12      : ${mark(badFloors.length === 0)}  ` +
-      (badFloors.length ? badFloors.map((a) => `層${a.floor}=${a.avgMovesPerFloor.toFixed(1)}`).join(' ') : '全層が帯内'),
+    `(c) 手数/層 各層6〜12       : ${mark(badFloors.length === 0)}  ` +
+      (badFloors.length ? badFloors.map((a) => `深度${a.floor}=${a.avgMovesPerFloor.toFixed(1)}`).join(' ') : '全層が帯内'),
   )
 
-  const pre = aggs.slice(0, 9).map((a) => a.avgEndOxygenPreSupply ?? 0)
-  const rises = pre.map((v, i) => (i > 0 && v > pre[i - 1] ? `層${i}→${i + 1}(+${(v - pre[i - 1]).toFixed(1)})` : '')).filter(Boolean)
-  out.push(`(c1) 残酸素(補給前) 単調減少: ${mark(rises.length === 0)}  ${rises.length ? rises.join(' ') : `層1 ${pre[0].toFixed(1)} → 層9 ${pre[8].toFixed(1)}`}`)
-  const f8 = pre[7]
-  const f9 = pre[8]
-  out.push(`(c2) 層8〜9 が10以下       : ${mark(f8 <= 10 && f9 <= 10)}  層8 ${f8.toFixed(1)} / 層9 ${f9.toFixed(1)}`)
-
-  const winRate = (results.filter((r) => r.clearedFloors.includes(10)).length / results.length) * 100
-  out.push(`(d) クリア率 30〜60%       : ${mark(winRate >= 30 && winRate <= 60)}  ${winRate.toFixed(1)}%`)
+  // 幕をまたいで灯が細るか。**必ず同じ集団で追う**（層ごとの平均は「その層をクリアできた者」だけの平均で、
+  // 細ったランが次の層から消えるぶん必ず上振れする＝細っているのに数字が上がる）。
+  // 集団＝深度20を抜けたラン。その者たちの深度10・深度20の残灯（補給前）と、第三幕での最小値を並べる
+  const cohort = results.filter((r) => r.clearedFloors.includes(20))
+  const preAt = (f: number) => avg(cohort.map((r) => (r.endOxygenByFloor.get(f) ?? 0) - supplyForFloor(f)))
+  const act3Min = avg(cohort.map((r) => r.minOxygenDeep ?? 0))
+  const thinning = cohort.length > 0 && preAt(10) > act3Min && preAt(20) > act3Min
+  out.push(
+    `(d) 幕をまたいで灯が細る    : ${mark(thinning)}  ` +
+      `深度20到達組(${cohort.length}件) 深度10 ${preAt(10).toFixed(1)} → 深度20 ${preAt(20).toFixed(1)} → 第三幕の最小 ${act3Min.toFixed(1)}`,
+  )
 
   const stuckCount = results.filter((r) => r.stuck).length
-  out.push(`(e) stuck 0件              : ${mark(stuckCount === 0)}  ${stuckCount}件`)
+  out.push(`(e) stuck 0件               : ${mark(stuckCount === 0)}  ${stuckCount}件`)
 
   const propBad = aggs.filter((a) => a.moveCount > 0 && a.avgSwarmPropKills > a.avgBuildKills)
-  out.push(`(f) swarm伝播 ≦ build撃破  : ${mark(propBad.length === 0)}  ${propBad.length ? propBad.map((a) => `層${a.floor}`).join(' ') : '全層で成立'}`)
+  out.push(`(f) swarm伝播 ≦ build撃破   : ${mark(propBad.length === 0)}  ${propBad.length ? propBad.map((a) => `深度${a.floor}`).join(' ') : '全層で成立'}`)
 
-  // ここから下は §10.3 に無い追加指標。(c2) の「残酸素平均」は生存者だけの平均なので、
-  // 遭難ランが除かれるぶん必ず上振れして「深層で酸素が危ないか」を測れない。遭難ランも数える2本を足す。
+  // 遭難ランも含む実測最小値。生存者だけの平均は必ず上振れして「深層で灯が危ないか」を測れない
   const deep = results.map((r) => r.minOxygenDeep).filter((v): v is number => v !== null)
   const scared = deep.filter((v) => v <= 8).length
   const scaredPct = deep.length ? (scared / deep.length) * 100 : 0
-  out.push(`(g) 層8以降に警告域(≦8)へ : ${mark(scaredPct >= 50)}  層8到達${deep.length}件中${scared}件=${scaredPct.toFixed(1)}%`)
+  out.push(`(g) 深度20以降に警告域(≦8)へ: ${mark(scaredPct >= 50)}  深度20到達${deep.length}件中${scared}件=${scaredPct.toFixed(1)}%`)
 
-  const finals = results.map((r) => r.finalOxygen).filter((v): v is number => v !== null).sort((a, b) => a - b)
-  const medFinal = percentile(finals, 0.5)
-  out.push(`(h) クリア時の残酸素 中央値 : ${mark(finals.length > 0 && medFinal <= 12)}  ${finals.length ? medFinal : '-'}（≦12なら「ぎりぎり勝った」）`)
-
-  // PHASE2 §2（知見の枠）の合否：①発火/手が深層で頭打ちになるか ②後半の採録で入れ替えが起きるか
-  const firesOf = (f: number) => aggs[f - 1].avgFires
-  const midFires = (firesOf(6) + firesOf(7)) / 2
-  const deepFires = (firesOf(8) + firesOf(9) + firesOf(10)) / 3
+  // PHASE2 §2（知見の枠）の合否：①発火/手が深層で頭打ちになるか ②後半の採録で実際に入れ替えが起きるか。
+  // 採録は30回近くあるので、ここで初めて「枠8が効いているか」を評価できる（PHASE2 §2 の要求）
+  const firesIn = (from: number, to: number) => avg(aggs.filter((a) => a.floor >= from && a.floor <= to && a.moveCount > 0).map((a) => a.avgFires))
+  const midFires = firesIn(9, 12)
+  const deepFires = firesIn(27, 30)
   const ratio = midFires > 0 ? deepFires / midFires : 0
-  out.push(`(i) 発火/手が深層で頭打ち  : ${mark(ratio <= 1.2)}  層6-7平均 ${midFires.toFixed(2)} → 層8-10平均 ${deepFires.toFixed(2)}（比 ${ratio.toFixed(2)}。1.20以下を頭打ちとみなす）`)
+  out.push(`(h) 発火/手が深層で頭打ち   : ${mark(ratio <= 1.2)}  深度9-12平均 ${midFires.toFixed(2)} → 深度27-30平均 ${deepFires.toFixed(2)}（比 ${ratio.toFixed(2)}）`)
 
-  const lateDrafts = results.flatMap((r) => r.drafts).filter((d) => d.floor >= 6)
+  const lateDrafts = results.flatMap((r) => r.drafts).filter((d) => d.floor >= 10)
   const swapped = lateDrafts.filter((d) => d.discardedId !== null).length
   const swapPct = lateDrafts.length ? (swapped / lateDrafts.length) * 100 : 0
-  out.push(`(j) 後半の採録が入れ替えに : ${mark(swapPct >= 50)}  層6以降の採録 ${swapped}/${lateDrafts.length}=${swapPct.toFixed(1)}%`)
+  out.push(`(i) 後半の採録が入れ替えに  : ${mark(swapPct >= 50)}  深度10以降の採録 ${swapped}/${lateDrafts.length}=${swapPct.toFixed(1)}%`)
 
-  // PHASE2 §2.5①（惜しい負けを量産する）の合否。勝率(d)とは別に、遭難した深度そのものを見る
-  const dd = deathDepthStats(results)
-  const medOk = dd.median !== null && dd.median >= dd.medianBand[0] && dd.median <= dd.medianBand[1]
-  out.push(
-    `(k) 遭難深度の中央値 ${dd.medianBand[0]}〜${dd.medianBand[1]}   : ${mark(medOk)}  ` +
-      `${dd.median ?? '-'}（遭難${dd.deaths}件。30層での目標20〜24を層数の比で移した帯）`,
-  )
-  out.push(
-    `(l) 終盤(層${dd.lateFrom}以降)の遭難35%以上: ${mark(dd.latePct >= 35)}  ` +
-      `全${results.length}ラン中${dd.lateDeaths}件=${dd.latePct.toFixed(1)}%`,
-  )
+  // 到達率は合否ではなく参考値（PHASE2 §1「深度30への到達は難しくてよい」）
+  const deepClear = (results.filter((r) => r.clearedFloors.includes(30)).length / results.length) * 100
+  const allClear = (results.filter((r) => r.clearedFloors.includes(FLOORS.length)).length / results.length) * 100
+  out.push(`(参考) 深度30クリア率        : ${deepClear.toFixed(1)}%　終幕(深度31)まで踏破 ${allClear.toFixed(1)}%`)
+
+  const finals = results.map((r) => r.finalOxygen).filter((v): v is number => v !== null).sort((a, b) => a - b)
+  out.push(`(参考) 踏破時の残灯 中央値   : ${finals.length ? percentile(finals, 0.5) : '-'}`)
+
+  const avgTotal = avg(results.map((r) => r.moves.length))
+  out.push(`(参考) 1ランの総手数 平均    : ${avgTotal.toFixed(1)}`)
   return out
 }
 
@@ -409,12 +422,12 @@ const pad = (s: string | number, w: number): string => String(s).padStart(w)
 export function formatReport(results: SeedResult[]): string {
   const aggs = aggregate(results)
   const total = results.length
-  const winRate = results.filter((r) => r.clearedFloors.includes(10)).length / total
+  const winRate = results.filter((r) => r.clearedFloors.includes(30)).length / total
   const stuckCount = results.filter((r) => r.stuck).length
   const lines: string[] = []
-  lines.push(`シード数: ${total}　勝率(10層クリア): ${(winRate * 100).toFixed(1)}%　ソルバー行き詰まり: ${stuckCount}件`)
+  lines.push(`シード数: ${total}　深度30クリア率: ${(winRate * 100).toFixed(1)}%　ソルバー行き詰まり: ${stuckCount}件`)
   const totalMoves = results.map((r) => r.moves.length).sort((a, b) => a - b)
-  lines.push(`総手数: 平均 ${avg(totalMoves).toFixed(1)} / 中央値 ${percentile(totalMoves, 0.5)} （目標 85〜100）`)
+  lines.push(`総手数: 平均 ${avg(totalMoves).toFixed(1)} / 中央値 ${percentile(totalMoves, 0.5)}`)
   // どこで酸素が尽きたか＝較正の主情報（クリア率だけでは「どの層が重いか」が分からない）
   const deaths = new Map<number, number>()
   for (const r of results) if (r.deathFloor !== null) deaths.set(r.deathFloor, (deaths.get(r.deathFloor) ?? 0) + 1)
@@ -422,10 +435,10 @@ export function formatReport(results: SeedResult[]): string {
   lines.push(`遭難した層: ${deathHist.length ? deathHist.join('　') : 'なし'}`)
   // 遭難深度の分布（PHASE2 §2.5①）。勝率より上位の主指標なのでヒストグラムの直後に要約を置く
   const dd = deathDepthStats(results)
-  lines.push(`遭難深度: 中央値 ${dd.median ?? '-'}（目標 ${dd.medianBand[0]}〜${dd.medianBand[1]}）　終盤(層${dd.lateFrom}以降)の遭難 ${dd.lateDeaths}/${total}=${dd.latePct.toFixed(1)}%（目標 35%以上）`)
+  lines.push(`遭難深度: 中央値 ${dd.median ?? '-'}（目標 ${dd.medianBand[0]}〜${dd.medianBand[1]}）　深度${dd.lateFrom}以上の遭難 ${dd.lateDeaths}/${total}=${dd.latePct.toFixed(1)}%（目標 35%以上）`)
   // 知見の枠（PHASE2 §2）：どの層の採録から「取る＝捨てる」になったかを層別に出す
   const swapHist: string[] = []
-  for (let f = 1; f <= 9; f++) {
+  for (let f = 1; f < FLOORS.length; f++) {
     const ds = results.flatMap((r) => r.drafts).filter((d) => d.floor === f)
     if (!ds.length) continue
     const n = ds.filter((d) => d.discardedId !== null).length
@@ -433,7 +446,7 @@ export function formatReport(results: SeedResult[]): string {
   }
   lines.push(`採録が入れ替えになった割合: ${swapHist.join('　')}`)
   lines.push('')
-  lines.push('--- 較正の合否（SPEC_OXYGEN.md §10.3）---')
+  lines.push('--- 較正の合否（PHASE2.md §2.5① / §2）---')
   lines.push(...verdictLines(results))
   lines.push('')
   lines.push(

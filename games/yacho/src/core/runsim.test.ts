@@ -24,15 +24,15 @@ describe('遭難深度の分布', () => {
   })
 
   it('終盤の割合は全ランが分母（PHASE2「全体の35%以上」）', () => {
-    // 層8以降の遭難が2件、全4ラン＝50%
-    const stats = deathDepthStats([res(8), res(10), res(3), res(null)])
-    expect(stats.lateFrom).toBe(8) // 10層構成なら最終3層＝層8〜10
+    // 深度25以上の遭難が2件、全4ラン＝50%
+    const stats = deathDepthStats([res(25), res(30), res(3), res(null)])
+    expect(stats.lateFrom).toBe(25) // PHASE2 §2.5①「深度25以上」
     expect(stats.lateDeaths).toBe(2)
     expect(stats.latePct).toBeCloseTo(50)
   })
 
   it('序盤で尽きるランばかりなら終盤割合が下がる（＝惜しくない）', () => {
-    const stats = deathDepthStats([res(3), res(4), res(5), res(9)])
+    const stats = deathDepthStats([res(3), res(4), res(5), res(26)])
     expect(stats.latePct).toBeCloseTo(25)
     expect(stats.median).toBe(5)
   })
@@ -43,7 +43,7 @@ describe('遭難深度の分布', () => {
     expect(stats.latePct).toBe(0)
   })
 
-  it('中央値の合格帯は30層の20〜24を層数の比で移したもの', () => {
-    expect(deathDepthStats([]).medianBand).toEqual([7, 8]) // 10層構成
+  it('中央値の合格帯は PHASE2 §2.5① の 20〜24', () => {
+    expect(deathDepthStats([]).medianBand).toEqual([20, 24])
   })
 })

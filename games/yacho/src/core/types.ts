@@ -24,8 +24,14 @@ export type Block =
   | { type: 'enemy'; enemyId: number } // ローグ拡張：敵の身体セル（Board.enemiesを参照。ROGUE.md §5）
   | { type: 'seal'; turnsLeft: number } // ローグ拡張：穴潜みが封鎖したセル（残りターンで自動解除。ROGUE.md §5）
 
-/** 敵の種類（ROGUE.md §5）。swarm=サンドバッグ（小型胞子虫）。第3波：ROGUE2.md §3/§11（連鎖で一掃する快感の主役） */
-export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'swarm' | 'breathstealer' | 'boss'
+/**
+ * 敵の種類（ROGUE.md §5）。swarm=サンドバッグ（小型胞子虫）。第3波：ROGUE2.md §3/§11（連鎖で一掃する快感の主役）。
+ * 30層化（PHASE2.md §1）で幕ごとに1種ずつ追加した：
+ *   binder=綴じ蟲（第二幕。列を封鎖する＝重力を当てにさせない）
+ *   bellfoot=鐘脚（第三幕。殻を張り直す＝小突きを禁じ、一手へ集約させる）
+ *   maw=奈落の喉（終幕の特殊ラスボス。盤面の使用可能域そのものを相ごとに変える）
+ */
+export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'swarm' | 'breathstealer' | 'binder' | 'bellfoot' | 'boss' | 'maw'
 
 export interface Cell {
   hole: boolean // 盤外の欠け
@@ -113,6 +119,8 @@ export type BoardEvent =
   | { t: 'fissure-telegraph'; cells: XY[]; id: number } // 裂坑掘り：崩落予告の2x2
   | { t: 'fissure-averted'; id: number } // 予告の中断
   | { t: 'boss-shell-broken'; id: number; left: number } // ボス：封印匣を1枚剥がした
+  | { t: 'shell-raised'; id: number; left: number } // 鐘脚：殻を1枚張り直した
+  | { t: 'shell-peeled'; id: number; left: number } // 鐘脚：殻を1枚剥がした（本体HPには通っていない）
   | { t: 'boss-phase'; id: number; phase: 2; freed: XY[] } // ボス：核が露出し身体が縮む
   | { t: 'oxygen-spent'; left: number } // 1手ぶんの消費(-1)。不正手では出ない
   | { t: 'oxygen-refill'; amount: number; left: number } // 層クリアの補給
