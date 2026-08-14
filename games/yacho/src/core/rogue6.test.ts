@@ -56,7 +56,7 @@ describe('模倣の粘菌（夜間監査[C]1：関数クロージャではなく
     setPieces(b, ['21223131', ...inert().slice(1)])
     const ev1 = b.swap({ x: 0, y: 0 }, { x: 1, y: 0 })
     expect(ev1.some((e) => e.t === 'upgrade-fire' && e.id === 'mining-habit')).toBe(true)
-    expect(enemy.hp).toBe(8 - 2)
+    expect(enemy.hp).toBe(6 - 2) // 岩殻獣のHPは6（SPEC_OXYGEN.md §1.4 で 8→6）。採掘慣れの-2は不変
     // 2手目（別の swap 呼び出し＝別の ev 配列）：遺物3連を直接設置し、無関係な1手で拾わせる。
     // 模倣の粘菌が発火し、直前の採掘慣れ（1手目に発動）をもう一度「今のev・今のctx」で再実行するはず。
     // 修正前は発生時の古いev（ev1、既に呼び出し元へ返却済み）を握った関数を実行していたため、
@@ -70,7 +70,7 @@ describe('模倣の粘菌（夜間監査[C]1：関数クロージャではなく
     // 模倣の粘菌が「採掘慣れ」を再現した証拠：ev2自身にupgrade-fire(mining-habit)とenemy-damageが積まれている
     expect(ev2.some((e) => e.t === 'upgrade-fire' && e.id === 'mining-habit')).toBe(true)
     expect(ev2.some((e) => e.t === 'enemy-damage' && e.id === enemy.id)).toBe(true)
-    expect(enemy.hp).toBe(8 - 2 - 2) // 1手目の-2 + 再現された-2
+    expect(enemy.hp).toBe(6 - 2 - 2) // 1手目の-2 + 再現された-2
   })
 })
 
@@ -232,7 +232,8 @@ describe('スターター量を1個に統一（夜間監査[C]10/[D]強化側4�
 describe('スターター配置：本体をすぐ試せる位置（夜間監査[C]10）', () => {
   it('毒胞子のスターター胞子は敵のとなりに置かれる', () => {
     const run = createRunState(['toxic-spore'])
-    const b = new Board(plain(), run, FLOORS[0])
+    // 層1は敵ゼロになった（§1.5）ので、敵のいる層2（swarm×4）で「敵のとなりに置く」を見る
+    const b = new Board(plain(), run, FLOORS[1])
     let spot: XY | null = null
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b.at(x, y)?.sporeToken) spot = { x, y }
     expect(spot).not.toBeNull()

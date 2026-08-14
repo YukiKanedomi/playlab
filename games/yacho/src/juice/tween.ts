@@ -9,6 +9,14 @@ export const easeOutBack: Ease = (t) => {
   const c3 = c1 + 1
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
 }
+/** 重力落下。位置 x ∝ t² の実挙動そのもの（easeInCubic は溜めが強すぎて「浮いて見える」） */
+export const easeInQuad: Ease = (t) => t * t
+/** 控えめオーバーシュート（約5%）。標準の easeOutBack（約10%）は駒には跳ねすぎる */
+export const easeOutBackSoft: Ease = (t) => {
+  const c1 = 0.9
+  const c3 = c1 + 1
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2)
+}
 export const easeOutBounce: Ease = (t) => {
   const n1 = 7.5625
   const d1 = 2.75

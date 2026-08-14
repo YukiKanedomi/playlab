@@ -1,4 +1,5 @@
 // 盤面の型定義。駒・障害物は「HPを持つセル要素」に統一（DESIGN.md §5）。
+import type { System } from './hooks' // 型のみの参照＝実行時の循環は起きない
 
 /** 通常駒の色。0陽盤(琥珀) 1芽石(翡翠) 2雫瓶(空) 3月角(菫) 4花石(珊瑚) */
 export type Color = 0 | 1 | 2 | 3 | 4
@@ -24,7 +25,7 @@ export type Block =
   | { type: 'seal'; turnsLeft: number } // ローグ拡張：穴潜みが封鎖したセル（残りターンで自動解除。ROGUE.md §5）
 
 /** 敵の種類（ROGUE.md §5）。swarm=サンドバッグ（小型胞子虫）。第3波：ROGUE2.md §3/§11（連鎖で一掃する快感の主役） */
-export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'swarm' | 'boss'
+export type EnemyKind = 'rockshell' | 'sporeling' | 'burrower' | 'swarm' | 'breathstealer' | 'boss'
 
 export interface Cell {
   hole: boolean // 盤外の欠け
@@ -33,19 +34,22 @@ export interface Cell {
   block: Block | null
   sporeToken?: boolean // ローグ拡張：設置型の胞子トークン（既存 spore 駒とは別物。RunState併用時のみ使用。ROGUE.md §3）
   armored?: boolean // ローグ拡張：岩殻獣が付与する甲殻。1回分の追加破壊を要求する（ROGUE.md §5）
-  poisonSpore?: boolean // ローグ拡張：胞子獣が毒胞子化した駒。消すとプレイヤーHP-1（ROGUE.md §5）
+  preyMark?: boolean // 喰み蟲が次に食べる駒の印。この駒を消すと追い払える（ROGUE.md §5）
 }
 
 export type GoalType =
   | 'color' // 指定色を規定数
+  | 'system' // 系統（植物は色1と色4の両方が進む）
   | 'kokeishi'
   | 'tsutagoke'
   | 'touhen'
   | 'spore'
+  | 'enemy-kill' // 敵の撃破数
 
 export interface Goal {
   type: GoalType
   color?: Color
+  system?: System // type==='system' のときのみ
   count: number
 }
 
@@ -82,7 +86,8 @@ export type BoardEvent =
   | { t: 'spore-collected'; at: XY }
   | { t: 'fall'; from: XY; to: XY }
   | { t: 'refill'; at: XY; piece: Piece }
-  | { t: 'goal-progress'; goal: Goal; done: number }
+  // index=Board.goals の添字（HUDカウンタの同定用）／at=進捗を生んだセル（収集演出の始点）
+  | { t: 'goal-progress'; goal: Goal; index: number; done: number; at: XY }
   // 勝利シーケンス（RESEARCH §5: 残手数ドレイン→特殊駒変換→自動起爆）
   | { t: 'win-drain'; movesLeft: number; convertAt: XY | null }
   | { t: 'win-detonate-begin' }
@@ -100,16 +105,20 @@ export type BoardEvent =
   | { t: 'enemy-defeated'; id: number; cells: XY[] } // 敵撃破。身体セルは開放され重力/補充で埋まる
   | { t: 'armor-applied'; at: XY; id: number } // 岩殻獣：鉱物1つに甲殻を付与（id=行動主の敵ID。可視化第一波：インテント予告に使用）
   | { t: 'armor-broken'; at: XY } // 甲殻セルへの1回目の破壊。駒はまだ消えない
-  | { t: 'spore-poisoned'; at: XY; id: number } // 胞子獣：植物1駒を毒胞子化（idは同上）
-  | { t: 'poison-triggered'; at: XY; playerHpLeft: number } // 毒胞子化した駒を消してプレイヤーHP-1
-  | { t: 'cell-sealed'; at: XY; turns: number; id: number } // 穴潜み：空きセルを封鎖（idは同上）
+  | { t: 'cell-sealed'; at: XY; turns: number; id: number } // 裂坑掘り：空きセルを封鎖（idは同上）
   | { t: 'cell-unsealed'; at: XY } // 封鎖の期限切れ
-  | { t: 'boss-retreat'; row: number } // ボス：累計5ダメージで1行後退（身体最上段を解放）
-  | { t: 'boss-slam'; damage: number; playerHpLeft: number; id: number } // ボス：3ターンごとの全体攻撃（idは同上）
-  | { t: 'enemy-attack'; id: number; damage: number } // 通常敵：妨害と交互の攻撃ターン。プレイヤーHPを削る（ROGUE.md §5）
-  | { t: 'env-grow'; at: XY; kind: 'plant' | 'mineral' } // 環境効果：菌糸層/結晶洞の自然増殖
-  | { t: 'floor-clear' } // 層内の敵を全滅させた
-  | { t: 'run-over' } // playerHp<=0 でラン終了
+  | { t: 'prey-marked'; at: XY; id: number } // 喰み蟲：捕食印を付けた
+  | { t: 'prey-devoured'; at: XY; id: number; hpLeft: number } // 喰み蟲：印の駒を食べた（駒は消える）
+  | { t: 'prey-escaped'; at: XY; id: number } // 印の駒を消して追い払った
+  | { t: 'fissure-telegraph'; cells: XY[]; id: number } // 裂坑掘り：崩落予告の2x2
+  | { t: 'fissure-averted'; id: number } // 予告の中断
+  | { t: 'boss-shell-broken'; id: number; left: number } // ボス：封印匣を1枚剥がした
+  | { t: 'boss-phase'; id: number; phase: 2; freed: XY[] } // ボス：核が露出し身体が縮む
+  | { t: 'oxygen-spent'; left: number } // 1手ぶんの消費(-1)。不正手では出ない
+  | { t: 'oxygen-refill'; amount: number; left: number } // 層クリアの補給
+  | { t: 'oxygen-drained'; id: number; amount: number; left: number } // 息喰み/ボスが酸素を直接奪う
+  | { t: 'floor-clear' } // 層の目標をすべて達成した（残敵の有無は問わない）
+  | { t: 'run-over' } // oxygen<=0 で遭難
 
 export interface XY {
   x: number

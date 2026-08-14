@@ -17,9 +17,9 @@ import {
   UPGRADES,
   VINE_ROCKET_ID,
 } from './upgrades'
-import type { RunState } from './run'
-import { bossBodyCells, createEnemy, ENEMY_ATTACK_DAMAGE, swarmGroupDamage, swarmShouldFire, type EnemyInstance } from './enemies'
-import type { FloorDef, EnvFlag } from './floors'
+import { OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './run'
+import { bossBodyCells, createEnemy, ENEMY_PERIOD, OXYGEN_DRAIN, SWARM_PROPAGATE_DAMAGE, type EnemyInstance } from './enemies'
+import type { FloorDef } from './floors'
 
 export const W = 8
 export const H = 8
@@ -68,9 +68,6 @@ export class Board {
 
   // ---- ローグライク拡張（ROGUE.md §5/§6）：敵・ターン制・環境。run が無ければ一切使われない ----
   enemies: EnemyInstance[] = []
-  private env: EnvFlag = null
-  private envTurnCounter = 0
-  private hadEnemies = false // 層クリア判定：一度でも敵が湧いた層かどうか
   private floorCleared = false
   private runOverFired = false
 
@@ -92,6 +89,12 @@ export class Board {
     const initEv: BoardEvent[] = []
     this.applyPreheat(initEv)
     if (floor) this.spawnFloor(floor)
+    // fillInitial の詰み防止は spawnFloor より前に走るため、敵配置で駒が消えると保証が破れる。
+    // 敵を置いた後にもう一度「有効手あり」を作り直す（有効手0で始まる層をなくす）
+    if (floor) {
+      let g = 0
+      while (!this.hasValidMove() && g++ < 100) this.rerollSomePieces()
+    }
     this.applyStarters(initEv) // 第3波：敵配置の後（damageEnemyが敵を参照できるように）
     this.initEvents = initEv
   }
@@ -312,12 +315,11 @@ export class Board {
       cb.piece = null
       ev.push({ t: 'swap', a, b, illegal: false })
       ev.push({ t: 'combo', at: b, from: a, kinds: `${pa.kind}+${pb.kind}` })
-      this.movesLeft--
+      this.spendMove(ev)
       this.chain = 0
       this.fireSpecial(b, pb, ev, pa)
       this.resolveCascades(ev)
-      this.afterMove(ev)
-      this.resolveEnemyTurn(ev)
+      this.endMove(ev)
       return ev
     }
     // 片方が特殊駒: スワップして移動先で単発発動
@@ -328,12 +330,11 @@ export class Board {
       const p = cell.piece!
       cell.piece = null
       ev.push({ t: 'swap', a, b, illegal: false })
-      this.movesLeft--
+      this.spendMove(ev)
       this.chain = 0
       this.fireSpecial(at, p, ev)
       this.resolveCascades(ev)
-      this.afterMove(ev)
-      this.resolveEnemyTurn(ev)
+      this.endMove(ev)
       return ev
     }
     this.swapPieces(ca, cb)
@@ -343,12 +344,11 @@ export class Board {
       return ev
     }
     ev.push({ t: 'swap', a, b, illegal: false })
-    this.movesLeft--
+    this.spendMove(ev)
     this.chain = 0
     this.resolveMatches(ev, b)
     this.resolveCascades(ev)
-    this.afterMove(ev)
-    this.resolveEnemyTurn(ev)
+    this.endMove(ev)
     return ev
   }
 
@@ -358,12 +358,11 @@ export class Board {
     this.beginResolve()
     const c = this.at(at.x, at.y)
     if (!c?.piece || c.piece.kind === 'normal' || c.piece.kind === 'spore') return ev
-    this.movesLeft--
+    this.spendMove(ev)
     this.chain = 0
     this.fireAt(at, ev)
     this.resolveCascades(ev)
-    this.afterMove(ev)
-    this.resolveEnemyTurn(ev)
+    this.endMove(ev)
     return ev
   }
 
@@ -424,7 +423,8 @@ export class Board {
         used.add(key(p))
         this.clearPieceAt(p, ev, cl.color, 'match', gearBoost)
       }
-      this.damageAround(cl.cells, ev)
+      // SPEC_OXYGEN §1.3：3個マッチは1ダメージ、4個以上はマッチ駒数ぶん＋heavy（swarm伝播の条件）
+      this.damageAround(cl.cells, ev, cl.cells.length >= 4 ? cl.cells.length : 1, cl.cells.length >= 4)
       if (this.run) {
         const g: MatchGroup = { cells: cl.cells, color: cl.color, chain: this.chain, system: systemOf(cl.color) }
         this.fireMatchHooks(g, ev)
@@ -456,21 +456,20 @@ export class Board {
       ev.push({ t: 'armor-broken', at: p })
       return
     }
-    if (c.piece?.kind === 'normal' && countColor !== undefined) this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+    if (c.piece?.kind === 'normal' && countColor !== undefined) this.progressGoal({ type: 'color', color: c.piece.color }, p, ev)
     if (c.piece) this.score += 10 * Math.max(1, this.chain)
     const destroyedPiece = c.piece
-    const wasPoisoned = c.poisonSpore === true
-    c.poisonSpore = false
+    const hadPreyMark = c.preyMark === true
     c.piece = null
     if (c.ground > 0) {
       c.ground = (c.ground - 1) as 0 | 1
       ev.push({ t: 'ground-hit', at: p, left: c.ground })
-      if (c.ground === 0) this.progressGoal({ type: 'tsutagoke' }, ev)
+      if (c.ground === 0) this.progressGoal({ type: 'tsutagoke' }, p, ev)
     }
-    if (wasPoisoned && this.run) {
-      // 胞子獣の毒胞子（ROGUE.md §5）：消すとプレイヤーHP-1
-      this.run.playerHp -= 1
-      ev.push({ t: 'poison-triggered', at: p, playerHpLeft: this.run.playerHp })
+    if (this.run) {
+      // 捕食印の駒そのものを消したら追い払い、崩落予告の内側を消したら中断（どちらも「その1マスを狙う」ご褒美）
+      if (hadPreyMark) this.releasePreyMark(p, ev)
+      if (destroyedPiece) this.checkFissureAverted(p, ev)
     }
     if (this.run && destroyedPiece) {
       this.resolveDestroyCount++
@@ -482,8 +481,9 @@ export class Board {
    * マッチ隣接ダメージ（苔石・匣・陶片・巣灯・敵の身体セル）。
    * 敵へのダメージ量は既定でマッチ駒数ぶん（ROGUE.md §5：「隣接するマッチ=マッチ駒数ぶんダメージ」）。
    * 同じ敵の身体セルに複数隣接していても、1回のマッチにつき1回だけダメージを与える（enemyIdで重複排除）。
+   * heavy：大きく消した一撃かどうか（SPEC_OXYGEN §1.3）。swarm の伝播条件に使う。
    */
-  private damageAround(cells: XY[], ev: BoardEvent[], enemyDmg?: number) {
+  private damageAround(cells: XY[], ev: BoardEvent[], enemyDmg?: number, heavy = false) {
     const dmg = enemyDmg ?? cells.length
     const hit = new Set<string>()
     const hitEnemies = new Set<number>()
@@ -502,21 +502,21 @@ export class Board {
         if (c?.block?.type === 'enemy') {
           if (!hitEnemies.has(c.block.enemyId)) {
             hitEnemies.add(c.block.enemyId)
-            this.dealEnemyDamage(c.block.enemyId, dmg, ev)
+            this.dealEnemyDamage(c.block.enemyId, dmg, ev, heavy)
           }
           continue
         }
-        this.damageBlock(q, ev)
+        this.damageBlock(q, ev, 1, heavy)
       }
   }
 
   /** enemyDmg：敵の身体セルを直接ヒットした場合のダメージ量（既定1＝特殊駒の効果線が通った扱い。爆発は3を渡す） */
-  damageBlock(p: XY, ev: BoardEvent[], enemyDmg = 1) {
+  damageBlock(p: XY, ev: BoardEvent[], enemyDmg = 1, heavy = false) {
     const c = this.at(p.x, p.y)
     if (!c?.block) return
     const b = c.block
     if (b.type === 'enemy') {
-      this.dealEnemyDamage(b.enemyId, enemyDmg, ev)
+      this.dealEnemyDamage(b.enemyId, enemyDmg, ev, heavy)
       return
     }
     if (b.type === 'seal') return // 穴潜みの封鎖セルは攻撃で解除されない（期限切れのみ）
@@ -542,8 +542,8 @@ export class Board {
       if (b.type === 'hako') {
         c.block = { type: 'touhen', hp: 1 } // 匣→陶片
       } else {
-        if (b.type === 'kokeishi') this.progressGoal({ type: 'kokeishi' }, ev)
-        if (b.type === 'touhen') this.progressGoal({ type: 'touhen' }, ev)
+        if (b.type === 'kokeishi') this.progressGoal({ type: 'kokeishi' }, p, ev)
+        if (b.type === 'touhen') this.progressGoal({ type: 'touhen' }, p, ev)
         c.block = null
       }
     }
@@ -584,7 +584,7 @@ export class Board {
       const c = this.at(x, y)
       if (!c) return
       if (c.block) {
-        this.damageBlock({ x, y }, ev)
+        this.damageBlock({ x, y }, ev, 2, true) // 特殊駒の効果線は敵に2ダメージ＋heavy（SPEC_OXYGEN §1.3）
         return
       }
       if (!c.piece) return
@@ -595,7 +595,8 @@ export class Board {
         c.piece = null
         this.fireSpecial({ x, y }, q, ev)
       } else {
-        this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+        // 甲殻付きの駒は clearPieceAt が消さずに return するため、ここで目標だけ進むと二重計上になる
+        if (!c.armored) this.progressGoal({ type: 'color', color: c.piece.color }, { x, y }, ev)
         this.clearPieceAt({ x, y }, ev, undefined, 'special')
       }
       cleared.push({ x, y })
@@ -691,15 +692,15 @@ export class Board {
 
   /** 羽虫：残ゴールに効くマスを狙う（無ければランダムの通常駒）。消したマスは cleared に記録＝ビューへ通知 */
   private hamushiStrike(from: XY, ev: BoardEvent[], count: number, cleared: XY[]) {
-    // 離陸時に隣接1マスも消す（RM仕様）
-    this.damageAround([from], ev)
+    // 離陸時に隣接1マスも消す（RM仕様）。羽虫も特殊駒扱い＝2ダメージ＋heavy（SPEC_OXYGEN §1.3）
+    this.damageAround([from], ev, 2, true)
     for (let i = 0; i < count; i++) {
       const t = this.pickHamushiTarget()
       if (!t) return
       const c = this.at(t.x, t.y)!
-      if (c.block) this.damageBlock(t, ev)
+      if (c.block) this.damageBlock(t, ev, 2, true)
       else if (c.piece?.kind === 'normal') {
-        this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+        if (!c.armored) this.progressGoal({ type: 'color', color: c.piece.color }, t, ev) // 甲殻付きは消えないので進めない
         this.clearPieceAt(t, ev, undefined, 'special')
         cleared.push(t)
       }
@@ -758,11 +759,11 @@ export class Board {
         // 計測用の長時間プレイで発見（バランス変更とは無関係の既存バグ）：このループ中に爆発鉱石の誘爆等の
         // 副作用でbest内の別セルが先に消えていることがある。既に無ければ何もしない（防御）。
         if (!c.piece || c.piece.kind !== 'normal') continue
-        this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+        if (!c.armored) this.progressGoal({ type: 'color', color: c.piece.color }, p, ev) // 甲殻付きは消えないので進めない
         this.clearPieceAt(p, ev, undefined, 'special')
         cleared.push(p) // ビューへ通知（未通知だと幽霊/空白の温床）
       }
-      this.damageAround(best, ev)
+      this.damageAround(best, ev, 3, true) // 星珠の全消しは敵に3ダメージ＋heavy（SPEC_OXYGEN §1.3）
     }
   }
 
@@ -878,6 +879,17 @@ export class Board {
       }
   }
 
+  /**
+   * 1手の締め（swap/tapの4経路で共通）。afterMove → 層クリア判定 → （未クリアなら）敵ターン。
+   * 目標を達成した手では敵ターンを走らせない＝早く達成すれば反撃を受けずに層を出られる。
+   */
+  private endMove(ev: BoardEvent[]) {
+    this.afterMove(ev)
+    this.checkFloorClear(ev)
+    if (this.floorCleared) return
+    this.resolveEnemyTurn(ev)
+  }
+
   /** 手の締め：胞子の浮上・回収、勝敗判定用の状態更新 */
   private afterMove(ev: BoardEvent[]) {
     let sporeMoved = false
@@ -889,7 +901,7 @@ export class Board {
         if (y === 0 || !this.at(x, y - 1)) {
           c.piece = null
           ev.push({ t: 'spore-collected', at: { x, y } })
-          this.progressGoal({ type: 'spore' }, ev)
+          this.progressGoal({ type: 'spore' }, { x, y }, ev)
           sporeMoved = true
           continue
         }
@@ -910,13 +922,22 @@ export class Board {
     }
   }
 
-  private progressGoal(match: { type: Goal['type']; color?: Color }, ev: BoardEvent[]) {
+  /**
+   * 目標の前進。at＝この前進を起こしたセル（HUDへ飛ぶ収集演出の始点。JUICE.md §1②）。
+   * 'system' 目標は 'color' の前進から systemOf() で導出する（呼び出し側を色ごとに書き分けない）。
+   */
+  private progressGoal(match: { type: Goal['type']; color?: Color }, at: XY, ev: BoardEvent[]) {
     this.goals.forEach((g, i) => {
-      if (g.type !== match.type) return
-      if (g.type === 'color' && g.color !== match.color) return
       if (this.goalDone[i] >= g.count) return
+      if (g.type === 'system') {
+        if (match.type !== 'color' || match.color === undefined) return
+        if (g.system !== systemOf(match.color)) return
+      } else {
+        if (g.type !== match.type) return
+        if (g.type === 'color' && g.color !== match.color) return
+      }
       this.goalDone[i]++
-      ev.push({ t: 'goal-progress', goal: g, done: this.goalDone[i] })
+      ev.push({ t: 'goal-progress', goal: g, index: i, done: this.goalDone[i], at })
     })
   }
 
@@ -925,6 +946,32 @@ export class Board {
   }
   get lost(): boolean {
     return !this.won && this.movesLeft <= 0
+  }
+
+  /**
+   * 1手ぶんのコストを支払う（PLAN_LOOP.md §1.4：1スワップ＝酸素-1）。
+   * movesLeft は旧30レベル制の手数、oxygen はランの資源。ライフサイクルが違うので別フィールドのまま保持し、
+   * 「手を1つ使った」という同じ事実に対してここでだけ両方を動かす（減算点を1本にする）。
+   */
+  private spendMove(ev: BoardEvent[]) {
+    this.movesLeft--
+    if (!this.run) return
+    this.run.oxygen--
+    ev.push({ t: 'oxygen-spent', left: this.run.oxygen })
+  }
+
+  /**
+   * 層クリアの唯一の判定点（PLAN_LOOP.md §1.4）。目標がすべて満たされていればクリア（残敵がいてもクリアする）。
+   * 補給は層クリアと不可分なので同じ関数の中で行う。1層につき1回だけ発火する。
+   */
+  private checkFloorClear(ev: BoardEvent[]) {
+    if (!this.run || this.floorCleared) return
+    if (this.goals.length === 0) return // 空goalsだと won が true になるため必須のガード
+    if (!this.won) return
+    this.floorCleared = true
+    ev.push({ t: 'floor-clear' })
+    this.run.oxygen += OXYGEN_SUPPLY_PER_FLOOR // 上限クランプを書かないこと（貯金＝急ぐ動機）
+    ev.push({ t: 'oxygen-refill', amount: OXYGEN_SUPPLY_PER_FLOOR, left: this.run.oxygen })
   }
   /**
    * 勝利シーケンス：残手数を特殊駒（銛/歯車爆弾）に変換して全自動起爆（RM実測の再現）。
@@ -1156,7 +1203,7 @@ export class Board {
       const c = this.at(p.x, p.y)
       if (!c) continue
       if (c.block) {
-        this.damageBlock(p, ev, 3) // 爆発が敵の身体セルを直接巻き込むと3ダメージ（ROGUE.md §5）
+        this.damageBlock(p, ev, 3, true) // 爆発が敵の身体セルを直接巻き込むと3ダメージ＋heavy（ROGUE.md §5 / SPEC_OXYGEN §1.3）
         continue
       }
       if (!c.piece || c.piece.kind === 'spore') continue
@@ -1170,7 +1217,7 @@ export class Board {
         ev.push({ t: 'upgrade-fire', id: MAGNETIC_MINING_ID, at: p })
         continue
       }
-      if (c.piece.kind === 'normal') this.progressGoal({ type: 'color', color: c.piece.color }, ev)
+      if (c.piece.kind === 'normal' && !c.armored) this.progressGoal({ type: 'color', color: c.piece.color }, p, ev) // 甲殻付きは消えないので進めない
       this.clearPieceAt(p, ev, undefined, 'explode')
       destroyed.push(p)
     }
@@ -1539,9 +1586,8 @@ export class Board {
 
   /** 層の敵編成・環境フラグを盤面に適用する（Board構築時に一度だけ） */
   private spawnFloor(floor: FloorDef) {
-    this.env = floor.env
     for (const spec of floor.enemies) {
-      if (spec.kind === 'boss') this.spawnEnemy('boss', bossBodyCells(H - 2, H - 1, W))
+      if (spec.kind === 'boss') this.spawnEnemy('boss', bossBodyCells(H - 1, H - 1, W)) // 身体は最下行の8セルだけ（第2段階で2セルへ縮む）
       else this.spawnEnemy(spec.kind, [spec.at])
     }
   }
@@ -1550,7 +1596,6 @@ export class Board {
   spawnEnemy(kind: EnemyKind, cells: XY[]): EnemyInstance {
     const e = createEnemy(kind, cells)
     this.enemies.push(e)
-    this.hadEnemies = true
     for (const p of cells) {
       const c = this.at(p.x, p.y)
       if (c) {
@@ -1605,64 +1650,50 @@ export class Board {
     return best
   }
 
-  /** 敵1体にダメージを与える。ボスは累計ダメージで後退し、hp<=0で撃破処理へ */
-  private dealEnemyDamage(id: number, amount: number, ev: BoardEvent[]) {
+  /** 敵1体にダメージ。ボス第1段階は匣を1枚剥がすだけ（量は無関係）。hp<=0 で撃破処理へ */
+  private dealEnemyDamage(id: number, amount: number, ev: BoardEvent[], heavy = false) {
     const e = this.enemies.find((x) => x.id === id)
     if (!e || e.hp <= 0) return
+    if (e.kind === 'boss' && e.bossPhase === 1) {
+      e.bossShellLeft--
+      ev.push({ t: 'boss-shell-broken', id, left: Math.max(0, e.bossShellLeft) })
+      if (e.bossShellLeft <= 0) this.bossEnterPhase2(e, ev)
+      return // 第1段階では hp を削らない
+    }
     e.hp = Math.max(0, e.hp - amount)
     ev.push({ t: 'enemy-damage', id, amount, hpLeft: e.hp })
-    if (e.kind === 'boss') {
-      e.bossDamageAccum += amount
-      while (e.bossDamageAccum >= 5 && e.bossFrontRow < H - 1) {
-        e.bossDamageAccum -= 5
-        this.bossRetreat(e, ev)
-      }
-    }
-    if (e.hp <= 0) this.defeatEnemy(e, ev)
+    if (e.hp <= 0) this.defeatEnemy(e, ev, heavy)
   }
 
-  /** ボス：累計5ダメージで身体最上段の1行を解放して後退する（ROGUE.md §5） */
-  private bossRetreat(e: EnemyInstance, ev: BoardEvent[]) {
-    const row = e.bossFrontRow
-    for (let x = 0; x < W; x++) {
-      const c = this.at(x, row)
+  /** 第2段階へ：中央2セルだけ残して身体を縮める（盤面が広がるご褒美） */
+  private bossEnterPhase2(e: EnemyInstance, ev: BoardEvent[]) {
+    const keep = [{ x: 3, y: H - 1 }, { x: 4, y: H - 1 }]
+    const freed = e.cells.filter((p) => !keep.some((k) => k.x === p.x && k.y === p.y))
+    for (const p of freed) {
+      const c = this.at(p.x, p.y)
       if (c?.block?.type === 'enemy' && c.block.enemyId === e.id) c.block = null
     }
-    e.bossFrontRow++
-    e.cells = e.cells.filter((p) => p.y >= e.bossFrontRow)
-    ev.push({ t: 'boss-retreat', row: e.bossFrontRow })
+    e.cells = keep
+    e.bossPhase = 2
+    ev.push({ t: 'boss-phase', id: e.id, phase: 2, freed })
   }
 
-  /** 敵を撃破：身体セルを開放（既存の重力/補充で埋まる）。層内の敵が0になれば層クリア */
-  private defeatEnemy(e: EnemyInstance, ev: BoardEvent[]) {
+  /** 敵を撃破：身体セルを開放し、enemy-kill 目標を1つ進める。heavy な一撃で倒した swarm だけが伝播する */
+  private defeatEnemy(e: EnemyInstance, ev: BoardEvent[], heavy = false) {
     for (const p of e.cells) {
       const c = this.at(p.x, p.y)
       if (c?.block?.type === 'enemy' && c.block.enemyId === e.id) c.block = null
     }
     this.enemies = this.enemies.filter((x) => x.id !== e.id)
     ev.push({ t: 'enemy-defeated', id: e.id, cells: e.cells })
-    if (e.kind === 'swarm') this.propagateSwarmDefeat(e, ev)
-    if (this.hadEnemies && this.enemies.length === 0 && !this.floorCleared) {
-      this.floorCleared = true
-      ev.push({ t: 'floor-clear' })
-      this.applyFloorClearHeal()
-    }
+    this.progressGoal({ type: 'enemy-kill' }, e.cells[0] ?? { x: 0, y: 0 }, ev)
+    if (e.kind === 'swarm' && heavy) this.propagateSwarmDefeat(e, ev)
   }
 
   /**
-   * 3・6・9層クリア時にプレイヤーHPを2回復する（上限20。夜間監査[D]推奨値）。
-   * 回復手段が無いMVPでは、swarmの群れ攻撃を緩和してもなお序盤事故が響くため必要。
-   * イベントは出さない（HUD/演出はmain.ts/view側の担当だが今回は不改変のため、静かにHPだけ動かす）。
-   */
-  private applyFloorClearHeal() {
-    if (!this.run) return
-    if (this.run.floor !== 3 && this.run.floor !== 6 && this.run.floor !== 9) return
-    this.run.playerHp = Math.min(20, this.run.playerHp + 2)
-  }
-
-  /**
-   * サンドバッグ（swarm）撃破時、隣接する同種へ1ダメージを伝播する（ROGUE2.md §3・第3波：連鎖の爽快感の核）。
-   * swarmはHP1なので伝播が命中すればほぼ即座撃破→再度この関数を呼ぶ形で自然に連鎖する。
+   * サンドバッグ（swarm）撃破時、隣接する同種へ SWARM_PROPAGATE_DAMAGE を伝播する（ROGUE2.md §3・第3波：連鎖の爽快感の核）。
+   * swarmはHP2で伝播も2ダメージなので命中すれば必ず撃破→再度この関数を呼ぶ形で自然に連鎖する。
+   * 呼ばれるのは heavy な一撃で倒したときだけ（SPEC_OXYGEN §1.3：3個マッチでの各個撃破は派手にしない）。
    * 撃破済みの身体セルは直前にblockを外しているため、同じ敵への二重伝播は起きない。
    */
   private propagateSwarmDefeat(e: EnemyInstance, ev: BoardEvent[]) {
@@ -1677,75 +1708,48 @@ export class Board {
         const n = this.enemyAt({ x: p.x + dx, y: p.y + dy })
         if (n && n.kind === 'swarm' && n.hp > 0 && !seen.has(n.id)) {
           seen.add(n.id)
-          this.dealEnemyDamage(n.id, 1, ev)
-          // 計測用（夜間監査[B][D]）：swarmはHP1固定なので1ダメージ=必ず撃破。ビルド由来の撃破と分離集計するため加算する
+          this.dealEnemyDamage(n.id, SWARM_PROPAGATE_DAMAGE, ev, true)
+          // 計測用（夜間監査[B][D]）：swarmはHP2固定なので2ダメージ=必ず撃破。ビルド由来の撃破と分離集計するため加算する
           if (this.run) this.run.records.swarmPropagationKills++
         }
       }
   }
 
-  /** ターン終了処理：環境効果→穴潜みの封鎖期限→各敵の定期行動→勝敗判定。afterMoveの直後に呼ばれる */
+  /** ターン終了処理：封鎖期限→各敵の定期行動→再安定化→層クリア/遭難判定。endMove から呼ばれる */
   private resolveEnemyTurn(ev: BoardEvent[]) {
     if (!this.run) return
-    this.tickEnvironment(ev)
     this.tickSeals(ev)
-    // サンドバッグ（swarm）：個体ごとではなく群れ単位で1回だけ攻撃する（夜間監査[D]）。
-    // 全個体が同じ手数だけactionTimerを増やすため、最初に条件を満たした1体の値を群れ全体の基準として使う。
-    let swarmFired = false
     for (const e of [...this.enemies]) {
       if (e.hp <= 0) continue
-      if (e.kind === 'boss') {
-        this.bossPeriodicAttack(e, ev)
-        continue
-      }
-      if (e.kind === 'swarm') {
-        e.actionTimer++
-        if (!swarmFired && swarmShouldFire(e.actionTimer)) {
-          swarmFired = true
-          this.swarmGroupAttack(ev)
-        }
-        continue
-      }
+      const period = ENEMY_PERIOD[e.kind]
+      if (period <= 0) continue // swarm は定期行動を持たない
       e.actionTimer++
-      if (e.actionTimer % 2 === 0) this.performEnemyAction(e, ev)
+      if (e.actionTimer % period !== 0) continue
+      switch (e.kind) {
+        case 'rockshell': this.rockshellAction(e, ev); break
+        case 'sporeling': this.harvesterAction(e, ev); break
+        case 'burrower': this.diggerAction(e, ev); break
+        case 'breathstealer':
+        case 'boss': this.drainOxygen(e, ev); break
+      }
     }
     // 敵の行動で空いた/塞がったセルを重力・補充で安定させる
     this.resolveCascades(ev)
-    if (this.run.playerHp <= 0 && !this.runOverFired) {
+    // 敵ターン中の偶発マッチで目標が埋まることがあるので、ここでもクリアを見る（クリア優先）
+    this.checkFloorClear(ev)
+    if (this.floorCleared) return
+    if (this.run.oxygen <= 0 && !this.runOverFired) {
       this.runOverFired = true
       ev.push({ t: 'run-over' })
     }
   }
 
-  /**
-   * サンドバッグ（swarm）の群れ攻撃：生存数に応じたダメージを1回だけプレイヤーへ与える（夜間監査[D]推奨値）。
-   * 個体ごとに同時多数が殴る事故（旧実装：6〜10体同時被弾）をなくし、数の圧は保ちつつ被ダメージを緩やかにする。
-   */
-  private swarmGroupAttack(ev: BoardEvent[]) {
+  /** 息喰み／深匣主：酸素を直接奪う（PLAN_LOOP.md §1.4 の唯一の直接ダメージ） */
+  private drainOxygen(e: EnemyInstance, ev: BoardEvent[]) {
     if (!this.run) return
-    const alive = this.enemies.filter((e) => e.kind === 'swarm' && e.hp > 0)
-    const damage = swarmGroupDamage(alive.length)
-    if (damage <= 0 || alive.length === 0) return
-    this.run.playerHp -= damage
-    ev.push({ t: 'enemy-attack', id: alive[0].id, damage }) // idは演出上の代表1体（既存のenemy-attack契約を流用）
-  }
-
-  /** 定期行動：妨害と攻撃を交互に行う（周期2ターンは維持。ROGUE.md §5：プレイテスト反省＝敵を本当の脅威にする） */
-  private performEnemyAction(e: EnemyInstance, ev: BoardEvent[]) {
-    if (e.attackTurn) {
-      this.enemyAttackAction(e, ev)
-    } else if (e.kind === 'rockshell') this.rockshellAction(e, ev)
-    else if (e.kind === 'sporeling') this.sporelingAction(e, ev)
-    else if (e.kind === 'burrower') this.burrowerAction(e, ev)
-    e.attackTurn = !e.attackTurn
-  }
-
-  /** 通常敵の攻撃ターン：プレイヤーHPを削る（岩殻獣3/胞子獣2/穴潜み2。ENEMY_ATTACK_DAMAGE参照） */
-  private enemyAttackAction(e: EnemyInstance, ev: BoardEvent[]) {
-    if (!this.run) return
-    const damage = ENEMY_ATTACK_DAMAGE[e.kind]
-    this.run.playerHp -= damage
-    ev.push({ t: 'enemy-attack', id: e.id, damage })
+    const amount = OXYGEN_DRAIN[e.kind as 'breathstealer' | 'boss']
+    this.run.oxygen -= amount
+    ev.push({ t: 'oxygen-drained', id: e.id, amount, left: this.run.oxygen })
   }
 
   /** 岩殻獣：鉱物1つに甲殻を付与する（ROGUE.md §5） */
@@ -1762,22 +1766,84 @@ export class Board {
     ev.push({ t: 'armor-applied', at: p, id: e.id })
   }
 
-  /** 胞子獣：植物1駒を毒胞子化する（ROGUE.md §5） */
-  private sporelingAction(e: EnemyInstance, ev: BoardEvent[]) {
-    const cands: XY[] = []
+  /** 喰み蟲：印が無ければ資源1つに捕食印、あれば食べてHP+2。印は敵から離れた場所に付くので「敵の隣以外」を触らせる */
+  private harvesterAction(e: EnemyInstance, ev: BoardEvent[]) {
+    if (e.markAt) {
+      const c = this.at(e.markAt.x, e.markAt.y)
+      if (c?.preyMark) {
+        c.preyMark = false
+        c.piece = null // 食べられた駒は消える（落下で盤面が動く＝軽い妨害）
+        e.hp = Math.min(e.maxHp, e.hp + 2)
+        ev.push({ t: 'prey-devoured', at: e.markAt, id: e.id, hpLeft: e.hp })
+      }
+      e.markAt = null
+      return
+    }
+    const prefer: XY[] = []
+    const fallback: XY[] = []
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const c = this.at(x, y)
-        if (c?.piece?.kind === 'normal' && (c.piece.color === 1 || c.piece.color === 4) && !c.poisonSpore) cands.push({ x, y })
+        const p = c?.piece
+        if (!c || !p || c.preyMark) continue
+        if (p.kind === 'spore' || (p.kind === 'normal' && (p.volatile || p.charged))) prefer.push({ x, y })
+        else if (p.kind === 'normal') fallback.push({ x, y })
       }
+    const cands = prefer.length ? prefer : fallback
     if (!cands.length) return
-    const p = cands[randInt(this.rng, cands.length)]
-    this.at(p.x, p.y)!.poisonSpore = true
-    ev.push({ t: 'spore-poisoned', at: p, id: e.id })
+    const at = cands[randInt(this.rng, cands.length)]
+    this.at(at.x, at.y)!.preyMark = true
+    e.markAt = at
+    ev.push({ t: 'prey-marked', at, id: e.id })
   }
 
-  /** 穴潜み：空きセル1つを2ターン封鎖し、自分は別の空きセルへ移動する（ROGUE.md §5） */
-  private burrowerAction(e: EnemyInstance, ev: BoardEvent[]) {
+  /** 印の駒そのものが消えたときの追い払い（隣は不可＝「その1マスを狙う」を要求する） */
+  private releasePreyMark(p: XY, ev: BoardEvent[]) {
+    const c = this.at(p.x, p.y)
+    if (!c?.preyMark) return
+    c.preyMark = false
+    const e = this.enemies.find((x) => x.markAt && x.markAt.x === p.x && x.markAt.y === p.y)
+    if (!e) return
+    e.markAt = null
+    e.actionTimer = 0
+    ev.push({ t: 'prey-escaped', at: p, id: e.id })
+    this.dealEnemyDamage(e.id, 1, ev) // 追い払いの報酬（heavy ではない）
+  }
+
+  /** 裂坑掘り：2手ごとに「遠い2x2の予告」と「崩落＋移動」を交互に行う（読めない封鎖の置換） */
+  private diggerAction(e: EnemyInstance, ev: BoardEvent[]) {
+    if (e.telegraph) {
+      const sealed: XY[] = []
+      for (const p of e.telegraph) {
+        const c = this.at(p.x, p.y)
+        if (!c || c.block || !c.piece) continue
+        c.piece = null
+        c.block = { type: 'seal', turnsLeft: 3 }
+        sealed.push(p)
+        ev.push({ t: 'cell-sealed', at: p, turns: 3, id: e.id })
+      }
+      if (!sealed.length) ev.push({ t: 'fissure-averted', id: e.id })
+      e.telegraph = null
+      this.relocateDigger(e)
+      return
+    }
+    const src = e.cells[0]
+    let best: XY | null = null
+    let bestD = -1
+    for (let y = 0; y + 1 < H; y++)
+      for (let x = 0; x + 1 < W; x++) {
+        const quad = [{ x, y }, { x: x + 1, y }, { x, y: y + 1 }, { x: x + 1, y: y + 1 }]
+        if (quad.some((q) => !this.at(q.x, q.y) || this.at(q.x, q.y)!.block)) continue
+        const d = Math.abs(x - src.x) + Math.abs(y - src.y)
+        if (d > bestD) { bestD = d; best = { x, y } }
+      }
+    if (!best) return
+    e.telegraph = [best, { x: best.x + 1, y: best.y }, { x: best.x, y: best.y + 1 }, { x: best.x + 1, y: best.y + 1 }]
+    ev.push({ t: 'fissure-telegraph', cells: e.telegraph, id: e.id })
+  }
+
+  /** 崩落のあと空きセルへ移る（予告位置が毎回変わる＝学習済みの角に固定されない） */
+  private relocateDigger(e: EnemyInstance) {
     const empties: XY[] = []
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
@@ -1785,19 +1851,23 @@ export class Board {
         if (c && !c.block && !c.piece) empties.push({ x, y })
       }
     if (!empties.length) return
-    const sealIdx = randInt(this.rng, empties.length)
-    const sealAt = empties[sealIdx]
-    empties.splice(sealIdx, 1)
-    this.at(sealAt.x, sealAt.y)!.block = { type: 'seal', turnsLeft: 2 }
-    ev.push({ t: 'cell-sealed', at: sealAt, turns: 2, id: e.id })
-    if (!empties.length) return
-    const moveAt = empties[randInt(this.rng, empties.length)]
+    const to = empties[randInt(this.rng, empties.length)]
     for (const p of e.cells) {
       const c = this.at(p.x, p.y)
       if (c?.block?.type === 'enemy' && c.block.enemyId === e.id) c.block = null
     }
-    this.at(moveAt.x, moveAt.y)!.block = { type: 'enemy', enemyId: e.id }
-    e.cells = [moveAt]
+    this.at(to.x, to.y)!.block = { type: 'enemy', enemyId: e.id }
+    e.cells = [to]
+  }
+
+  /** 予告2x2の内側で駒が消えたら崩落を中断する */
+  private checkFissureAverted(p: XY, ev: BoardEvent[]) {
+    for (const e of this.enemies) {
+      if (e.kind !== 'burrower' || !e.telegraph) continue
+      if (!e.telegraph.some((q) => q.x === p.x && q.y === p.y)) continue
+      e.telegraph = null
+      ev.push({ t: 'fissure-averted', id: e.id })
+    }
   }
 
   /** 封鎖セルの期限を1つ消費し、0になったら解除する */
@@ -1813,55 +1883,5 @@ export class Board {
           ev.push({ t: 'cell-unsealed', at: { x, y } })
         }
       }
-  }
-
-  /** ボス：3ターンごとに全体攻撃（playerHp-3）。後退中でも継続する（ROGUE.md §5） */
-  private bossPeriodicAttack(e: EnemyInstance, ev: BoardEvent[]) {
-    e.bossAttackTimer++
-    if (e.bossAttackTimer % 3 !== 0) return
-    if (!this.run) return
-    this.run.playerHp -= 3
-    ev.push({ t: 'boss-slam', damage: 3, playerHpLeft: this.run.playerHp, id: e.id })
-  }
-
-  /** 環境効果：菌糸層=3ターンごとに植物1つ増殖／結晶洞=3ターンごとに鉱物1つ成長（ROGUE.md §6） */
-  private tickEnvironment(ev: BoardEvent[]) {
-    if (!this.env) return
-    this.envTurnCounter++
-    if (this.envTurnCounter % 3 !== 0) return
-    if (this.env === 'fungal') {
-      this.growNear((p) => p.kind === 'normal' && (p.color === 1 || p.color === 4), () => (this.rng() < 0.5 ? 1 : 4), 'plant', ev)
-    } else if (this.env === 'crystal') {
-      this.growNear((p) => p.kind === 'normal' && p.color === 2, () => 2, 'mineral', ev)
-    }
-  }
-
-  /** predに合う既存駒を1つ選び、その隣接空きセルに同系統の駒を生やす */
-  private growNear(pred: (p: Piece) => boolean, colorPick: () => Color, kind: 'plant' | 'mineral', ev: BoardEvent[]) {
-    const sources: XY[] = []
-    for (let y = 0; y < H; y++)
-      for (let x = 0; x < W; x++) {
-        const p = this.at(x, y)?.piece
-        if (p && pred(p)) sources.push({ x, y })
-      }
-    if (!sources.length) return
-    const src = sources[randInt(this.rng, sources.length)]
-    let empty: XY | null = null
-    for (const [dx, dy] of [
-      [1, 0],
-      [-1, 0],
-      [0, 1],
-      [0, -1],
-    ] as const) {
-      const q = { x: src.x + dx, y: src.y + dy }
-      const c = this.at(q.x, q.y)
-      if (c && !c.block && !c.piece) {
-        empty = q
-        break
-      }
-    }
-    if (!empty) return
-    this.at(empty.x, empty.y)!.piece = { kind: 'normal', color: colorPick() }
-    ev.push({ t: 'env-grow', at: empty, kind })
   }
 }

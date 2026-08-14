@@ -1,5 +1,5 @@
 // 敵エンティティ定義（ROGUE.md §5）。
-// 種類は固定4種（強化20種のような差し替え可能なプラグイン群ではない）ため、hooks.ts の
+// 種類は固定6種（強化20種のような差し替え可能なプラグイン群ではない）ため、hooks.ts の
 // Ctx抽象は導入せず、挙動（ターンごとの行動・ダメージ処理）は board.ts の解決ループに直接持たせる
 // （過剰な抽象化を避ける。理由は最終報告）。ここはデータ定義と純粋な初期化ヘルパのみ。
 import type { EnemyKind, XY } from './types'
@@ -9,68 +9,26 @@ export interface EnemyInstance {
   kind: EnemyKind
   hp: number
   maxHp: number
-  cells: XY[] // 居座るセル群（ボスは複数行ぶん）
-  actionTimer: number // 2ターンごとの定期行動カウンタ（岩殻獣/胞子獣/穴潜み用。ボスは未使用）
-  attackTurn: boolean // 次の定期行動が「攻撃」か「妨害」か（交互。false=妨害から開始。ボスは未使用＝常に攻撃）
-  // ボス専用状態（ROGUE.md §5 ボス行）
-  bossDamageAccum: number // 前回後退からの累計ダメージ（5で1行後退）
-  bossAttackTimer: number // 3ターンごとの全体攻撃カウンタ
-  bossFrontRow: number // 現在の身体最上段の行番号（後退のたびに+1）
+  cells: XY[]
+  actionTimer: number // 全種共通の周期カウンタ（ボスも統合）
+  markAt: XY | null // 喰み蟲：捕食印の位置
+  telegraph: XY[] | null // 裂坑掘り：崩落予告の2x2
+  bossPhase: 1 | 2 // ボス：1=封印匣 2=核
+  bossShellLeft: number // ボス：残りの匣枚数
 }
 
 export const ENEMY_HP: Record<EnemyKind, number> = {
-  rockshell: 8, // 岩殻獣
-  sporeling: 6, // 胞子獣
-  burrower: 10, // 穴潜み
-  swarm: 1, // サンドバッグ＝小型胞子虫（第3波。ROGUE2.md §3：連鎖で一掃する快感の主役）
-  boss: 30, // 巨大深層生物
+  swarm: 2, rockshell: 6, sporeling: 5, burrower: 6, breathstealer: 5, boss: 8, // boss は「核」のHP
 }
-
-/** 攻撃ターンのプレイヤーHPダメージ量（ROGUE.md §5：妨害と攻撃を交互に行う） */
-export const ENEMY_ATTACK_DAMAGE: Record<EnemyKind, number> = {
-  rockshell: 3,
-  sporeling: 2,
-  burrower: 2,
-  swarm: 1, // 妨害を持たない攻撃専業。数で圧をかける（周期はSWARM_ATTACK_PERIOD参照）。
-  // 夜間監査[D]以降は個体単位ではなく群れ単位で攻撃するため、実際のダメージ量はswarmGroupDamage()が決める
-  // （この値は表示用の名残であり、enemyIntentの参考値以上の意味は持たない）。
-  boss: 3, // ボスは3ターン周期の全体攻撃（既存のまま。妨害は行わない）
+/** 定期行動の周期（手）。0 = 定期行動を持たない */
+export const ENEMY_PERIOD: Record<EnemyKind, number> = {
+  swarm: 0, rockshell: 2, sporeling: 2, burrower: 2, breathstealer: 3, boss: 3,
 }
-
-/**
- * サンドバッグ（swarm）の攻撃周期。既存敵と同じ2ターンにすると1層6〜10体の同時攻撃で瞬時にHP20を溶かすため、
- * バランス再設計として3ターンに緩和した（第3波・最終報告に理由記載）。HP1で連鎖撃破されやすい前提とセットの調整。
- * 夜間監査[D]で「個体ごとに3ターンで1ダメージ」から「群れ単位で1回攻撃」へ再設計した（下記swarmGroupDamage参照）。
- * 周期そのものは維持し、初回発動だけ4手後へ遅らせた（SWARM_FIRST_ATTACK_TURN）。
- */
-export const SWARM_ATTACK_PERIOD = 3
-/** サンドバッグ群れの初回攻撃までの手数（夜間監査[D]推奨値）。以降はSWARM_ATTACK_PERIODごとに攻撃する */
-export const SWARM_FIRST_ATTACK_TURN = 4
-
-/**
- * サンドバッグ群れの次回攻撃までの残り手数。turnはactionTimer（群れ全個体が同じ手数だけ増える共有カウンタ扱い）。
- * board.ts の発動判定（swarmShouldFire）と対で保つ。
- */
-function swarmTurnsUntil(turn: number): number {
-  if (turn < SWARM_FIRST_ATTACK_TURN) return SWARM_FIRST_ATTACK_TURN - turn
-  const sinceFirst = turn - SWARM_FIRST_ATTACK_TURN
-  const rem = sinceFirst % SWARM_ATTACK_PERIOD
-  return rem === 0 ? SWARM_ATTACK_PERIOD : SWARM_ATTACK_PERIOD - rem
-}
-
-/** turn（actionTimerの増加後の値）がサンドバッグ群れの攻撃タイミングかどうか（board.tsのresolveEnemyTurnが使う） */
-export function swarmShouldFire(turn: number): boolean {
-  return turn === SWARM_FIRST_ATTACK_TURN || (turn > SWARM_FIRST_ATTACK_TURN && (turn - SWARM_FIRST_ATTACK_TURN) % SWARM_ATTACK_PERIOD === 0)
-}
-
-/**
- * サンドバッグ群れの1回の攻撃ダメージ（夜間監査[D]推奨値）：生存4体ごとに1ダメージ、切り上げ、1回最大3。
- * 個体ごとに同時多数が殴る事故（6〜10体同時被弾）を避け、数の圧を保ちつつ被ダメージを緩やかにする。
- */
-export function swarmGroupDamage(aliveCount: number): number {
-  if (aliveCount <= 0) return 0
-  return Math.min(3, Math.ceil(aliveCount / 4))
-}
+/** 酸素を直接奪う敵と、その量（PLAN_LOOP.md §1.4「まれに酸素を奪う敵」） */
+export const OXYGEN_DRAIN: Record<'breathstealer' | 'boss', number> = { breathstealer: 3, boss: 3 }
+export const BOSS_SHELL_COUNT = 4
+/** swarm 撃破時に隣接 swarm へ伝播するダメージ（HP2＝即死） */
+export const SWARM_PROPAGATE_DAMAGE = 2
 
 let nextEnemyId = 1
 
@@ -88,40 +46,49 @@ export function createEnemy(kind: EnemyKind, cells: XY[]): EnemyInstance {
     maxHp: ENEMY_HP[kind],
     cells,
     actionTimer: 0,
-    attackTurn: false, // 最初の定期行動は妨害から（チュートリアル圧力。ROGUE.md §6 層1-2の意図を踏襲）
-    bossDamageAccum: 0,
-    bossAttackTimer: 0,
-    bossFrontRow: cells.length ? Math.min(...cells.map((c) => c.y)) : 0,
+    markAt: null,
+    telegraph: null,
+    bossPhase: 1,
+    bossShellLeft: kind === 'boss' ? BOSS_SHELL_COUNT : 0,
   }
 }
 
-/** ボスの身体セル：frontRow〜bottomRowの全列を塞ぐ（ROGUE.md §5：下2行を身体で塞ぐ） */
+/** ボスの身体セル：frontRow〜bottomRowの全列を塞ぐ（SPEC_OXYGEN.md §1.4：最下1行のみ。第2段階で中央2セルへ縮む） */
 export function bossBodyCells(frontRow: number, bottomRow: number, width: number): XY[] {
   const out: XY[] = []
   for (let y = frontRow; y <= bottomRow; y++) for (let x = 0; x < width; x++) out.push({ x, y })
   return out
 }
 
-/**
- * 次の定期行動までの残りターン数（可視化第一波：敵インテント表示用）。
- * actionTimer/bossAttackTimerは「行動が発火する瞬間にちょうど周期の倍数になる」決定的カウンタなので、
- * 新規状態を持たずに「周期 - 現在値%周期」として導出できる（board.tsの判定式と対で保つ）。
- */
-export function turnsUntilAction(e: EnemyInstance): number {
-  if (e.kind === 'boss') return 3 - (e.bossAttackTimer % 3)
-  if (e.kind === 'swarm') return swarmTurnsUntil(e.actionTimer)
-  return 2 - (e.actionTimer % 2)
+export type IntentKind = 'none' | 'armor' | 'devour' | 'fissure' | 'drain'
+
+export interface EnemyIntent {
+  kind: IntentKind
+  turns: number // 発動までの残り手数（kind==='none' は 0）
+  oxygen?: number // 奪う酸素量（'drain' のみ）
+  cells?: XY[] // 予告地点（'fissure'=崩落2x2 / 'devour'=捕食印）
+  label: string // バッジ脇・遭遇チップ・野帳シートで使う短い日本語
 }
 
 /**
- * 敵インテント（可視化契約。ビューはこの関数を通して「次に何をしてくるか」を読む）。
- * 通常敵は妨害/攻撃が交互（周期2ターンのまま）。ボスは常に攻撃（3ターン周期の全体攻撃）。
- * kind='attack' のときのみ damage を持つ（妨害ターンはダメージ量が定まらないため省略）。
+ * 次の定期行動までの残りターン数（可視化第一波：敵インテント表示用）。
+ * actionTimerは「行動が発火する瞬間にちょうど周期の倍数になる」決定的カウンタなので、
+ * 新規状態を持たずに「周期 - 現在値%周期」として導出できる（board.tsの判定式と対で保つ）。
  */
-export function enemyIntent(e: EnemyInstance): { kind: 'attack' | 'disrupt'; damage?: number; turns: number } {
+export function turnsUntilAction(e: EnemyInstance): number {
+  const p = ENEMY_PERIOD[e.kind]
+  return p <= 0 ? 0 : p - (e.actionTimer % p)
+}
+
+/** 敵インテント（可視化契約。ビューはこの関数を通して「次に何をしてくるか」を読む） */
+export function enemyIntent(e: EnemyInstance): EnemyIntent {
   const turns = turnsUntilAction(e)
-  if (e.kind === 'boss') return { kind: 'attack', damage: ENEMY_ATTACK_DAMAGE.boss, turns }
-  if (e.kind === 'swarm') return { kind: 'attack', damage: ENEMY_ATTACK_DAMAGE.swarm, turns } // 妨害を持たない（第3波）
-  const kind: 'attack' | 'disrupt' = e.attackTurn ? 'attack' : 'disrupt'
-  return kind === 'attack' ? { kind, damage: ENEMY_ATTACK_DAMAGE[e.kind], turns } : { kind, turns }
+  switch (e.kind) {
+    case 'swarm':         return { kind: 'none', turns: 0, label: '動かない' }
+    case 'rockshell':     return { kind: 'armor', turns, label: '甲殻' }
+    case 'sporeling':     return { kind: 'devour', turns, cells: e.markAt ? [e.markAt] : undefined, label: e.markAt ? '捕食' : '目星' }
+    case 'burrower':      return { kind: 'fissure', turns, cells: e.telegraph ?? undefined, label: e.telegraph ? '崩落' : '掘削' }
+    case 'breathstealer': return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.breathstealer, label: `酸素-${OXYGEN_DRAIN.breathstealer}` }
+    case 'boss':          return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.boss, label: `酸素-${OXYGEN_DRAIN.boss}` }
+  }
 }

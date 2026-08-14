@@ -1,10 +1,10 @@
 // 『そろえて、しるす。』ローグライク・エントリ。拠点（旧・縦断面図マップ流用）⇄ 層プレイの2シーン構成。
 // ROGUE.md 準拠（第3弾b＝ラン進行の実装）。旧30レベル制の画面遷移は廃止。
-import { Application, Container, Graphics, Sprite, Text } from 'pixi.js'
+import { Application, Container, Graphics, Point, Sprite, Text } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
-import { createRunState, type RunState } from './core/run'
-import { FLOORS } from './core/floors'
+import { createRunState, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
+import { FLOORS, type FloorDef } from './core/floors'
 import {
   UPGRADES,
   type UpgradeDef,
@@ -22,11 +22,13 @@ import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
-import { enemyIntent, ENEMY_ATTACK_DAMAGE, SWARM_ATTACK_PERIOD, type EnemyInstance } from './core/enemies'
-import type { BoardEvent, EnemyKind, LevelDef, XY } from './core/types'
+import { enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
+import { systemOf } from './core/hooks'
+import type { BoardEvent, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
 import { GLOSSARY, findTerm, type GlossaryEntry } from './core/glossary'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
+import { hapticsEnabled, hapticsLog, hapticsSupported, toggleHaptics } from './juice/haptics'
 
 const UI = {
   wood: 0x4a3b28,
@@ -63,17 +65,14 @@ const SYNERGY_HALVES: Record<string, [string, string]> = {
   'relic-root': ['n3', 'n1'],
 }
 
-/**
- * 層1つぶんの盤面定義。ローグは手数制・ゴール駒を廃止（ROGUE.md §6：勝敗は敵殲滅とHPで判定）。
- * 旧LevelDefの moves/goals は Board.won/lost 判定にしか使わないため、実質発火しない値で埋めて無効化する。
- */
-const buildFloorLevelDef = (floor: number, seed: number): LevelDef => ({
+/** 層1つぶんの盤面定義。目標とレイアウトは FloorDef（core/floors.ts）が持つ正典を使う */
+const buildFloorLevelDef = (floor: number, seed: number, def: FloorDef): LevelDef => ({
   id: floor,
   seed,
-  moves: 9999,
+  moves: 9999, // 旧30レベル制の手数。ローグでは酸素が時計なので発火しない番人として残す
   colors: 5,
-  goals: [{ type: 'color', color: 0, count: 999999 }],
-  layout: Array(8).fill('........'),
+  goals: def.goals,
+  layout: def.layout,
 })
 
 // ---- ドラフトカード情報設計（codex_consult_rogue.md [B]。left切れ修正の第4波で全面差し替え） ----
@@ -190,7 +189,7 @@ function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): Connecti
 
 
 // ボスの表示名（下の ENEMY_INFO.boss.name と同一の呼称。ボス以外はチップに個体名を出さないため他は複製しない）
-const BOSS_NAME = '巨大深層生物'
+const BOSS_NAME = '深匣主'
 
 // =============== 野帳シート：共通ボトムシート（codex_consult_ui.md [C]） ===============
 // 強化ポップ・敵ツールチップの2実装を統合する中核データ・エンジン部分（モジュール直下＝vw/vhに依存しない純粋関数群）。
@@ -493,42 +492,47 @@ function makeTermIconContainer(size: number): Container {
 // ---- 敵の野帳データ（実装の実挙動と一致させる。enemies.ts/board.ts を読んで確認済み） ----
 interface EnemyInfoEntry {
   name: string
-  attackDesc: string
+  /** 酸素を直接奪う敵だけが持つ説明。null の敵は「与ダメージ」行そのものを出さない（妨害屋だと読ませる） */
+  oxygenDesc: string | null
   disruptDesc: string | null
   defeatDesc: string
-  retreatDesc?: string
 }
 const ENEMY_INFO: Record<EnemyKind, EnemyInfoEntry> = {
+  swarm: {
+    name: '小型胞子虫',
+    oxygenDesc: null,
+    disruptDesc: null,
+    defeatDesc: '3つそろえでは1しか効かない。4つ以上・特殊駒・爆発で倒すと、隣の仲間へダメージが伝わる',
+  },
   rockshell: {
     name: '岩殻獣',
-    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.rockshell}ダメージを与える`,
+    oxygenDesc: null,
     disruptDesc: '鉱物ひとつに甲殻をまとわせる（甲殻はもう1回壊さないと消えない）',
-    defeatDesc: '隣接するマスで駒を消すとダメージが入る。HPが尽きると撃破',
+    defeatDesc: '隣で駒を消すとダメージ。3つそろえでは1しか入らないので、大きく消すほど早い',
   },
   sporeling: {
-    name: '胞子獣',
-    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.sporeling}ダメージを与える`,
-    disruptDesc: '植物ひとつを毒胞子に変える（消すと探窟隊に1ダメージ）',
-    defeatDesc: '隣接するマスで駒を消すとダメージが入る。HPが尽きると撃破',
+    name: '喰み蟲',
+    oxygenDesc: null,
+    disruptDesc: '盤上の駒ひとつに捕食印をつけ、2手後に食べてHPを回復する',
+    defeatDesc: '印のついた駒そのものを消すと追い払える（1ダメージ＋予告がやり直しになる）',
   },
   burrower: {
-    name: '穴潜み',
-    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.burrower}ダメージを与える`,
-    disruptDesc: '空きマスを2手ふさいで自分は別のマスへ移る（封鎖は攻撃で解除できない）',
-    defeatDesc: '隣接するマスで駒を消すとダメージが入る。HPが尽きると撃破',
+    name: '裂坑掘り',
+    oxygenDesc: null,
+    disruptDesc: '自分から遠い2×2を亀裂として予告し、2手後にそのマスを3手ふさぐ',
+    defeatDesc: '予告された2×2の中で駒を1つでも消せば崩落は止まる',
   },
-  swarm: {
-    name: 'サンドバッグ',
-    attackDesc: `探窟隊に${ENEMY_ATTACK_DAMAGE.swarm}ダメージを与える（${SWARM_ATTACK_PERIOD}手ごと）`,
+  breathstealer: {
+    name: '息喰み',
+    oxygenDesc: `${ENEMY_PERIOD.breathstealer}手ごとに酸素を${OXYGEN_DRAIN.breathstealer}奪う`,
     disruptDesc: null,
-    defeatDesc: 'HP1で即撃破。1体倒すと隣接する仲間にもダメージが伝わり連鎖しやすい',
+    defeatDesc: '深界で唯一、酸素を直接奪う相手。長居するほど損をする',
   },
   boss: {
-    name: '巨大深層生物',
-    attackDesc: `3手ごとに探窟隊全体へ${ENEMY_ATTACK_DAMAGE.boss}ダメージ`,
+    name: '深匣主',
+    oxygenDesc: `${ENEMY_PERIOD.boss}手ごとに酸素を${OXYGEN_DRAIN.boss}奪う`,
     disruptDesc: null,
-    defeatDesc: '身体の前線行へダメージを与え続けるとHPが減る',
-    retreatDesc: '累計5ダメージがたまるたび、身体の最上段1行が解放されて1行後退する',
+    defeatDesc: 'まず封印匣を4枚剥がす（どんな一撃でも1枚）。核が露出したら本体のHPを削る',
   },
 }
 
@@ -583,19 +587,19 @@ function buildSpecialPieceEntry(): FieldNoteEntry {
   }
 }
 
-/** 敵：本体／インテントバッジのタップで開く（[C]表：名前・HP・次行動・与ダメージ・妨害内容・倒し方。ボスは後退条件も） */
+/** 敵：本体／インテントバッジのタップで開く（[C]表：名前・HP・次行動・与ダメージ・妨害内容・倒し方） */
 function buildEnemyEntry(enemy: EnemyInstance): FieldNoteEntry {
   const info = ENEMY_INFO[enemy.kind]
   const intent = enemyIntent(enemy)
-  const nextText = intent.kind === 'attack' ? `あと${intent.turns}手で攻撃（${intent.damage}ダメージ）` : `あと${intent.turns}手で妨害`
+  const nextText = intent.kind === 'none' ? '動かない' : `あと${intent.turns}手：${intent.label}`
   const blocks: FieldNoteBlock[] = [
     { kind: 'row', label: 'HP', text: `${Math.max(0, enemy.hp)} / ${enemy.maxHp}` },
     { kind: 'row', label: '次行動', text: nextText },
-    { kind: 'row', label: '与ダメージ', text: info.attackDesc },
-    { kind: 'row', label: '妨害', text: info.disruptDesc ?? '妨害は行わない' },
-    { kind: 'row', label: '倒し方', text: info.defeatDesc },
   ]
-  if (info.retreatDesc) blocks.push({ kind: 'row', label: '後退条件', text: info.retreatDesc })
+  // 酸素を奪わない敵に「与ダメージ：なし」を出すと妨害屋であることが伝わらないので、行ごと省く
+  if (info.oxygenDesc) blocks.push({ kind: 'row', label: '与ダメージ', text: info.oxygenDesc })
+  blocks.push({ kind: 'row', label: '妨害', text: info.disruptDesc ?? '妨害は行わない' })
+  blocks.push({ kind: 'row', label: '倒し方', text: info.defeatDesc })
   return { noteKey: `enemy:${enemy.id}`, kindLabel: '敵', title: info.name, icon: (size) => makeEnemyIconContainer(enemy.kind, size), blocks }
 }
 
@@ -611,28 +615,34 @@ function buildGlossaryEntry(g: GlossaryEntry): FieldNoteEntry {
 function computeEncounterInfo(board: Board): {
   aliveCount: number
   boss: EnemyInstance | null
-  pendingDamage: number
-  minAttackTurns: number | null
-  /** 監査[C]13：最短で来る攻撃の合計ダメージ。「あと3手」だけでは危険量が読めないため併記する */
-  nextAttackDamage: number
+  /** 次の1手で失う酸素（予告オーバーレイ用） */
+  pendingOxygen: number
+  minTurns: number | null
+  /** 最短で来るインテントの短い日本語（'甲殻' '崩落' '捕食' '酸素-3'） */
+  nextLabel: string | null
+  /** 最短で来るインテントで失う酸素の合計（0＝妨害だけ） */
+  nextOxygenLoss: number
 } {
-  const aliveEnemies = board.enemies.filter((e) => e.hp > 0)
-  const boss = aliveEnemies.find((e) => e.kind === 'boss') ?? null
-  let pendingDamage = 0
-  let minAttackTurns: number | null = null
-  for (const e of aliveEnemies) {
-    const intent = enemyIntent(e)
-    if (intent.kind !== 'attack') continue
-    if (intent.turns === 1) pendingDamage += intent.damage ?? 0
-    if (minAttackTurns === null || intent.turns < minAttackTurns) minAttackTurns = intent.turns
+  const alive = board.enemies.filter((e) => e.hp > 0)
+  const boss = alive.find((e) => e.kind === 'boss') ?? null
+  let pendingOxygen = 0
+  let minTurns: number | null = null
+  for (const e of alive) {
+    const it = enemyIntent(e)
+    if (it.kind === 'none') continue
+    if (it.turns === 1) pendingOxygen += it.oxygen ?? 0
+    if (minTurns === null || it.turns < minTurns) minTurns = it.turns
   }
-  let nextAttackDamage = 0
-  if (minAttackTurns !== null)
-    for (const e of aliveEnemies) {
-      const intent = enemyIntent(e)
-      if (intent.kind === 'attack' && intent.turns === minAttackTurns) nextAttackDamage += intent.damage ?? 0
+  let nextLabel: string | null = null
+  let nextOxygenLoss = 0
+  if (minTurns !== null)
+    for (const e of alive) {
+      const it = enemyIntent(e)
+      if (it.kind === 'none' || it.turns !== minTurns) continue
+      nextOxygenLoss += it.oxygen ?? 0
+      if (!nextLabel || it.kind === 'drain') nextLabel = it.label // 危険な予告を優先して表示する
     }
-  return { aliveCount: aliveEnemies.length, boss, pendingDamage, minAttackTurns, nextAttackDamage }
+  return { aliveCount: alive.length, boss, pendingOxygen, minTurns, nextLabel, nextOxygenLoss }
 }
 
 const app = new Application()
@@ -940,7 +950,6 @@ async function boot() {
   let inputLocked = false
   let runState: RunState | null = null
   let runSeed = 0
-  let runMaxHp = 20 // 可視化第二波①：「20 / 20」併記用の最大値。startRunで実測値に更新
   let sceneEpoch = 0 // シーン再構築の世代。跨いだ遅延コールバックは無効化
 
   const draftRng = (floor: number): Rng => makeRng((runSeed + floor * 104729 + 17) | 0)
@@ -1213,7 +1222,6 @@ async function boot() {
 
   const startRun = () => {
     runState = createRunState()
-    runMaxHp = runState.playerHp
     runSeed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) | 0
     mapRoot.visible = false
     playRoot.visible = true
@@ -1228,7 +1236,7 @@ async function boot() {
     run.floor = floor
     const floorDef = FLOORS[floor - 1]
     const floorSeed = (runSeed + floor * 7919) | 0
-    board = new Board(buildFloorLevelDef(floor, floorSeed), run, floorDef)
+    board = new Board(buildFloorLevelDef(floor, floorSeed, floorDef), run, floorDef)
     inputLocked = false
     const epoch = ++sceneEpoch
     const alive = () => epoch === sceneEpoch // このシーンがまだ生きているか
@@ -1266,6 +1274,9 @@ async function boot() {
     // 実際には少し広めに取る。92%帯の下端safe areaまでは十分な余白があるため詰める必要はない）
     const dockGap = Math.max(8, vh * 0.035)
     const dockTop = boardTop + boardPix + dockGap
+    // 目標バー：遭遇帯の最下段を1行ぶん借りて盤面の真上に置く（盤面には絶対に重ねない。[A]4バンド予算の内側）
+    const goalBarH = vh * 0.05
+    const goalBarY = boardTop - goalBarH - vh * 0.014
 
     // ---------- HUD/遭遇帯の共通レイヤー ----------
     const ui = new Container()
@@ -1320,14 +1331,116 @@ async function boot() {
       bust = new Sprite(bustTex)
       bust.anchor.set(0.5, 1)
       const bustAreaTop = chipY + chipH + vh * 0.015
-      const bustH = Math.min((boardTop - bustAreaTop) * 0.98, vh * 0.26)
+      // 目標バーを足したぶんバストの足元を1行ぶん繰り上げる（boardTop→goalBarY。バーとバストが重ならない）
+      const bustH = Math.min((goalBarY - bustAreaTop) * 0.98, vh * 0.26)
       bust.scale.set(Math.max(1, bustH) / bustTex.height)
-      bust.position.set(vw * 0.5, boardTop + vh * 0.006)
+      bust.position.set(vw * 0.5, goalBarY + vh * 0.006)
       playRoot.addChildAt(bust, playRoot.getChildIndex(view.root))
-      bustGlow.circle(vw * 0.5, boardTop - bust.height * 0.42, bust.width * 0.62).stroke({ width: vw * 0.018, color: 0xd6432f, alpha: 0.75 })
+      bustGlow.circle(vw * 0.5, goalBarY - bust.height * 0.42, bust.width * 0.62).stroke({ width: vw * 0.018, color: 0xd6432f, alpha: 0.75 })
     }
 
-    // ---------- HUD（ランHUD1行：左=深度／中央=HPゲージ／右=メニュー。[A]） ----------
+    // ---------- 目標バー：層の目的を盤面の真上に1行で置く（何を何個集めるかを常に読ませる） ----------
+    // 公開する形は { root, icon, setValue } の3点だけ。icon のローカル原点＝アイコン中心＝収集の飛翔の着弾点。
+    interface GoalChip {
+      root: Container
+      icon: Container
+      setValue: (v: number) => void
+    }
+    const goalChips: GoalChip[] = []
+    const GOAL_LABEL: Partial<Record<GoalType, string>> = {
+      system: '植物標本',
+      tsutagoke: '蔦苔の浄化',
+      touhen: '陶片の回収',
+      'enemy-kill': '掃討',
+      kokeishi: '苔石',
+      color: '採集',
+      spore: '胞子の搬送',
+    }
+    /** 目標アイコン（新規素材は作らない）。植物標本は葉(n1)とキノコ(n4)を半分ずつ重ねて「どちらも進む」を示す */
+    const makeGoalIcon = (g: Goal, size: number): Container => {
+      const c = new Container()
+      const add = (key: string, dx: number) => {
+        const tex = spriteTexture(key)
+        if (!tex) return
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set(size / Math.max(tex.width, tex.height))
+        sp.position.set(dx, 0)
+        c.addChild(sp)
+      }
+      if (g.type === 'system' && g.system === 'plant') {
+        add('n1', -size * 0.16)
+        add('n4', size * 0.16)
+      } else if (g.type === 'system') add(CATEGORY_ICON[g.system!] ?? 'n1', 0)
+      else if (g.type === 'color') add(CATEGORY_ICON[systemOf(g.color ?? 0)] ?? 'n1', 0)
+      else if (g.type === 'tsutagoke') add('moss_icon', 0)
+      else if (g.type === 'touhen') add('touhen', 0)
+      else if (g.type === 'kokeishi') add('kokeishi', 0)
+      else if (g.type === 'enemy-kill') add('e_swarm', 0)
+      else add('spore', 0)
+      if (!c.children.length) {
+        const gg = new Graphics()
+        gg.circle(0, 0, size * 0.4).fill(UI.brass)
+        c.addChild(gg)
+      }
+      return c
+    }
+    {
+      const n = board.goals.length
+      const goalGap = vw * 0.03
+      const goalChipW = Math.min(vw * 0.44, (vw * 0.9 - goalGap * (n - 1)) / Math.max(1, n))
+      const totalW = goalChipW * n + goalGap * (n - 1)
+      const startX = (vw - totalW) / 2
+      board.goals.forEach((g, i) => {
+        const root = new Container()
+        const bg = new Graphics()
+        bg.roundRect(0, 0, goalChipW, goalBarH, goalBarH * 0.3)
+          .fill({ color: 0x241a10, alpha: 0.92 })
+          .stroke({ width: 2, color: UI.brass })
+        root.addChild(bg)
+        const icon = makeGoalIcon(g, goalBarH * 0.74)
+        icon.position.set(goalBarH * 0.62, goalBarH / 2)
+        root.addChild(icon)
+        // 数字は先に作って実幅を測る（2桁と3桁で幅が変わるため、ラベルの取り分は数字の実測から決める）
+        const numFont = goalBarH * 0.42
+        const num = new Text({ text: `0 / ${g.count}`, style: { fill: 0xf4e8cf, fontSize: numFont, fontFamily: FONT, fontWeight: 'bold' } })
+        num.anchor.set(1, 0.5)
+        const numRight = goalChipW - goalBarH * 0.26
+        num.position.set(numRight, goalBarH / 2)
+        const numMaxW = goalChipW * 0.42 // 桁が増えてもチップ幅の4割を超えさせない（左のラベルを食い潰さない）
+        const fitNum = () => {
+          num.scale.set(1)
+          if (num.width > numMaxW) num.scale.set(numMaxW / num.width)
+        }
+        fitNum()
+        root.addChild(num)
+        const labelX = goalBarH * 1.05
+        const label = new Text({
+          text: GOAL_LABEL[g.type] ?? '目標',
+          style: { fill: 0xcbb98a, fontSize: goalBarH * 0.3, fontFamily: FONT, fontWeight: 'bold' },
+        })
+        label.anchor.set(0, 0.5)
+        label.position.set(labelX, goalBarH / 2)
+        // ラベルは「数字の左端まで」に必ず収める（溢れたら縮める。改行させないのは1行バーだから）
+        const labelMaxW = Math.max(goalBarH * 0.6, numRight - numMaxW - goalBarH * 0.18 - labelX)
+        if (label.width > labelMaxW) label.scale.set(labelMaxW / label.width)
+        root.addChild(label)
+        root.position.set(startX + i * (goalChipW + goalGap), goalBarY)
+        ui.addChild(root)
+        goalChips.push({
+          root,
+          icon,
+          setValue: (v: number) => {
+            if (num.destroyed) return
+            num.text = `${v} / ${g.count}`
+            fitNum()
+            num.style.fill = v >= g.count ? 0xf2c14e : 0xf4e8cf // 達成した目標は金字で「もう触らなくていい」と示す
+          },
+        })
+      })
+    }
+
+    // ---------- HUD（ランHUD1行：左=深度／中央=酸素ゲージ／右=メニュー。[A]） ----------
     const hudRowH = hudBottom - hudTop
     const hudCenterY = hudTop + hudRowH / 2
     const hudIconD = Math.min(hudRowH * 0.9, vw * 0.11)
@@ -1358,7 +1471,7 @@ async function boot() {
     depthBadge.position.set(vw * 0.04 + hudIconD / 2, hudCenterY)
     ui.addChild(depthBadge)
 
-    // HPゲージ「探窟灯の油槽」（[B]）：幅優先で素材アスペクトを保ち、HUD行の高さに収まらなければ縮める
+    // 酸素ゲージ「探窟灯の油槽」（[B]）：幅優先で素材アスペクトを保ち、HUD行の高さに収まらなければ縮める
     const oilTex = spriteTexture('ui_oil')
     let gaugeW = Math.min(248, Math.max(190, vw * 0.54))
     let gaugeH = gaugeW * (196 / 640) // 素材の実寸比（切り直し後 640x196）
@@ -1398,7 +1511,7 @@ async function boot() {
       }
       gaugeRoot.addChild(frameG)
     }
-    // 低HP時のランタン炎ゆらぎ（素材の炎位置＝左端付近への簡易オーバーレイ。周期1.4〜1.8秒でランダムに小さくなる）
+    // 酸素僅少時のランタン炎ゆらぎ（素材の炎位置＝左端付近への簡易オーバーレイ。周期1.4〜1.8秒でランダムに小さくなる）
     const flameFlicker = new Graphics()
     flameFlicker.circle(gaugeW * 0.095, gaugeH * 0.3, gaugeH * 0.3).fill({ color: 0xffb347, alpha: 0.55 })
     flameFlicker.visible = false
@@ -1406,34 +1519,35 @@ async function boot() {
     let flameFlickerActive = false
     const flameFlickerLoop = () => {
       if (!flameFlickerActive || flameFlicker.destroyed) return
-      const dur = 700 + Math.random() * 200 // 半周期0.7〜0.9秒＝全体1.4〜1.8秒（高速点滅は禁止。[B]低HP注記）
+      const dur = 700 + Math.random() * 200 // 半周期0.7〜0.9秒＝全体1.4〜1.8秒（高速点滅は禁止。[B]警告時の注記）
       const scale = 0.65 + Math.random() * 0.5
       tw.tween(flameFlicker.scale, { x: scale, y: scale }, dur, { onDone: flameFlickerLoop })
       tw.tween(flameFlicker, { alpha: 0.3 + Math.random() * 0.45 }, dur)
     }
-    const hpNumText = new Text({
+    const oxyNumText = new Text({
       text: '',
       style: { fill: 0xf4e8cf, fontSize: gaugeH * 0.4, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
     })
-    hpNumText.anchor.set(1, 0.5)
-    hpNumText.position.set(chX1 - gaugeW * 0.015, (chY0 + chY1) / 2)
-    gaugeRoot.addChild(hpNumText)
+    oxyNumText.anchor.set(1, 0.5)
+    oxyNumText.position.set(chX1 - gaugeW * 0.015, (chY0 + chY1) / 2)
+    gaugeRoot.addChild(oxyNumText)
 
-    /** ゲージの塗り＋被弾予告の斜線オーバーレイを最新化する（HP実数はrefreshFloorHudが都度渡す） */
-    const drawGauge = (hp: number, maxHp: number, pendingDamage: number) => {
-      const ratio = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 0
-      const lowHp = hp > 0 && ratio <= 0.25
+    /** ゲージの塗り＋強奪予告の斜線オーバーレイを最新化する（酸素の実数はrefreshFloorHudが都度渡す） */
+    const drawGauge = (oxygen: number, full: number, pendingDrain: number) => {
+      const ratio = Math.max(0, Math.min(1, oxygen / full))
+      const low = oxygen > 0 && oxygen <= OXYGEN_LOW // 割合ではなく絶対量で警告する（貯金で分母が嘘になるため）
       backingG.clear()
       backingG.roundRect(chX0, chY0, chW, chH, chH * 0.22).fill(0x2a1c10)
       fillG.clear()
       hatchLayer.removeChildren().forEach((c) => c.destroy())
       let fillW = 0
-      if (hp > 0) {
-        fillW = lowHp ? chW / 5 : ratio * chW // 低HP：5区画中「最後の1区画」だけを塗る（[B]低HP注記1）
+      if (oxygen > 0) {
+        fillW = ratio * chW
         fillW = Math.max(0, Math.min(chW, fillW))
+        fillW = Math.max(fillW, chH * 0.35) // 残り1でも「まだ残っている」ことが見える最低幅
         fillG.roundRect(chX0, chY0, fillW, chH, chH * 0.22).fill(0xd9922e)
         fillG.roundRect(chX0, chY0, fillW, chH * 0.42, chH * 0.18).fill({ color: 0xf2c96a, alpha: 0.8 })
-        const pendW = Math.min(fillW, (Math.min(hp, pendingDamage) / maxHp) * chW)
+        const pendW = Math.min(fillW, (Math.min(oxygen, pendingDrain) / full) * chW)
         if (pendW > 0.5) {
           const px0 = chX0 + fillW - pendW
           const mask = new Graphics()
@@ -1446,11 +1560,12 @@ async function boot() {
           hatchLayer.addChild(mask, hatch)
         }
       }
-      hpNumText.text = `${Math.max(0, hp)} / ${maxHp}`
-      if (lowHp !== flameFlickerActive) {
-        flameFlickerActive = lowHp
-        flameFlicker.visible = lowHp
-        if (lowHp) flameFlickerLoop()
+      oxyNumText.text = String(Math.max(0, oxygen)) // 分母は出さない（補給の貯金で満タンを超えるため嘘になる）
+      oxyNumText.style.fill = low ? 0xff8a70 : 0xf4e8cf
+      if (low !== flameFlickerActive) {
+        flameFlickerActive = low
+        flameFlicker.visible = low
+        if (low) flameFlickerLoop()
         else {
           flameFlicker.scale.set(1)
           flameFlicker.alpha = 1
@@ -1458,8 +1573,8 @@ async function boot() {
       }
     }
 
-    /** 被弾の実況：80msの白い芯→180msの油揺れ（2px横揺れ）→数値わきに「-N」が浮かぶ（[B]被弾時の指示） */
-    const hpHitFx = (amount: number) => {
+    /** 酸素強奪の実況：80msの白い芯→180msの油揺れ（2px横揺れ）→数値わきに「-N」が浮かぶ（[B]被弾時の指示） */
+    const oxygenDrainFx = (amount: number) => {
       const flash = new Graphics()
       flash.roundRect(chX0, chY0, chW, chH, chH * 0.22).fill({ color: 0xffffff, alpha: 0.95 })
       gaugeRoot.addChild(flash)
@@ -1479,7 +1594,7 @@ async function boot() {
         style: { fill: 0xff6b5a, fontSize: gaugeH * 0.42, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1208, width: 3 } },
       })
       dmgT.anchor.set(0.5)
-      dmgT.position.set(gaugeBaseX + hpNumText.position.x - hpNumText.width * 0.5, gaugeRoot.position.y - gaugeH * 0.3)
+      dmgT.position.set(gaugeBaseX + oxyNumText.position.x - oxyNumText.width * 0.5, gaugeRoot.position.y - gaugeH * 0.3)
       ui.addChild(dmgT)
       tw.tween(dmgT.position, { y: dmgT.position.y - fs(0.05) }, 500, { ease: tw.easeInCubic })
       tw.tween(dmgT, { alpha: 0 }, 380, { delay: 150, onDone: () => { if (!dmgT.destroyed) dmgT.destroy() } })
@@ -1491,6 +1606,20 @@ async function boot() {
       tw.tween(vignette, { alpha: 0.6 }, 90, {
         onDone: () => tw.tween(vignette, { alpha: 0 }, 260, { onDone: () => { if (!vignette.destroyed) vignette.destroy() } }),
       })
+    }
+
+    /** 層クリアの補給：ゲージが左→右へ琥珀色に満ち、数字わきに「+7」が浮く */
+    const oxygenRefillFx = (amount: number) => {
+      const t = new Text({
+        text: `+${amount}`,
+        style: { fill: 0xf2c96a, fontSize: gaugeH * 0.42, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
+      })
+      t.anchor.set(0.5)
+      t.position.set(gaugeBaseX + oxyNumText.position.x - oxyNumText.width * 0.5, gaugeRoot.position.y - gaugeH * 0.3)
+      ui.addChild(t)
+      tw.tween(t.position, { y: t.position.y - fs(0.05) }, 520, { ease: tw.easeOutCubic })
+      tw.tween(t, { alpha: 0 }, 380, { delay: 200, onDone: () => { if (!t.destroyed) t.destroy() } })
+      tw.delay(60, () => { if (alive()) refreshFloorHud() }) // 実値へ確定
     }
 
     // メニューボタン（右。歯車/戻るを統合。[A]「歯車1個のメニュー内へ設定／ランを中断／マップ確認を格納」）
@@ -1536,7 +1665,7 @@ async function boot() {
 
       const panelW = vw * 0.58
       const rowH = Math.max(44, vh * 0.06)
-      const panelH = rowH * 2
+      const panelH = rowH * 3 // ミュート → 振動 → divider → ラン中断 の3行
       const panel = new Container()
       const bg = new Graphics()
       bg.roundRect(0, 0, panelW, panelH, 12).fill({ color: 0x241a10, alpha: 0.97 }).stroke({ width: 2, color: UI.brass })
@@ -1555,18 +1684,38 @@ async function boot() {
         muteRow.text = muteLabel()
       })
       panel.addChild(muteHit)
+      // 振動行（P7 juice/haptics）。非対応端末（iOS Safari）はグレー表示でヒット領域を作らない＝嘘をつかない
+      const hapticsLabel = () => (!hapticsSupported() ? '振動（この端末は非対応）' : hapticsEnabled() ? '振動：オン' : '振動：オフ')
+      const hapticsRow = new Text({
+        text: hapticsLabel(),
+        style: { fill: hapticsSupported() ? 0xf4e8cf : 0x8a7c68, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' },
+      })
+      hapticsRow.anchor.set(0, 0.5)
+      hapticsRow.position.set(panelW * 0.08, rowH * 1.5)
+      panel.addChild(hapticsRow)
+      if (hapticsSupported()) {
+        const hapticsHit = new Container()
+        hapticsHit.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= panelW && y >= rowH && y <= rowH * 2 }
+        hapticsHit.eventMode = 'static'
+        hapticsHit.cursor = 'pointer'
+        hapticsHit.on('pointertap', () => {
+          toggleHaptics()
+          hapticsRow.text = hapticsLabel()
+        })
+        panel.addChild(hapticsHit)
+      }
       const divider = new Graphics()
-      divider.moveTo(panelW * 0.06, rowH).lineTo(panelW * 0.94, rowH).stroke({ width: 1.5, color: UI.brass, alpha: 0.5 })
+      divider.moveTo(panelW * 0.06, rowH * 2).lineTo(panelW * 0.94, rowH * 2).stroke({ width: 1.5, color: UI.brass, alpha: 0.5 })
       panel.addChild(divider)
       const abandonRow = new Text({
         text: 'ランを中断して拠点へ',
         style: { fill: 0xe0a89c, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' },
       })
       abandonRow.anchor.set(0, 0.5)
-      abandonRow.position.set(panelW * 0.08, rowH * 1.5)
+      abandonRow.position.set(panelW * 0.08, rowH * 2.5)
       panel.addChild(abandonRow)
       const abandonHit = new Container()
-      abandonHit.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= panelW && y >= rowH && y <= rowH * 2 }
+      abandonHit.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= panelW && y >= rowH * 2 && y <= rowH * 3 }
       abandonHit.eventMode = 'static'
       abandonHit.cursor = 'pointer'
       abandonHit.on('pointertap', () => {
@@ -1581,33 +1730,36 @@ async function boot() {
     menuBtn.on('pointertap', () => (menuOpen ? closeRunMenu() : openRunMenu()))
     ui.addChild(menuBtn)
 
-    /** 遭遇帯の更新：残敵/ボス情報＋次行動の要約、被弾予告の合計ダメージを返す（HPゲージへ渡す） */
+    /** 遭遇帯の更新：残敵/ボス情報＋次行動の要約、強奪予告の合計酸素を返す（酸素ゲージへ渡す） */
     const refreshEncounter = (): number => {
       const info = computeEncounterInfo(board)
       if (info.boss) {
-        enemyChip.text.text = `${BOSS_NAME}\nHP ${Math.max(0, info.boss.hp)} / ${info.boss.maxHp}`
+        // 第1段階は匣の残り枚数、核が露出してからHP（見るべき数字が段階で変わる）
+        enemyChip.text.text =
+          info.boss.bossPhase === 1 ? `${BOSS_NAME}\n匣 ${info.boss.bossShellLeft}/4` : `${BOSS_NAME}\nHP ${Math.max(0, info.boss.hp)} / ${info.boss.maxHp}`
       } else {
         enemyChip.text.text = `残敵 ${info.aliveCount}`
       }
-      const lethal = run.playerHp > 0 && info.nextAttackDamage > 0 && run.playerHp - info.nextAttackDamage <= 0
+      const lethal = run.oxygen > 0 && info.nextOxygenLoss > 0 && run.oxygen - info.nextOxygenLoss <= 0
       if (lethal) {
-        actionChip.text.text = `あと${info.minAttackTurns ?? 1}手：致死`
+        actionChip.text.text = `あと${info.minTurns ?? 1}手：遭難`
         actionChip.text.style.fill = 0xff8a70
-      } else if (info.minAttackTurns !== null) {
-        // ダメージ量まで出す（同じ「あと3手」でもHP16と2では意味が違う）
-        actionChip.text.text = `あと${info.minAttackTurns}手：${info.nextAttackDamage}ダメージ`
-        actionChip.text.style.fill = UI.badgeText
+      } else if (info.minTurns !== null) {
+        // 妨害しかしない敵でもチップが必ず語る（外すと10層中8層が「静観中」になる）
+        actionChip.text.text = `あと${info.minTurns}手：${info.nextLabel ?? '妨害'}`
+        actionChip.text.style.fill = info.nextOxygenLoss > 0 ? 0xff8a70 : UI.badgeText
       } else {
         actionChip.text.text = '静観中'
         actionChip.text.style.fill = UI.badgeText
       }
-      bustGlow.visible = info.pendingDamage > 0
-      return info.pendingDamage
+      bustGlow.visible = info.pendingOxygen > 0
+      return info.pendingOxygen
     }
 
-    const refreshFloorHud = () => {
-      const pendingDamage = refreshEncounter()
-      drawGauge(Math.max(0, run.playerHp), runMaxHp, pendingDamage)
+    /** oxygenOverride：補給前の値でゲージを描きたいとき（層クリアの+7は演出で見せるため即時反映しない） */
+    const refreshFloorHud = (oxygenOverride?: number) => {
+      const pendingDrain = refreshEncounter()
+      drawGauge(Math.max(0, oxygenOverride ?? run.oxygen), OXYGEN_GAUGE_FULL, pendingDrain)
     }
     refreshFloorHud()
 
@@ -1840,10 +1992,10 @@ async function boot() {
     }
     // 敵本体／インテントバッジのタップ→共通「野帳シート」（[C]表：敵の開き方）。旧BoardView.showEnemyTooltipの統合先
     view.onEnemyTap = (enemy) => showFieldNote(buildEnemyEntry(enemy))
-    /** 可視化第二波②：「どの敵が殴ったか」を軌跡で示してからHPゲージの被弾演出（hpHitFx）へ繋ぐ */
-    view.onEnemyAttack = (enemyId, damage) => {
+    /** 可視化第二波②：「どの敵が奪ったか」を軌跡で示してから酸素ゲージの被弾演出（oxygenDrainFx）へ繋ぐ */
+    view.onOxygenDrained = (enemyId, amount) => {
       const en = board.enemies.find((e) => e.id === enemyId)
-      const cell = en ? (en.kind === 'boss' ? { x: W - 1, y: en.bossFrontRow } : en.cells[0]) : null
+      const cell = en?.cells[en.cells.length - 1] ?? null
       const toX = gaugeRoot.position.x + (chX0 + chX1) / 2
       const toY = gaugeRoot.position.y + (chY0 + chY1) / 2
       if (cell) {
@@ -1852,13 +2004,75 @@ async function boot() {
         enemyAttackTrailFx(fromX, fromY, toX, toY)
         tw.delay(220, () => {
           if (!alive()) return
-          hpHitFx(damage)
+          oxygenDrainFx(amount)
         })
       } else {
         // 敵の位置が特定できない（撃破直後など）場合も被弾演出自体は必ず出す
-        hpHitFx(damage)
+        oxygenDrainFx(amount)
       }
     }
+
+    // ---------- 目標収集の飛翔（JUICE.md §1②）：盤面で壊れた成果がHUDの目標チップへ吸い込まれる ----------
+    const FLY_ORIGIN = new Point(0, 0)
+    const goalShown = board.goals.map(() => 0) // HUDに出ている値。board.goalDone とは別に持つ
+    let flightsInAir = 0
+    const goalCollectFly = (index: number, done: number, fromGlobal: { x: number; y: number }, flightIndex: number) => {
+      const chip = goalChips[index]
+      if (!chip || chip.icon.destroyed || !alive()) return
+      if (flightsInAir >= 12) {
+        goalShown[index] = done
+        chip.setValue(done)
+        return
+      }
+      // 座標系：BoardView は view.root の子、チップは ui の子。どちらも playRoot の子孫なので global 経由で落とす
+      const from = playRoot.toLocal(fromGlobal as Point)
+      const to = playRoot.toLocal(chip.icon.toGlobal(FLY_ORIGIN))
+      const icon = makeGoalIcon(board.goals[index], view.S * 0.62)
+      icon.position.set(from.x, from.y)
+      icon.scale.set(0.4)
+      icon.alpha = 0
+      playRoot.addChild(icon)
+      flightsInAir++
+      // A（0-90ms）ためて弾ける
+      const kickA = -Math.PI / 2 + (flightIndex % 2 ? 0.55 : -0.55)
+      const kickD = view.S * 0.22
+      tw.tween(icon, { alpha: 1 }, 60, { channel: 'fx' })
+      tw.tween(icon.scale, { x: 1.15, y: 1.15 }, 90, { ease: tw.easeOutBackSoft, channel: 'fx' })
+      tw.tween(icon.position, { x: from.x + Math.cos(kickA) * kickD, y: from.y + Math.sin(kickA) * kickD }, 90, { ease: tw.easeOutCubic, channel: 'fx' })
+      // B（90ms〜）弧を描いて吸われる。x と y に別のイージングを与えると経路が曲がる（ベジェ評価器は足さない）
+      const D = Math.min(450, 320 + flightIndex * 14)
+      tw.tween(icon.position, { y: to.y }, D, { delay: 90, ease: tw.easeOutCubic, channel: 'fx' })
+      tw.tween(icon.scale, { x: 0.55, y: 0.55 }, D, { delay: 90, ease: tw.easeInQuad, channel: 'fx' })
+      tw.tween(icon.position, { x: to.x }, D, {
+        delay: 90,
+        ease: tw.easeInQuad,
+        channel: 'fx',
+        onDone: () => {
+          flightsInAir--
+          if (!icon.destroyed) icon.destroy()
+          if (!alive() || chip.icon.destroyed) return
+          goalShown[index] = Math.max(goalShown[index], done)
+          chip.setValue(goalShown[index])
+          tw.tween(chip.icon.scale, { x: 1.3, y: 1.3 }, 90, {
+            onDone: () => {
+              if (!chip.icon.destroyed) tw.tween(chip.icon.scale, { x: 1, y: 1 }, 150, { ease: tw.easeOutBack })
+            },
+          })
+          sfx.drain(flightIndex) // 既存SE流用（semitone(980, i%12) の上昇ピング）。新規音は作らない
+        },
+      })
+    }
+    view.onGoalCollect = goalCollectFly
+
+    /** 数字ずれの保険（飛翔ロスト・シーン破棄・上限超過）。落ちたぶんを黙って追いつかせる＝跳ねさせない */
+    const syncGoalDisplay = () => {
+      board.goalDone.forEach((v, i) => {
+        if (goalShown[i] === v) return
+        goalShown[i] = v
+        goalChips[i]?.setValue(v)
+      })
+    }
+    syncGoalDisplay() // 層開始時の初期化
 
     // ---------- 入力 ----------
     let downAt: { x: number; y: number } | null = null
@@ -1910,18 +2124,28 @@ async function boot() {
     // ---------- 層の決着（floor-clear / run-over。ROGUE.md §5/§6/§8） ----------
     const handleFloorResult = (evs: BoardEvent[]) => {
       const dur = view.play(evs)
-      refreshFloorHud()
+      // 飛翔が落ちても数字は必ず board.goalDone に追いつく（演出の取りこぼしを表示に持ち込まない）
+      tw.delay(Math.min(dur + 500, 2200), () => {
+        if (alive()) syncGoalDisplay()
+      })
+      const refill = evs.find((e) => e.t === 'oxygen-refill')
+      // 補給ぶんは層クリアバナーで見せるので、この時点では補給前の値でゲージを描く
+      refreshFloorHud(refill && refill.t === 'oxygen-refill' ? refill.left - refill.amount : undefined)
       refreshProgressBadges() // 可視化第二波④：1手ごとに進捗（あれば）を反映
       // 結果画面の主記録用（夜間監査[C]7/[E]3）：1手＝このevs全体で発火した upgrade-fire の件数。board.ts は変更禁止のため
       // main.ts側でイベント列を数えて集計する（board.ts が触らない run.records の追加フィールド）。
       const firesThisMove = evs.reduce((n, e) => n + (e.t === 'upgrade-fire' ? 1 : 0), 0)
       if (firesThisMove > run.records.maxFiresInOneMove) run.records.maxFiresInOneMove = firesThisMove
-      for (const e of evs) {
-        if (e.t === 'poison-triggered') {
-          hpHitFx(1)
-        } else if (e.t === 'boss-slam') {
-          hpHitFx(e.damage)
-        }
+      // 酸素を直接奪われた手はゲージ側でも必ず被弾を見せる（軌跡は onOxygenDrained が別に出す）
+      for (const e of evs) if (e.t === 'oxygen-drained') oxygenDrainFx(e.amount)
+      // 1手ぶんの消費(-1)は数字の脈動だけで示す。音・揺れ・赤フラッシュは出さない（毎手鳴らすとメリハリが死ぬ。JUICE §0-2）
+      if (evs.some((e) => e.t === 'oxygen-spent')) {
+        const big = run.oxygen <= OXYGEN_CRITICAL
+        tw.tween(oxyNumText.scale, { x: big ? 1.25 : 1.12, y: big ? 1.25 : 1.12 }, big ? 130 : 100, {
+          onDone: () => {
+            if (!oxyNumText.destroyed) tw.tween(oxyNumText.scale, { x: 1, y: 1 }, big ? 130 : 100)
+          },
+        })
       }
       const cleared = evs.some((e) => e.t === 'floor-clear')
       const over = evs.some((e) => e.t === 'run-over')
@@ -1965,6 +2189,10 @@ async function boot() {
       bt.scale.set(0)
       playRoot.addChild(bt)
       tw.tween(bt.scale, { x: 1, y: 1 }, 320, { ease: tw.easeOutBack })
+      // 補給はここで見せる（ゲージ側は補給前の値を描いてあるので、この演出のあと実値へ確定する）
+      tw.delay(360, () => {
+        if (alive()) oxygenRefillFx(OXYGEN_SUPPLY_PER_FLOOR)
+      })
       tw.delay(1100, () => {
         if (!alive()) return
         tw.tween(bt.scale, { x: 0, y: 0 }, 280, { ease: tw.easeInCubic, onDone: () => bt.destroy() })
@@ -2541,13 +2769,23 @@ async function boot() {
         return icon ? icon.getGlobalPosition() : null
       },
       startRun,
+      // 目標駆動なので「敵を全滅させる」では殲滅以外の層で効かない。目標を直接埋めてクリア判定を叩く
       forceFloorClear: () => {
         if (inputLocked) return
+        board.goals.forEach((g, i) => {
+          board.goalDone[i] = g.count
+        })
         const ev: BoardEvent[] = []
-        const priv = board as unknown as { dealEnemyDamage: (id: number, amount: number, ev: BoardEvent[]) => void }
-        for (const e of [...board.enemies]) priv.dealEnemyDamage(e.id, e.hp, ev)
+        ;(board as unknown as { checkFloorClear: (ev: BoardEvent[]) => void }).checkFloorClear(ev)
         if (ev.length) handleFloorResult(ev)
       },
+      setOxygen: (n: number) => {
+        if (runState) {
+          runState.oxygen = n
+          refreshFloorHud()
+        }
+      },
+      hapticsLog, // 振動は動画に写らないのでQAはこれを読む
       showMap,
     }
   }

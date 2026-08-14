@@ -5,6 +5,21 @@ import { makeRng, randInt, type Rng } from './rng'
 import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID } from './upgrades'
 
 /**
+ * ラン開始時の酸素（PLAN_LOOP.md §1.4）。1スワップ=1消費なので「最初の持ち手数」でもある。
+ * SPEC_OXYGEN.md §1.1 の初期値は24だったが、層9の息喰み・層10のボスが手数と別に酸素を奪う
+ * （3手ごとに-3＝実質2倍の消費）ぶんが予算に入っていなかったため、runsim 較正で34へ上げた（§10.3）。
+ */
+export const OXYGEN_START = 34
+/** 層クリアの補給。上限は設けない＝早く終えた残りがそのまま次層への貯金になる */
+export const OXYGEN_SUPPLY_PER_FLOOR = 7
+/** HUD塗りの満タン基準（表示専用。貯金で超えたら満タンに丸める） */
+export const OXYGEN_GAUGE_FULL = OXYGEN_START
+/** 警告（炎ゆらぎ＋数字の朱化）。絶対量で判定する */
+export const OXYGEN_LOW = 8
+/** 最終警告（1手ごとに数字が脈打つ） */
+export const OXYGEN_CRITICAL = 3
+
+/**
  * ラン開始時に配布する強化の抽選プール（プレイテスト反省：連鎖の起点を最初から1つ持たせる）。
  * 夜間監査[C]10/15：20種全体だと依存度・難度がばらばらで、前提物（遺物/爆発鉱石/特殊駒等）が
  * 無いと機能しない強化まで初手に出てしまう。単体で即座に盤面を動かす8種だけに絞る。
@@ -37,7 +52,8 @@ export interface RunRecords {
 export interface RunState {
   upgrades: string[] // 取得済み強化ID（upgrades.ts の UpgradeDef.id）
   gearCharge: number // ギア起動カウンタ（自律機構/機械庭園/遺物共鳴の判定に使用）
-  playerHp: number
+  /** 唯一の資源（PLAN_LOOP.md §1.4）。1手で-1、0で遭難。層クリアで +OXYGEN_SUPPLY_PER_FLOOR（上限なし） */
+  oxygen: number
   floor: number
   records: RunRecords
   /** 遺物共鳴(#13)が次の遺物マッチ効果を2倍にするための一時フラグ。消費で false に戻る。
@@ -62,7 +78,7 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
   return {
     upgrades: initialUpgrades,
     gearCharge: 0,
-    playerHp: 20,
+    oxygen: OXYGEN_START,
     floor: 1,
     records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, maxFiresInOneMove: 0, critical: false, swarmPropagationKills: 0 },
     relicBoostNext: false,

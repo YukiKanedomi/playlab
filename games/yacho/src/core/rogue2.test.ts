@@ -1,8 +1,8 @@
-// ローグライク・ピボット第2弾（Rogue-MVP②）のエンジン層テスト。ROGUE.md §5/§6 準拠。
+// ローグライク・ピボット第2弾（Rogue-MVP②）のエンジン層テスト。SPEC_OXYGEN.md §1.3/§1.4 準拠へ更新。
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
 import { bossBodyCells, type EnemyInstance } from './enemies'
-import { createRunState } from './run'
+import { createRunState, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR } from './run'
 import type { BoardEvent, LevelDef, Piece, XY } from './types'
 
 const plain = (over: Partial<LevelDef> = {}): LevelDef => ({
@@ -44,7 +44,7 @@ const inert = () => {
   return rows
 }
 
-/** 盤面を単色駒で埋める（岩殻獣/胞子獣/環境効果テストの候補セルを1つだけに固定するため） */
+/** 盤面を単色駒で埋める（岩殻獣/喰み蟲テストの候補セルを1つだけに固定するため） */
 function fillAll(b: Board, color: 0 | 1 | 2 | 3 | 4) {
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) b.at(x, y)!.piece = { kind: 'normal', color }
 }
@@ -52,13 +52,11 @@ function fillAll(b: Board, color: 0 | 1 | 2 | 3 | 4) {
 // private メソッドへのアクセス用（rogue.test.tsと同じ流儀：Boardとは交差させず、`b as unknown as Priv`で使う）
 interface Priv {
   clearPieceAt: (p: XY, ev: BoardEvent[]) => void
-  dealEnemyDamage: (id: number, amount: number, ev: BoardEvent[]) => void
+  dealEnemyDamage: (id: number, amount: number, ev: BoardEvent[], heavy?: boolean) => void
   rockshellAction: (e: EnemyInstance, ev: BoardEvent[]) => void
-  sporelingAction: (e: EnemyInstance, ev: BoardEvent[]) => void
-  burrowerAction: (e: EnemyInstance, ev: BoardEvent[]) => void
+  harvesterAction: (e: EnemyInstance, ev: BoardEvent[]) => void
+  diggerAction: (e: EnemyInstance, ev: BoardEvent[]) => void
   tickSeals: (ev: BoardEvent[]) => void
-  tickEnvironment: (ev: BoardEvent[]) => void
-  bossPeriodicAttack: (e: EnemyInstance, ev: BoardEvent[]) => void
   resolveEnemyTurn: (ev: BoardEvent[]) => void
   checkSporeTouch: (at: XY, ev: BoardEvent[]) => void
   explodeAt: (at: XY, ev: BoardEvent[], opts?: { radius?: number; shape?: 'cross' | 'square' }) => void
@@ -66,21 +64,37 @@ interface Priv {
 const priv = (b: Board) => b as unknown as Priv
 
 describe('敵ダメージ経路：マッチ隣接', () => {
-  it('身体セルに隣接するマッチはマッチ駒数ぶんダメージを与える', () => {
+  it('3個マッチは1ダメージしか入らない（SPEC_OXYGEN §1.3）', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
     setPieces(b, ['01003131', ...inert().slice(1)])
     const e = b.spawnEnemy('rockshell', [{ x: 2, y: 1 }]) // (2,0)の3連に隣接
     const ev = b.swap({ x: 0, y: 0 }, { x: 1, y: 0 })
     const dmg = ev.find((x) => x.t === 'enemy-damage')
-    expect(dmg && dmg.t === 'enemy-damage' ? dmg.amount : -1).toBe(3) // x1..x3の3個同時消滅
-    expect(e.hp).toBe(8 - 3)
+    expect(dmg && dmg.t === 'enemy-damage' ? dmg.amount : -1).toBe(1) // 3個マッチは減衰して1
+    expect(e.hp).toBe(6 - 1)
+  })
+
+  it('4個以上のマッチはマッチ駒数ぶんダメージを与える（heavy な一撃）', () => {
+    const run = createRunState([])
+    const b = new Board(plain(), run)
+    setPieces(b, inert())
+    // 縦の 2+1 を1手でつないで x=7 の4連にする（事前にマッチが成立していない形にする）
+    b.at(7, 0)!.piece = { kind: 'normal', color: 0 }
+    b.at(7, 1)!.piece = { kind: 'normal', color: 0 }
+    b.at(7, 2)!.piece = { kind: 'normal', color: 1 }
+    b.at(7, 3)!.piece = { kind: 'normal', color: 0 }
+    b.at(6, 2)!.piece = { kind: 'normal', color: 0 }
+    b.spawnEnemy('rockshell', [{ x: 6, y: 1 }]) // (7,1)の4連に隣接
+    const ev = b.swap({ x: 6, y: 2 }, { x: 7, y: 2 })
+    const dmg = ev.find((x) => x.t === 'enemy-damage')
+    expect(dmg && dmg.t === 'enemy-damage' ? dmg.amount : -1).toBe(4)
   })
 })
 
 describe('敵ダメージ経路：爆発', () => {
   it('爆発が敵の身体セルを直接巻き込むと3ダメージ', () => {
-    // マッチ隣接ダメージ（マッチ駒数ぶん）と混ざらないよう、爆発そのものを直接発火して検証する
+    // マッチ隣接ダメージと混ざらないよう、爆発そのものを直接発火して検証する
     // （爆発鉱石は必ずマッチの一員として爆発するため、爆発中心の隣接セルは同時にdamageAroundの対象にもなる）
     const run = createRunState([])
     const b = new Board(plain(), run)
@@ -90,12 +104,12 @@ describe('敵ダメージ経路：爆発', () => {
     priv(b).explodeAt({ x: 4, y: 3 }, ev, { radius: 1, shape: 'cross' })
     const dmg = ev.find((x) => x.t === 'enemy-damage')
     expect(dmg && dmg.t === 'enemy-damage' ? dmg.amount : -1).toBe(3)
-    expect(e.hp).toBe(6 - 3)
+    expect(e.hp).toBe(5 - 3)
   })
 })
 
 describe('敵ダメージ経路：特殊駒の効果線', () => {
-  it('特殊駒の効果線が敵の身体セルを通ると1ダメージ', () => {
+  it('特殊駒の効果線が敵の身体セルを通ると2ダメージ', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
     setPieces(b, inert())
@@ -103,8 +117,8 @@ describe('敵ダメージ経路：特殊駒の効果線', () => {
     const e = b.spawnEnemy('burrower', [{ x: 5, y: 3 }]) // 同じ行を横銛が通過
     const ev = b.tap({ x: 0, y: 3 })
     const dmg = ev.find((x) => x.t === 'enemy-damage')
-    expect(dmg && dmg.t === 'enemy-damage' ? dmg.amount : -1).toBe(1)
-    expect(e.hp).toBe(10 - 1)
+    expect(dmg && dmg.t === 'enemy-damage' ? dmg.amount : -1).toBe(2)
+    expect(e.hp).toBe(6 - 2)
   })
 })
 
@@ -137,54 +151,59 @@ describe('甲殻付与と追加破壊（岩殻獣）', () => {
   })
 })
 
-describe('毒胞子でHP減（胞子獣）', () => {
-  it('定期行動は植物1駒を毒胞子化する', () => {
+describe('捕食印（喰み蟲）', () => {
+  it('定期行動は資源1駒に捕食印をつける', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
-    fillAll(b, 2) // 植物(色1/4)候補を(4,4)だけに絞る
-    b.at(4, 4)!.piece = { kind: 'normal', color: 1 }
+    fillAll(b, 3)
+    // 充填ギア/爆発鉱石/胞子は優先候補（prefer）。1つだけ置いて印の落ち先を固定する
+    b.at(4, 4)!.piece = { kind: 'normal', color: 1, charged: true }
     const e = b.spawnEnemy('sporeling', [{ x: 0, y: 0 }])
     const ev: BoardEvent[] = []
-    priv(b).sporelingAction(e, ev)
-    expect(ev.some((x) => x.t === 'spore-poisoned')).toBe(true)
-    expect(b.at(4, 4)?.poisonSpore).toBe(true)
-  })
-
-  it('毒胞子化した駒を消すとプレイヤーHPが1減る', () => {
-    const run = createRunState([])
-    const b = new Board(plain(), run)
-    setPieces(b, inert())
-    b.at(2, 2)!.piece = { kind: 'normal', color: 1 }
-    b.at(2, 2)!.poisonSpore = true
-    const before = run.playerHp
-    const ev: BoardEvent[] = []
-    priv(b).clearPieceAt({ x: 2, y: 2 }, ev)
-    expect(run.playerHp).toBe(before - 1)
-    expect(ev.some((x) => x.t === 'poison-triggered')).toBe(true)
+    priv(b).harvesterAction(e, ev)
+    expect(ev.some((x) => x.t === 'prey-marked')).toBe(true)
+    expect(b.at(4, 4)?.preyMark).toBe(true)
+    expect(e.markAt).toEqual({ x: 4, y: 4 })
   })
 })
 
-describe('穴封鎖の期限切れ（穴潜み）', () => {
-  it('定期行動は空きセルを2ターン封鎖し、自身は別の空きセルへ移動する', () => {
+describe('崩落予告と封鎖（裂坑掘り）', () => {
+  it('1回目の定期行動は崩落を予告するだけで、まだ封鎖しない', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
     setPieces(b, inert())
-    b.at(1, 1)!.piece = null
-    b.at(6, 6)!.piece = null
     const e = b.spawnEnemy('burrower', [{ x: 0, y: 0 }])
     const ev: BoardEvent[] = []
-    priv(b).burrowerAction(e, ev)
-    expect(ev.some((x) => x.t === 'cell-sealed')).toBe(true)
-    expect(b.at(0, 0)?.block).toBeNull() // 元の位置は解放される
+    priv(b).diggerAction(e, ev)
+    expect(ev.some((x) => x.t === 'fissure-telegraph')).toBe(true)
+    expect(ev.some((x) => x.t === 'cell-sealed')).toBe(false)
+    expect(e.telegraph?.length).toBe(4)
   })
 
-  it('封鎖セルは2ターンで自動解除される', () => {
+  it('2回目の定期行動で予告の2x2を3手ぶん封鎖し、自身は空きセルへ移動する', () => {
+    const run = createRunState([])
+    const b = new Board(plain(), run)
+    setPieces(b, inert())
+    b.at(7, 0)!.piece = null // 移動先の空きセルを1つだけ用意する
+    const e = b.spawnEnemy('burrower', [{ x: 0, y: 0 }])
+    const ev: BoardEvent[] = []
+    priv(b).diggerAction(e, ev) // 予告
+    priv(b).diggerAction(e, ev) // 崩落＋移動
+    const sealed = ev.filter((x) => x.t === 'cell-sealed')
+    expect(sealed.length).toBeGreaterThan(0)
+    expect(sealed.every((x) => x.t === 'cell-sealed' && x.turns === 3)).toBe(true)
+    expect(b.at(0, 0)?.block).toBeNull() // 元の位置は解放される
+    expect(e.cells).toEqual([{ x: 7, y: 0 }])
+  })
+
+  it('封鎖セルは3ターンで自動解除される', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
     setPieces(b, inert())
     b.at(0, 0)!.piece = null
-    b.at(0, 0)!.block = { type: 'seal', turnsLeft: 2 }
+    b.at(0, 0)!.block = { type: 'seal', turnsLeft: 3 }
     let ev: BoardEvent[] = []
+    priv(b).tickSeals(ev)
     priv(b).tickSeals(ev)
     expect(b.at(0, 0)?.block).toEqual({ type: 'seal', turnsLeft: 1 })
     expect(ev.some((x) => x.t === 'cell-unsealed')).toBe(false)
@@ -196,86 +215,50 @@ describe('穴封鎖の期限切れ（穴潜み）', () => {
 })
 
 describe('ボス', () => {
-  it('累計5ダメージごとに1行後退し、身体最上段が解放される', () => {
+  it('3ターンごとに酸素を3奪う', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
-    const e = b.spawnEnemy('boss', bossBodyCells(H - 2, H - 1, W))
+    b.spawnEnemy('boss', bossBodyCells(H - 1, H - 1, W))
     const ev: BoardEvent[] = []
-    priv(b).dealEnemyDamage(e.id, 5, ev)
-    expect(ev.some((x) => x.t === 'boss-retreat')).toBe(true)
-    expect(b.at(0, H - 2)?.block).toBeNull() // 最上段が解放された
-    expect(b.at(0, H - 1)?.block).toEqual({ type: 'enemy', enemyId: e.id }) // 最下段は残る
-    expect(e.hp).toBe(30 - 5)
-  })
-
-  it('3ターンごとに全体攻撃でプレイヤーHPが3減る', () => {
-    const run = createRunState([])
-    const b = new Board(plain(), run)
-    const e = b.spawnEnemy('boss', bossBodyCells(H - 2, H - 1, W))
-    const ev: BoardEvent[] = []
-    priv(b).bossPeriodicAttack(e, ev)
-    priv(b).bossPeriodicAttack(e, ev)
-    expect(run.playerHp).toBe(20) // まだ発動しない
-    priv(b).bossPeriodicAttack(e, ev)
-    expect(run.playerHp).toBe(17)
-    expect(ev.some((x) => x.t === 'boss-slam')).toBe(true)
-  })
-})
-
-describe('環境：菌糸層', () => {
-  it('3ターンごとに植物駒が隣接する空きセルへ増殖する', () => {
-    const run = createRunState([])
-    const b = new Board(plain(), run, { floor: 1, enemies: [], env: 'fungal' })
-    fillAll(b, 3) // 植物(色1/4)候補を(3,3)だけに絞る
-    b.at(3, 3)!.piece = { kind: 'normal', color: 1 }
-    b.at(3, 2)!.piece = null // 唯一の増殖先候補
-    let ev: BoardEvent[] = []
-    priv(b).tickEnvironment(ev)
-    priv(b).tickEnvironment(ev)
-    expect(ev.some((x) => x.t === 'env-grow')).toBe(false)
-    ev = []
-    priv(b).tickEnvironment(ev)
-    expect(ev.some((x) => x.t === 'env-grow')).toBe(true)
-  })
-})
-
-describe('環境：結晶洞', () => {
-  it('3ターンごとに鉱物駒が隣接する空きセルへ成長する', () => {
-    const run = createRunState([])
-    const b = new Board(plain(), run, { floor: 1, enemies: [], env: 'crystal' })
-    fillAll(b, 3) // 鉱物(色2)候補を(3,3)だけに絞る
-    b.at(3, 3)!.piece = { kind: 'normal', color: 2 }
-    b.at(3, 2)!.piece = null // 唯一の増殖先候補
-    let ev: BoardEvent[] = []
-    priv(b).tickEnvironment(ev)
-    priv(b).tickEnvironment(ev)
-    ev = []
-    priv(b).tickEnvironment(ev)
-    const grown = ev.find((x) => x.t === 'env-grow')
-    expect(grown && grown.t === 'env-grow' ? grown.kind : null).toBe('mineral')
+    priv(b).resolveEnemyTurn(ev)
+    priv(b).resolveEnemyTurn(ev)
+    expect(run.oxygen).toBe(OXYGEN_START) // まだ発動しない
+    priv(b).resolveEnemyTurn(ev)
+    const drained = ev.find((x) => x.t === 'oxygen-drained')
+    expect(drained && drained.t === 'oxygen-drained' ? drained.amount : -1).toBe(3)
+    expect(run.oxygen).toBe(OXYGEN_START - 3)
   })
 })
 
 describe('層クリア判定', () => {
-  it('層内の敵を全滅させるとfloor-clearイベントが一度だけ発生する', () => {
+  it('enemy-kill目標を満たすとfloor-clearと補給が対で一度だけ出る', () => {
     const run = createRunState([])
-    const b = new Board(plain(), run)
+    const b = new Board(plain({ goals: [{ type: 'enemy-kill', count: 2 }] }), run)
     const e1 = b.spawnEnemy('rockshell', [{ x: 0, y: 0 }])
-    const e2 = b.spawnEnemy('sporeling', [{ x: 1, y: 0 }])
+    const e2 = b.spawnEnemy('sporeling', [{ x: 6, y: 0 }])
     let ev: BoardEvent[] = []
-    priv(b).dealEnemyDamage(e1.id, 8, ev)
+    priv(b).dealEnemyDamage(e1.id, 6, ev)
+    priv(b).resolveEnemyTurn(ev) // 発火口は checkFloorClear のみ（dealEnemyDamage からは出ない）
     expect(ev.some((x) => x.t === 'floor-clear')).toBe(false) // e2がまだ残っている
     ev = []
-    priv(b).dealEnemyDamage(e2.id, 6, ev)
-    expect(ev.some((x) => x.t === 'floor-clear')).toBe(true)
+    const before = run.oxygen
+    priv(b).dealEnemyDamage(e2.id, 5, ev)
+    priv(b).resolveEnemyTurn(ev)
+    expect(ev.filter((x) => x.t === 'floor-clear').length).toBe(1)
+    const refill = ev.find((x) => x.t === 'oxygen-refill')
+    expect(refill && refill.t === 'oxygen-refill' ? refill.amount : -1).toBe(OXYGEN_SUPPLY_PER_FLOOR)
+    expect(run.oxygen).toBe(before + OXYGEN_SUPPLY_PER_FLOOR)
+    const ev2: BoardEvent[] = []
+    priv(b).resolveEnemyTurn(ev2)
+    expect(ev2.some((x) => x.t === 'floor-clear')).toBe(false) // 2回目は出ない
   })
 })
 
 describe('ラン終了判定', () => {
-  it('プレイヤーHPが0以下になるとrun-overイベントが出る', () => {
+  it('酸素が0以下になるとrun-overイベントが出る', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
-    run.playerHp = 0
+    run.oxygen = 0
     const ev: BoardEvent[] = []
     priv(b).resolveEnemyTurn(ev)
     expect(ev.some((x) => x.t === 'run-over')).toBe(true)
@@ -289,7 +272,7 @@ describe('フック接続：damageEnemy', () => {
     setPieces(b, ['21223131', ...inert().slice(1)])
     const e = b.spawnEnemy('rockshell', [{ x: 7, y: 7 }])
     b.swap({ x: 0, y: 0 }, { x: 1, y: 0 })
-    expect(e.hp).toBeLessThan(8)
+    expect(e.hp).toBeLessThan(6) // 岩殻獣の最大HPは6（無傷なら6のまま）
   })
 
   it('毒胞子(#3)：胞子トークンが敵に隣接して消費されるとダメージが入る（no-op解消）', () => {
@@ -301,16 +284,27 @@ describe('フック接続：damageEnemy', () => {
     const ev: BoardEvent[] = []
     priv(b).checkSporeTouch({ x: 4, y: 2 }, ev)
     expect(ev.some((x) => x.t === 'token-consumed')).toBe(true)
-    expect(e.hp).toBe(6 - 3)
+    expect(e.hp).toBe(5 - 3)
   })
 })
 
 describe('runなしBoardの互換性', () => {
-  it('run未指定なら敵関連イベントは一切発生しない', () => {
+  it('run未指定なら敵・酸素・目標のローグ拡張イベントは一切発生しない', () => {
     const b = new Board(plain())
     setPieces(b, ['01003131', ...inert().slice(1)])
     const ev = b.swap({ x: 0, y: 0 }, { x: 1, y: 0 })
-    expect(ev.some((x) => x.t === 'enemy-damage' || x.t === 'floor-clear' || x.t === 'run-over')).toBe(false)
+    expect(
+      ev.some(
+        (x) =>
+          x.t === 'enemy-damage' ||
+          x.t === 'floor-clear' ||
+          x.t === 'run-over' ||
+          x.t === 'oxygen-spent' ||
+          x.t === 'oxygen-refill',
+      ),
+    ).toBe(false)
     expect(b.enemies.length).toBe(0)
+    // 目標の前進は run 非依存（旧30レベル制もこの経路を使う）ので、こちらは run 無しでも出る
+    expect(ev.some((x) => x.t === 'goal-progress')).toBe(true)
   })
 })

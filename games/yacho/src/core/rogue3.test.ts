@@ -3,7 +3,7 @@
 // A=敵を本当の脅威に（妨害/攻撃の交互ローテ＋enemyIntent公開） B=強化のよく光る化＋進捗公開 C=連鎖の実感
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
-import { enemyIntent, type EnemyInstance } from './enemies'
+import { enemyIntent } from './enemies'
 import { createRunState, STARTER_UPGRADE_IDS } from './run'
 import { makeRng } from './rng'
 import type { BoardEvent, LevelDef, Piece, XY } from './types'
@@ -47,49 +47,20 @@ const inert = () => {
 }
 
 interface Priv {
-  performEnemyAction: (e: EnemyInstance, ev: BoardEvent[]) => void
   triggerGear: (at: XY, ev: BoardEvent[]) => void
 }
 const priv = (b: Board) => b as unknown as Priv
 
 describe('敵インテント（enemyIntent）', () => {
-  it('通常敵：定期行動のたびに妨害→攻撃→妨害…と交互になる（周期2ターンは維持）', () => {
-    const run = createRunState([])
-    const b = new Board(plain(), run)
-    const e = b.spawnEnemy('rockshell', [{ x: 0, y: 0 }])
-    expect(enemyIntent(e)).toEqual({ kind: 'disrupt', turns: 2 })
-    const ev: BoardEvent[] = []
-    priv(b).performEnemyAction(e, ev) // 1回目＝妨害
-    expect(ev.some((x) => x.t === 'armor-applied')).toBe(true)
-    expect(enemyIntent(e).kind).toBe('attack') // 次は攻撃予告に切り替わる
-    priv(b).performEnemyAction(e, ev) // 2回目＝攻撃
-    const atk = ev.find((x) => x.t === 'enemy-attack')
-    expect(atk && atk.t === 'enemy-attack' ? atk.damage : -1).toBe(3) // 岩殻獣の攻撃ダメージ
-    expect(run.playerHp).toBe(17)
-    expect(enemyIntent(e).kind).toBe('disrupt') // 再び妨害に戻る
-  })
-
-  it('胞子獣/穴潜みは攻撃時それぞれ2ダメージ', () => {
-    const run = createRunState([])
-    const b = new Board(plain(), run)
-    const sporeling = b.spawnEnemy('sporeling', [{ x: 1, y: 0 }])
-    const burrower = b.spawnEnemy('burrower', [{ x: 2, y: 0 }])
-    sporeling.attackTurn = true
-    burrower.attackTurn = true
-    const ev: BoardEvent[] = []
-    priv(b).performEnemyAction(sporeling, ev)
-    priv(b).performEnemyAction(burrower, ev)
-    const dmgs = ev.filter((x) => x.t === 'enemy-attack').map((x) => (x.t === 'enemy-attack' ? x.damage : -1))
-    expect(dmgs).toEqual([2, 2])
-    expect(run.playerHp).toBe(16) // 20-2-2
-  })
-
-  it('ボスは常に攻撃（3ターン周期・全体攻撃3）。enemyIntentはturnsUntilActionと同じ周期を返す', () => {
+  it('ボスは酸素を奪う予告（3手周期・酸素-3）を返し、周期はactionTimerと対で減る', () => {
     const run = createRunState([])
     const b = new Board(plain(), run)
     const boss = b.spawnEnemy('boss', [{ x: 0, y: 6 }])
-    expect(enemyIntent(boss)).toEqual({ kind: 'attack', damage: 3, turns: 3 })
-    boss.bossAttackTimer = 2
+    const it = enemyIntent(boss)
+    expect(it.kind).toBe('drain')
+    expect(it.oxygen).toBe(3)
+    expect(it.turns).toBe(3)
+    boss.actionTimer = 2
     expect(enemyIntent(boss).turns).toBe(1)
   })
 })
