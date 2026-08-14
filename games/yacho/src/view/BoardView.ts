@@ -1499,7 +1499,13 @@ export class BoardView {
 
   // ---- 可視化第一波：小さな浮遊ラベル（因果の実況・強化発動アピール共通） ----
 
-  /** 小さな浮遊ラベル（明朝・小・上昇して消える）。token-spawn/gear-trigger/爆発鉱石変換/upgrade-fire で共用 */
+  /**
+   * 小さな浮遊ラベル（明朝・小・上昇して消える）。token-spawn/gear-trigger/爆発鉱石変換/upgrade-fire で共用。
+   * 出所が違うラベルが同じマスに同時に出ると重なって両方読めなくなる（実測：深度22の層頭で「＋胞子」と「毒胞子」）。
+   * 発火数は深層で増える一方なので、生きているラベルと重なる位置なら1行ぶんずつ上へ積む。
+   */
+  private liveFloatLabels: Text[] = []
+
   private floatLabelFx(p: XY, text: string, color: number, t: number, yOffset = -0.15) {
     delay(t, () => {
       const txt = new Text({
@@ -1507,7 +1513,14 @@ export class BoardView {
         style: { fill: color, fontSize: this.S * 0.2, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
       })
       txt.anchor.set(0.5)
-      txt.position.set(this.px(p.x), this.px(p.y) + this.S * yOffset)
+      const x = this.px(p.x)
+      let y = this.px(p.y) + this.S * yOffset
+      this.liveFloatLabels = this.liveFloatLabels.filter((o) => !o.destroyed)
+      const hits = (yy: number) =>
+        this.liveFloatLabels.some((o) => Math.abs(o.position.x - x) < this.S * 0.6 && Math.abs(o.position.y - yy) < this.S * 0.26)
+      for (let i = 0; i < 4 && hits(y); i++) y -= this.S * 0.28
+      txt.position.set(x, y)
+      this.liveFloatLabels.push(txt)
       this.uiFxLayer.addChild(txt)
       tween(txt.position, { y: txt.position.y - this.S * 0.5 }, 520, { ease: easeOutCubic })
       tween(txt, { alpha: 0 }, 360, {
