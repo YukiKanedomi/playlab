@@ -67,6 +67,11 @@ export interface RunState {
   /** 知見の枠数（PHASE2.md §2）。upgrades.length がこれに達したら、採録には1つ捨てることが要る。
    *  呪いが減らせるように定数ではなくラン状態として持つ */
   slots: number
+  /** 受けた祝福のID（blessings.ts の BlessingDef.id）。ラン開始1つ＋深度10/20の幕主後に各1つで最大3つ。
+   *  呪いは別の入れ物を作らず祝福と同じ1枚に書いてあるので、この配列だけで利点と代償の両方が決まる */
+  blessings: string[]
+  /** 忘れ形見（祝福）の使用済みフラグ。ランに一度だけ灯が戻る */
+  lastLightUsed: boolean
   gearCharge: number // ギア起動カウンタ（自律機構/機械庭園/遺物共鳴の判定に使用）
   /** 唯一の資源（PLAN_LOOP.md §1.4）。1手で-1、0で遭難。層クリアで +OXYGEN_SUPPLY_PER_FLOOR（上限なし） */
   oxygen: number
@@ -94,6 +99,8 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
   return {
     upgrades: initialUpgrades,
     slots: UPGRADE_SLOTS_DEFAULT,
+    blessings: [],
+    lastLightUsed: false,
     gearCharge: 0,
     oxygen: OXYGEN_START,
     floor: 1,

@@ -17,7 +17,8 @@ import {
   UPGRADES,
   VINE_ROCKET_ID,
 } from './upgrades'
-import { OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './run'
+import type { RunState } from './run'
+import { blessingDrain, blessingLastLight, blessingSupply, hasFreeFirstMove } from './blessings'
 import { bossBodyCells, createEnemy, ENEMY_PERIOD, OXYGEN_DRAIN, SWARM_PROPAGATE_DAMAGE, type EnemyInstance } from './enemies'
 import type { FloorDef } from './floors'
 
@@ -70,6 +71,9 @@ export class Board {
   enemies: EnemyInstance[] = []
   private floorCleared = false
   private runOverFired = false
+  /** 早鐘（祝福）：この層でまだ1手も使っていない＝次の1手は灯を消費しない。Board は層ごとに作り直されるので
+   *  「その層の最初の1手」はこのフラグ1つで足りる */
+  private freeFirstMove = false
   private resolveSeq = 0 // 解決（1手）の通し番号。beginResolve で進む
   private bossShellHitAtSeq = -1 // 匣を剥がした解決の番号（同一解決での二重剥がし抑止。初期値-1＝未剥がし）
 
@@ -85,6 +89,7 @@ export class Board {
     this.goalDone = def.goals.map(() => 0)
     this.subiCharge = def.subiCharge ?? 4
     if (run) this.hooks = UPGRADES.filter((u) => run.upgrades.includes(u.id)).flatMap((u) => u.hooks.map((hook) => ({ upgradeId: u.id, hook })))
+    if (run) this.freeFirstMove = hasFreeFirstMove(run.blessings)
     this.initProgress()
     this.loadLayout(def.layout)
     this.fillInitial()
@@ -958,7 +963,10 @@ export class Board {
   private spendMove(ev: BoardEvent[]) {
     this.movesLeft--
     if (!this.run) return
-    this.run.oxygen--
+    // 早鐘（祝福）：この層の最初の1手だけ灯が減らない。「手を1つ使った」事実は変わらないので
+    // oxygen-spent は同じように出す（HUDの脈打ちと層の手数計上がこのイベントを数えている）
+    if (this.freeFirstMove) this.freeFirstMove = false
+    else this.run.oxygen--
     ev.push({ t: 'oxygen-spent', left: this.run.oxygen })
   }
 
@@ -972,8 +980,10 @@ export class Board {
     if (!this.won) return
     this.floorCleared = true
     ev.push({ t: 'floor-clear' })
-    this.run.oxygen += OXYGEN_SUPPLY_PER_FLOOR // 上限クランプを書かないこと（貯金＝急ぐ動機）
-    ev.push({ t: 'oxygen-refill', amount: OXYGEN_SUPPLY_PER_FLOOR, left: this.run.oxygen })
+    // 補給量は祝福・呪いで動く（深度で変わるものもあるので run.floor を渡す）
+    const supply = blessingSupply(this.run.blessings, this.run.floor)
+    this.run.oxygen += supply // 上限クランプを書かないこと（貯金＝急ぐ動機）
+    ev.push({ t: 'oxygen-refill', amount: supply, left: this.run.oxygen })
   }
   /**
    * 勝利シーケンス：残手数を特殊駒（銛/歯車爆弾）に変換して全自動起爆（RM実測の再現）。
@@ -1747,15 +1757,28 @@ export class Board {
     this.checkFloorClear(ev)
     if (this.floorCleared) return
     if (this.run.oxygen <= 0 && !this.runOverFired) {
+      if (this.tryLastLight(ev)) return // 忘れ形見（祝福）が1回だけ遭難を肩代わりする
       this.runOverFired = true
       ev.push({ t: 'run-over' })
     }
   }
 
+  /** 忘れ形見（祝福）：灯が尽きた瞬間に灯を戻す。ランに一度だけで、使い切ったら次は普通に遭難する */
+  private tryLastLight(ev: BoardEvent[]): boolean {
+    if (!this.run || this.run.lastLightUsed) return false
+    const amount = blessingLastLight(this.run.blessings)
+    if (amount <= 0) return false
+    this.run.lastLightUsed = true
+    this.run.oxygen = amount // 尽きた地点（0以下）からの復帰なので、加算ではなくこの値に戻す
+    ev.push({ t: 'last-light', amount, left: this.run.oxygen })
+    return true
+  }
+
   /** 息喰み／深匣主：酸素を直接奪う（PLAN_LOOP.md §1.4 の唯一の直接ダメージ） */
   private drainOxygen(e: EnemyInstance, ev: BoardEvent[]) {
     if (!this.run) return
-    const amount = OXYGEN_DRAIN[e.kind as 'breathstealer' | 'boss']
+    // 息を殺す（祝福）を持っていれば一撃が軽くなる（0にはならない）
+    const amount = blessingDrain(this.run.blessings, OXYGEN_DRAIN[e.kind as 'breathstealer' | 'boss'])
     this.run.oxygen -= amount
     ev.push({ t: 'oxygen-drained', id: e.id, amount, left: this.run.oxygen })
   }

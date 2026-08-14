@@ -10,6 +10,17 @@ import type { Hook, HookCtx } from './hooks'
 export const RESOURCES = ['spore', 'volatile-ore', 'gear-trigger', 'special', 'plant', 'relic-match', 'enemy-damage'] as const
 export type Resource = (typeof RESOURCES)[number]
 
+/** 資源の表示名。語彙と同じ場所に置く（main.ts と core/postmortem.ts が同じ表を読む） */
+export const RESOURCE_LABEL: Record<Resource, string> = {
+  spore: '胞子',
+  'volatile-ore': '爆発鉱石',
+  'gear-trigger': 'ギアの起動',
+  special: '特殊駒',
+  plant: '植物の駒',
+  'relic-match': '遺物の共鳴',
+  'enemy-damage': '原生種へのダメージ',
+}
+
 export interface UpgradeDef {
   id: string
   name: string

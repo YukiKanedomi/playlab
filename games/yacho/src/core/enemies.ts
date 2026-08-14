@@ -3,6 +3,7 @@
 // Ctx抽象は導入せず、挙動（ターンごとの行動・ダメージ処理）は board.ts の解決ループに直接持たせる
 // （過剰な抽象化を避ける。理由は最終報告）。ここはデータ定義と純粋な初期化ヘルパのみ。
 import type { EnemyKind, XY } from './types'
+import { blessingDrain } from './blessings'
 
 export interface EnemyInstance {
   id: number
@@ -80,15 +81,20 @@ export function turnsUntilAction(e: EnemyInstance): number {
   return p <= 0 ? 0 : p - (e.actionTimer % p)
 }
 
-/** 敵インテント（可視化契約。ビューはこの関数を通して「次に何をしてくるか」を読む） */
-export function enemyIntent(e: EnemyInstance): EnemyIntent {
+/**
+ * 敵インテント（可視化契約。ビューはこの関数を通して「次に何をしてくるか」を読む）。
+ * 祝福「息を殺す」で奪われる量が3から1へ変わるため、灯を奪う敵は blessings を通した**実際に奪われる量**で出す
+ * （予告と実測が食い違うと兆候が嘘になる）。blessings 省略時は素の値。
+ */
+export function enemyIntent(e: EnemyInstance, blessings: string[] = []): EnemyIntent {
   const turns = turnsUntilAction(e)
+  const drain = (kind: 'breathstealer' | 'boss') => blessingDrain(blessings, OXYGEN_DRAIN[kind])
   switch (e.kind) {
     case 'swarm':         return { kind: 'none', turns: 0, label: '動かない' }
     case 'rockshell':     return { kind: 'armor', turns, label: '甲殻' }
     case 'sporeling':     return { kind: 'devour', turns, cells: e.markAt ? [e.markAt] : undefined, label: e.markAt ? '捕食' : '目星' }
     case 'burrower':      return { kind: 'fissure', turns, cells: e.telegraph ?? undefined, label: e.telegraph ? '崩落' : '掘削' }
-    case 'breathstealer': return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.breathstealer, label: `酸素−${OXYGEN_DRAIN.breathstealer}` }
-    case 'boss':          return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.boss, label: `酸素−${OXYGEN_DRAIN.boss}` }
+    case 'breathstealer': return { kind: 'drain', turns, oxygen: drain('breathstealer'), label: `酸素−${drain('breathstealer')}` }
+    case 'boss':          return { kind: 'drain', turns, oxygen: drain('boss'), label: `酸素−${drain('boss')}` }
   }
 }

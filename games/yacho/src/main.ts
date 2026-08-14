@@ -4,8 +4,10 @@ import { Application, Container, Graphics, Point, Sprite, Text, Texture } from '
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, discardUpgrade, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
+import { applyBlessingsToFloor, isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
 import { FLOORS, type FloorDef } from './core/floors'
-import { UPGRADES, type UpgradeDef, type Resource } from './core/upgrades'
+import { RESOURCE_LABEL, UPGRADES, type UpgradeDef } from './core/upgrades'
+import { buildPostmortem, type DrainSample, type FloorLight } from './core/postmortem'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, type Rng } from './core/rng'
 import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
@@ -94,16 +96,7 @@ function splitDesc(desc: string): { condition: string | null; effect: string } {
 // 以前ここに produces/consumes の「近似表」を別語彙（plantPiece/ore/gearPiece/relicBoost）で持っており、
 // upgrades.ts の正式語彙（plant/volatile-ore/gear-trigger/relic-match）と混ざって
 // ラベル解決が undefined になる不具合を出した。真実の源を2つ持つのをやめ、近似表は削除した。
-// Resource で型付けしておくことで、RESOURCES が増えたときにラベル漏れを tsc が検出する。
-const RESOURCE_LABEL: Record<Resource, string> = {
-  spore: '胞子',
-  'volatile-ore': '爆発鉱石',
-  'gear-trigger': 'ギアの起動',
-  special: '特殊駒',
-  plant: '植物の駒',
-  'relic-match': '遺物の共鳴',
-  'enemy-damage': '原生種へのダメージ',
-}
+// 表示名 RESOURCE_LABEL も語彙と同じ upgrades.ts へ移した（結果画面の「あと一つ」が core 側で同じ表を読むため）。
 // 呼応の一文が「Aが胞子を生む → Bが使う」形になり、効果文を埋め込まなくなったため shortEffect() は削除した（PHASE2 §3）
 interface ConnectionInfo {
   count: number
@@ -571,9 +564,9 @@ function buildSpecialPieceEntry(): FieldNoteEntry {
 }
 
 /** 敵：本体／インテントバッジのタップで開く（[C]表：名前・HP・次行動・与ダメージ・妨害内容・倒し方） */
-function buildEnemyEntry(enemy: EnemyInstance): FieldNoteEntry {
+function buildEnemyEntry(enemy: EnemyInstance, blessings: string[]): FieldNoteEntry {
   const info = ENEMY_INFO[enemy.kind]
-  const intent = enemyIntent(enemy)
+  const intent = enemyIntent(enemy, blessings)
   const nextText = intent.kind === 'none' ? '動かない' : `${intent.label}　あと${intent.turns}手`
   const blocks: FieldNoteBlock[] = [
     { kind: 'row', label: 'HP', text: `${Math.max(0, enemy.hp)} / ${enemy.maxHp}` },
@@ -614,7 +607,7 @@ function computeEncounterInfo(board: Board): {
   let minTurns: number | null = null
   let idleCount = 0
   for (const e of alive) {
-    const it = enemyIntent(e)
+    const it = enemyIntent(e, board.run?.blessings ?? [])
     if (it.kind === 'none') {
       idleCount++
       continue
@@ -626,7 +619,7 @@ function computeEncounterInfo(board: Board): {
   let nextOxygenLoss = 0
   if (minTurns !== null)
     for (const e of alive) {
-      const it = enemyIntent(e)
+      const it = enemyIntent(e, board.run?.blessings ?? [])
       if (it.kind === 'none' || it.turns !== minTurns) continue
       nextOxygenLoss += it.oxygen ?? 0
       if (!nextLabel || it.kind === 'drain') nextLabel = it.label // 危険な予告を優先して表示する
@@ -945,6 +938,10 @@ async function boot() {
   // ラン中の強化ごとの発火回数（結果画面の「いちばん働いた強化」用）。board.ts は非改変のため
   // main.ts 側でイベント列を数える。層をまたいで積むのでシーンではなくランのスコープに置く
   const upgradeFireCount = new Map<string, number>()
+  // 結果画面の「なぜ細ったか」の元データ（PHASE2.md §2.5②）。層をまたいで積むのでランのスコープに置く。
+  // lightSeries は「その層を出るときの残灯（補給前）」、drainLog は原生種に直接奪われた1件ずつ
+  const lightSeries: FloorLight[] = []
+  const drainLog: DrainSample[] = []
 
   const draftRng = (floor: number): Rng => makeRng((runSeed + floor * 104729 + 17) | 0)
 
@@ -1214,24 +1211,150 @@ async function boot() {
     if (g) showFieldNote(buildGlossaryEntry(g))
   }
 
+  /**
+   * 祝福をひとつ受ける画面（PHASE2.md §3）。ラン開始時と、深度10/20の幕主を仕留めた後に開く。
+   * **利点（祝福）と代償（呪い）を同じ大きさで並べる**のがこの画面の要件で、隠しデメリットは作らない。
+   * ビジュアルの方向が決まるまでの繋ぎなので、採録画面の作法（暗幕・紙色の面・下部の確定ボタン）を
+   * そのまま踏襲した最小限にとどめる（凝らない。あとで採録画面ごと作り直す前提）。
+   */
+  const showBlessingPanel = (onDone: () => void) => {
+    const run = runState!
+    // 同じランの同じ回で必ず同じ3枚が出る（採録と同じ作法。runSeed は startRun で確定済み）
+    const options = pickBlessingOptions(run.blessings, makeRng((runSeed + run.blessings.length * 65537 + 3) | 0), 3, run.floor)
+    const padX = Math.max(20, vw * 0.05)
+
+    const panel = new Container()
+    const dimG = new Graphics()
+    dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 1 }) // 背面の盤面を透かさない
+    dimG.eventMode = 'static'
+    panel.addChild(dimG)
+    playRoot.addChild(panel)
+
+    const title = new Text({
+      text: '祝福をひとつ受ける',
+      style: { fill: 0xf4e8cf, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
+    })
+    title.anchor.set(0, 0.5)
+    title.position.set(padX, vh * 0.05)
+    panel.addChild(title)
+
+    const sub = new Text({
+      text: `${run.blessings.length + 1}つめ　利点と代償は対になっている`,
+      style: { fill: 0x9a8968, fontSize: fs(0.024), fontFamily: FONT },
+    })
+    sub.anchor.set(0, 0.5)
+    sub.position.set(padX, vh * 0.095)
+    panel.addChild(sub)
+
+    const rowW = Math.min(vw - padX * 2, vh * 0.62 - 32)
+    const rowX = (vw - rowW) / 2
+    const rowH = vh * 0.19
+    const rowGap = vh * 0.02
+    const rowTop = vh * 0.14
+    const inset = Math.max(rowW * 0.05, 12)
+    let selected: number | null = null
+    const rowBgs: Graphics[] = []
+
+    const btnHost = new Container()
+    panel.addChild(btnHost)
+    const renderBtn = () => {
+      btnHost.removeChildren().forEach((c) => c.destroy({ children: true }))
+      const btnW = Math.min(rowW, vw * 0.7)
+      const btnH = vh * 0.062
+      const enabled = selected !== null
+      const btn = new Container()
+      const bg = new Graphics()
+      if (enabled) bg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill(UI.wood).stroke({ width: 2.5, color: UI.brass })
+      else bg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill({ color: 0x33291c, alpha: 0.75 }).stroke({ width: 2, color: 0x6b5f45 })
+      btn.addChild(bg)
+      const label = new Text({
+        text: enabled ? 'この祝福を受ける' : '祝福を選ぶ',
+        style: { fill: enabled ? 0xf4e8cf : 0x8a8270, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
+      })
+      label.anchor.set(0.5)
+      btn.addChild(label)
+      btn.position.set(vw / 2, vh * 0.93)
+      if (enabled) {
+        btn.eventMode = 'static'
+        btn.cursor = 'pointer'
+        btn.hitArea = { contains: (x: number, y: number) => x >= -btnW / 2 && x <= btnW / 2 && y >= -btnH / 2 && y <= btnH / 2 }
+        btn.on('pointertap', () => {
+          takeBlessing(run, options[selected!].id)
+          panel.destroy({ children: true })
+          onDone()
+        })
+      }
+      btnHost.addChild(btn)
+    }
+
+    // 帯の中は羊皮紙なので墨色で書く。長い行は折り返さず縮める（showFloorRecordBand と同じ作法）
+    const mk = (parent: Container, text: string, size: number, y: number, fill: number, bold: boolean) => {
+      const t = new Text({ text, style: { fill, fontSize: size, fontFamily: FONT, fontWeight: bold ? 'bold' : 'normal' } })
+      t.anchor.set(0, 0.5)
+      t.position.set(inset, y)
+      const maxW = rowW - inset * 2
+      if (t.width > maxW) t.scale.set(maxW / t.width)
+      parent.addChild(t)
+    }
+
+    options.forEach((b, i) => {
+      const row = new Container()
+      row.position.set(rowX, rowTop + i * (rowH + rowGap))
+      const bg = new Graphics()
+      bg.roundRect(0, 0, rowW, rowH, rowH * 0.12).fill({ color: UI.paper, alpha: 0.96 }).stroke({ width: 2, color: UI.brass, alpha: 0.7 })
+      row.addChild(bg)
+      rowBgs.push(bg)
+      mk(row, b.name, fs(0.032), rowH * 0.24, UI.paperInk, true)
+      // 利点と代償は同じ文字の大きさで並べる（PHASE2.md §3。差は色と頭の1字だけ）
+      const lineSize = fs(0.025)
+      mk(row, `祝　${b.boon}`, lineSize, rowH * 0.56, 0x2f6b4f, false)
+      mk(row, `呪　${b.curse}`, lineSize, rowH * 0.82, 0x9c3b2c, false)
+      row.eventMode = 'static'
+      row.cursor = 'pointer'
+      row.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= rowW && y >= 0 && y <= rowH }
+      row.on('pointertap', () => {
+        selected = selected === i ? null : i // 再タップで解除（採録カードと同じ作法）
+        rowBgs.forEach((g, idx) => {
+          g.clear()
+            .roundRect(0, 0, rowW, rowH, rowH * 0.12)
+            .fill({ color: UI.paper, alpha: idx === selected ? 1 : 0.96 })
+            .stroke({ width: idx === selected ? 4 : 2, color: idx === selected ? 0xf2d98a : UI.brass, alpha: idx === selected ? 0.95 : 0.7 })
+        })
+        renderBtn()
+      })
+      panel.addChild(row)
+    })
+
+    renderBtn()
+  }
+
   const startRun = () => {
     runState = createRunState()
     upgradeFireCount.clear()
+    lightSeries.length = 0
+    drainLog.length = 0
     runSeed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) | 0
     mapRoot.visible = false
     playRoot.visible = true
     playRoot.removeAllListeners()
     playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
-    buildFloorScene(1)
-    ensureBgm(themeFloorId(1))
+    // 祝福はランの規則（灯・課目・盤面形状）を書き換えるので、決めてから最初の盤面を組む
+    showBlessingPanel(() => {
+      buildFloorScene(1)
+      ensureBgm(themeFloorId(1))
+    })
   }
 
   const buildFloorScene = (floor: number) => {
     const run = runState!
     run.floor = floor
-    const floorDef = FLOORS[floor - 1]
+    // 祝福・呪いは課目と盤面形状も書き換えるので、層の正典（FLOORS）を通してから盤面を組む
+    const floorDef = applyBlessingsToFloor(FLOORS[floor - 1], run.blessings)
     const floorSeed = (runSeed + floor * 7919) | 0
     board = new Board(buildFloorLevelDef(floor, floorSeed, floorDef), run, floorDef)
+    // 灯を奪ったのが誰かを結果画面で名指すための対応表（PHASE2.md §2.5②）。
+    // 敵は層の構築時にしか湧かず、倒されると board.enemies から消えるので、ここで種別を控えておく
+    const enemyKindById = new Map(board.enemies.map((e) => [e.id, e.kind]))
     inputLocked = false
     const epoch = ++sceneEpoch
     const alive = () => epoch === sceneEpoch // このシーンがまだ生きているか
@@ -2091,7 +2214,7 @@ async function boot() {
       if (at) upgradeFirePulseFx(id, at)
     }
     // 敵本体／インテントバッジのタップ→共通「野帳シート」（[C]表：敵の開き方）。旧BoardView.showEnemyTooltipの統合先
-    view.onEnemyTap = (enemy) => showFieldNote(buildEnemyEntry(enemy))
+    view.onEnemyTap = (enemy) => showFieldNote(buildEnemyEntry(enemy, run.blessings))
     /** 可視化第二波②：「どの敵が奪ったか」を軌跡で示してから酸素ゲージの被弾演出（oxygenDrainFx）へ繋ぐ */
     view.onOxygenDrained = (enemyId, amount) => {
       const en = board.enemies.find((e) => e.id === enemyId)
@@ -2226,6 +2349,8 @@ async function boot() {
     // ---------- 層の決着（floor-clear / run-over。ROGUE.md §5/§6/§8） ----------
     // 層間の採録帯（[D]§2）が出す2値。ラン通算の upgradeFireCount とは別に、この層ぶんだけを同じイベント列から数える
     let movesThisFloor = 0
+    // 補給量は祝福・呪いで動くので定数ではなく実際に起きた値を採録帯へ渡す
+    let refillAmount = OXYGEN_SUPPLY_PER_FLOOR
     const floorFireCount = new Map<string, number>()
     const handleFloorResult = (evs: BoardEvent[]) => {
       const dur = view.play(evs)
@@ -2234,6 +2359,14 @@ async function boot() {
         if (alive()) syncGoalDisplay()
       })
       const refill = evs.find((e) => e.t === 'oxygen-refill')
+      if (refill && refill.t === 'oxygen-refill') refillAmount = refill.amount
+      // 「なぜ細ったか」の記録（PHASE2.md §2.5②）。層を出るときの灯は補給を足す前の値
+      if (refill && refill.t === 'oxygen-refill') lightSeries.push({ floor, light: refill.left - refill.amount })
+      for (const e of evs) {
+        if (e.t !== 'oxygen-drained') continue
+        const kind = enemyKindById.get(e.id)
+        if (kind === 'breathstealer' || kind === 'boss') drainLog.push({ floor, kind, amount: e.amount })
+      }
       // 補給ぶんは層クリアバナーで見せるので、この時点では補給前の値でゲージを描く
       refreshFloorHud(refill && refill.t === 'oxygen-refill' ? refill.left - refill.amount : undefined)
       refreshProgressBadges() // 可視化第二波④：1手ごとに進捗（あれば）を反映
@@ -2248,6 +2381,8 @@ async function boot() {
       if (firesThisMove > run.records.maxFiresInOneMove) run.records.maxFiresInOneMove = firesThisMove
       // 酸素を直接奪われた手はゲージ側でも必ず被弾を見せる（軌跡は onOxygenDrained が別に出す）
       for (const e of evs) if (e.t === 'oxygen-drained') oxygenDrainFx(e.amount)
+      // 忘れ形見（祝福）で灯が戻った手は、補給と同じ演出でゲージへ入れる（尽きた事実を黙って通さない）
+      for (const e of evs) if (e.t === 'last-light') oxygenRefillFx(e.amount)
       // 1手ぶんの消費(-1)は数字の脈動だけで示す。音・揺れ・赤フラッシュは出さない（毎手鳴らすとメリハリが死ぬ。JUICE §0-2）
       if (evs.some((e) => e.t === 'oxygen-spent')) {
         movesThisFloor++ // 1手＝酸素-1。採録帯の「この層 N手」はこの数え方（不成立スワップは含まない）
@@ -2267,6 +2402,8 @@ async function boot() {
         })
       } else if (over) {
         inputLocked = true
+        // 灯が尽きた層も推移の最後の点として残す（負の値は「尽きた」と同じ事実なので0に丸める）
+        lightSeries.push({ floor, light: Math.max(0, run.oxygen) })
         tw.delay(Math.min(dur, 900), () => {
           if (alive()) showRunResult(false)
         })
@@ -2274,11 +2411,11 @@ async function boot() {
     }
 
     const onFloorClear = () => {
-      if (floor >= 10) {
-        showRunResult(true) // ボス層クリア＝ラン勝利（ROGUE.md §6）
-        return
-      }
-      showFloorRecordBand()
+      // ボス層クリア＝ラン勝利（ROGUE.md §6）。深度20/30は層が増えたときにそのまま繋がる
+      const next = floor >= FLOORS.length ? () => showRunResult(true) : showFloorRecordBand
+      // 幕主を仕留めた者に祝福を1つ（PHASE2.md §3。深度10/20）
+      if (isBlessingFloor(floor)) showBlessingPanel(next)
+      else next()
     }
 
     /**
@@ -2331,7 +2468,7 @@ async function boot() {
       mk(`深度${floor} 踏破`, bandH * 0.24, padX, bandH * rowY[0], 0, vw * 0.48)
       // 手数に星評価は付けない（[D]§3）。補給は「量」と「結果」の両方を出す
       const movesT = mk(`この層 ${movesThisFloor}手`, bandH * 0.17, vw - padX, bandH * rowY[0], 1, vw * 0.32)
-      const oxyT = mk(`酸素 +${OXYGEN_SUPPLY_PER_FLOOR} → 残り${run.oxygen}`, bandH * 0.22, padX, bandH * rowY[1], 0, vw - padX * 2)
+      const oxyT = mk(`酸素 +${refillAmount} → 残り${run.oxygen}`, bandH * 0.22, padX, bandH * rowY[1], 0, vw - padX * 2)
       const bestT = bestDef ? mk(`最も働いた知見：${bestDef.name} ${bestFires}回`, bandH * 0.155, padX, bandH * rowY[2], 0, vw - padX * 2) : null
       const laterLines: Text[] = bestT ? [movesT, oxyT, bestT] : [movesT, oxyT]
       for (const t of laterLines) t.alpha = 0
@@ -2343,7 +2480,7 @@ async function boot() {
         if (refilled || !alive()) return
         refilled = true
         gaugeFull = Math.max(OXYGEN_GAUGE_FULL, run.oxygen) // 分母が変わるのは補給演出の瞬間だけ（層途中でバーが後戻りしない）
-        oxygenRefillFx(OXYGEN_SUPPLY_PER_FLOOR)
+        oxygenRefillFx(refillAmount)
       }
       const doExit = () => {
         if (exited || !alive()) return
@@ -2456,6 +2593,7 @@ async function boot() {
           btn.on('pointertap', () => {
             // 手放した知見はその場で効果を失う（次の層の Board はもうこの知見を持たずに組まれる）
             discardUpgrade(run, owned[selected!].id)
+            panel.destroy({ children: true }) // 続けてもう1枚手放す場合に古い一覧を残さない
             onDone()
           })
         }
@@ -2669,9 +2807,13 @@ async function boot() {
           buildFloorScene(next)
           ensureBgm(themeFloorId(next))
         }
-        // 枠が埋まっているなら、採るまえに手放す1つを選ばせる（PHASE2.md §2「取る＝捨てる」）
-        if (run.upgrades.length >= run.slots) showDiscardPanel(options[i], goNext)
-        else goNext()
+        // 枠が埋まっているなら、採るまえに手放す1つを選ばせる（PHASE2.md §2「取る＝捨てる」）。
+        // 呪いで枠が減った直後は所持が枠を超えているので、収まるまで繰り返す（超過を持ち越さない）
+        const makeRoom = () => {
+          if (run.upgrades.length >= run.slots) showDiscardPanel(options[i], makeRoom)
+          else goNext()
+        }
+        makeRoom()
       }
 
       const renderBottom = () => {
@@ -2926,11 +3068,39 @@ async function boot() {
         panel.addChild(t)
       })
       const recordsBottom = recordsTop + (records.length - 1) * recordLineH + recordLineH * 0.6
+      const buttonY = py0 + ph * 0.9
+
+      // 3.5) 「なぜ細ったか」と「あと一つ」（PHASE2.md §2.5②③）。
+      //      見た目は既存の記録行の作法そのまま（墨色・中央揃え・はみ出したら縮める）。因果図には最低限の高さを残し、
+      //      入りきらないときは行の高さと字を詰める＝この欄が下の図に重ならないことを構造で保証する。
+      const pm = buildPostmortem(lightSeries, drainLog, run.upgrades)
+      const pmLines = [...pm.light, ...(pm.missing ? [pm.missing.title, ...pm.missing.lines] : [])]
+      const pmTop = recordsBottom + fs(0.014)
+      let pmBottom = recordsBottom
+      if (pmLines.length) {
+        const pmRoom = buttonY - fs(0.09) - fs(0.2) - pmTop // fs(0.2) は因果図に必ず残す高さ
+        const lineH = Math.min(fs(0.036), pmRoom / pmLines.length)
+        if (lineH > 0) {
+          const size = Math.min(fs(0.026), lineH * 0.74)
+          const missingFrom = pm.light.length // ここから下が「あと一つ」欄（見出しだけ少し濃く出す）
+          pmLines.forEach((line, i) => {
+            const t = new Text({
+              text: line,
+              style: { fill: UI.paperInk, fontSize: size, fontFamily: FONT, fontWeight: 'bold' },
+            })
+            t.anchor.set(0.5, 0)
+            t.alpha = i === missingFrom ? 1 : 0.82 // 見出し以外は記録より一段落として、主記録と競らせない
+            t.position.set(vw / 2, pmTop + i * lineH)
+            if (t.width > pw * 0.84) t.scale.set((pw * 0.84) / t.width)
+            panel.addChild(t)
+          })
+          pmBottom = pmTop + pmLines.length * lineH
+        }
+      }
 
       // 4) ビルドの因果図：所持強化を固有アイコンで横一列に並べ、consumes/produces が繋がるアイコン同士を線で結ぶ。
       //    閉じた輪（サイクル）に含まれる辺は太く強調する。
-      const buttonY = py0 + ph * 0.9
-      const graphTop = recordsBottom + fs(0.02)
+      const graphTop = pmBottom + fs(0.02)
       const graphBottom = buttonY - fs(0.09)
       const graphH = Math.max(fs(0.16), graphBottom - graphTop)
       const owned = run.upgrades.map((id) => UPGRADES.find((u) => u.id === id)).filter((u): u is UpgradeDef => !!u)
@@ -3068,8 +3238,9 @@ async function boot() {
       btn.eventMode = 'static'
       btn.cursor = 'pointer'
       btn.on('pointertap', () => {
-        panel.destroy({ children: true })
-        showMap()
+        // 再挑戦の摩擦を減らす（PHASE2.md §2.5④）：拠点（深度図）を経由させず、ここから直接次のランへ入る。
+        // playRoot はこの panel ごと startRun が空にするので、ここで destroy はしない
+        startRun()
       })
       panel.addChild(btn)
       playRoot.addChild(panel)
@@ -3119,7 +3290,7 @@ async function boot() {
       forceRunEnd: (victory: boolean) => showRunResult(victory),
       openEnemyNote: () => {
         const e = board.enemies.find((en) => en.hp > 0)
-        if (e) showFieldNote(buildEnemyEntry(e))
+        if (e) showFieldNote(buildEnemyEntry(e, run.blessings))
       },
       openTermNote: (id: string) => {
         const g = findTerm(id)

@@ -292,6 +292,41 @@ function endOxygenFor(r: SeedResult, floor: number): number {
   return r.endOxygenByFloor.get(floor) ?? 0
 }
 
+// ---- 遭難深度の分布（PHASE2.md §2.5①） ----
+// 「ぎりぎりクリアできないが次はいいビルドが作れる気がする」は勝率では測れない。深度5で尽きるのと
+// 深度9で尽きるのでは意味が違うので、**遭難した深度の分布**を主指標として別に集計する。
+
+/** 終盤とみなす最も浅い深度＝最終3層の先頭 */
+const LATE_FROM = Math.max(1, FLOORS.length - 2)
+/** 中央値の合格帯。PHASE2 は30層で20〜24を目標にしているので、層数の比でいまの層数へ移す */
+const MEDIAN_BAND: [number, number] = [Math.round((FLOORS.length * 20) / 30), Math.round((FLOORS.length * 24) / 30)]
+
+export interface DeathDepthStats {
+  /** 遭難したランの遭難深度の中央値。1件も遭難しなければ null */
+  median: number | null
+  /** 遭難したランの数 */
+  deaths: number
+  /** 終盤（層 LATE_FROM 以降）で遭難したランの数 */
+  lateDeaths: number
+  /** 終盤遭難の割合(%)。分母は**全ラン**（PHASE2 の「深度25以上での遭難が全体の35%以上」に合わせる） */
+  latePct: number
+  lateFrom: number
+  medianBand: [number, number]
+}
+
+export function deathDepthStats(results: SeedResult[]): DeathDepthStats {
+  const depths = results.map((r) => r.deathFloor).filter((v): v is number => v !== null).sort((a, b) => a - b)
+  const lateDeaths = depths.filter((d) => d >= LATE_FROM).length
+  return {
+    median: depths.length ? percentile(depths, 0.5) : null,
+    deaths: depths.length,
+    lateDeaths,
+    latePct: results.length ? (lateDeaths / results.length) * 100 : 0,
+    lateFrom: LATE_FROM,
+    medianBand: MEDIAN_BAND,
+  }
+}
+
 // ---- 較正の合否判定（SPEC_OXYGEN.md §10.3 の6指標を機械的に判定する） ----
 
 /**
@@ -352,6 +387,18 @@ export function verdictLines(results: SeedResult[]): string[] {
   const swapped = lateDrafts.filter((d) => d.discardedId !== null).length
   const swapPct = lateDrafts.length ? (swapped / lateDrafts.length) * 100 : 0
   out.push(`(j) 後半の採録が入れ替えに : ${mark(swapPct >= 50)}  層6以降の採録 ${swapped}/${lateDrafts.length}=${swapPct.toFixed(1)}%`)
+
+  // PHASE2 §2.5①（惜しい負けを量産する）の合否。勝率(d)とは別に、遭難した深度そのものを見る
+  const dd = deathDepthStats(results)
+  const medOk = dd.median !== null && dd.median >= dd.medianBand[0] && dd.median <= dd.medianBand[1]
+  out.push(
+    `(k) 遭難深度の中央値 ${dd.medianBand[0]}〜${dd.medianBand[1]}   : ${mark(medOk)}  ` +
+      `${dd.median ?? '-'}（遭難${dd.deaths}件。30層での目標20〜24を層数の比で移した帯）`,
+  )
+  out.push(
+    `(l) 終盤(層${dd.lateFrom}以降)の遭難35%以上: ${mark(dd.latePct >= 35)}  ` +
+      `全${results.length}ラン中${dd.lateDeaths}件=${dd.latePct.toFixed(1)}%`,
+  )
   return out
 }
 
@@ -373,6 +420,9 @@ export function formatReport(results: SeedResult[]): string {
   for (const r of results) if (r.deathFloor !== null) deaths.set(r.deathFloor, (deaths.get(r.deathFloor) ?? 0) + 1)
   const deathHist = [...deaths.entries()].sort((a, b) => a[0] - b[0]).map(([f, n]) => `層${f}:${n}`)
   lines.push(`遭難した層: ${deathHist.length ? deathHist.join('　') : 'なし'}`)
+  // 遭難深度の分布（PHASE2 §2.5①）。勝率より上位の主指標なのでヒストグラムの直後に要約を置く
+  const dd = deathDepthStats(results)
+  lines.push(`遭難深度: 中央値 ${dd.median ?? '-'}（目標 ${dd.medianBand[0]}〜${dd.medianBand[1]}）　終盤(層${dd.lateFrom}以降)の遭難 ${dd.lateDeaths}/${total}=${dd.latePct.toFixed(1)}%（目標 35%以上）`)
   // 知見の枠（PHASE2 §2）：どの層の採録から「取る＝捨てる」になったかを層別に出す
   const swapHist: string[] = []
   for (let f = 1; f <= 9; f++) {

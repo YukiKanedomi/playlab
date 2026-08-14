@@ -1315,7 +1315,7 @@ export class BoardView {
   /** 1体ぶんのバッジを再描画（新規なら生成）。位置は敵セル内側の右上隅に収め、駒には絶対にかぶらない */
   private paintIntentBadge(en: EnemyInstance) {
     const S = this.S
-    const intent: EnemyIntent = enemyIntent(en)
+    const intent: EnemyIntent = enemyIntent(en, this.board.run?.blessings ?? [])
     // 行動を持たない敵（swarm）はバッジ自体を出さない＝「読むものが無い」ことを画面から消す
     if (intent.kind === 'none') {
       const old = this.intentG.get(en.id)
@@ -2073,6 +2073,7 @@ export class BoardView {
         // 酸素の増減・層クリア・遭難：ビューでは何もしない（HUDと層進行は main.ts の管轄）
         case 'oxygen-spent':
         case 'oxygen-refill':
+        case 'last-light':
         case 'floor-clear':
         case 'run-over':
           break

@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>yacho ── UI部品キット v6</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Archivo:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   yacho UI KIT v6
+   構造 ＝ オーナー提供の参照(owner_ui_ref.jpg)
+   画材 ＝ 採用コンセプト画(concept3_1 / v5_*) と ART_GRAMMAR.md
+   絵はUIを兼ねない。文字は必ず自分の札の上に載る。
+   ============================================================ */
+
+/* ---------- 0. トークン ---------- */
+:root{
+  /* インク・文字 */
+  --ink:#2F2922;            /* 唯一の輪郭色 ART_GRAMMAR §2.1 */
+  --ink-text:#3A2E20;       /* 紙の上の文字 */
+  --ink-soft:#5C4E3C;       /* 紙の上の補助文字 */
+  --ink-disabled:#4A4136;   /* 無効時の文字（無効でも4.5:1を割らない） */
+  --ink-plate:#2E2415;      /* 明るい真鍮の板の上の文字 */
+  /* 紙 */
+  --paper-hi:#EFE4CC;
+  --paper:#E4D6B6;
+  --paper-lo:#D6C7A8;
+  --paper-disabled:#C7BEAC;
+  /* 暗地の札 */
+  --plate:#4A3A26;
+  --plate-lo:#2E241A;
+  /* 緑青（見出し帯・凹部） */
+  --verd:#3E5450;
+  --verd-hi:#4A6155;
+  --verd-lo:#2C3A37;
+  /* 真鍮 */
+  --brass:#9A7B44;
+  --brass-hi:#B99A5E;
+  --brass-lo:#3A2C1E;
+  /* 暗地の上の文字 */
+  --ivory:#F1E4C6;
+  --ivory-dim:#CFC0A0;
+  /* 差し色 */
+  --rust:#A8613C;           /* 印・面にのみ */
+  --rust-ink:#7E4223;       /* 紙の上の錆色の文字 */
+  --danger:#C4553E;         /* 印・面にのみ */
+  --danger-ink:#8E3A29;     /* 紙の上の朱の文字 */
+  --gain:#2F5A3C;
+  --gain-lite:#9FC1A4;      /* 暗地の上の増 */
+  --loss-lite:#E0A692;      /* 暗地の上の減 */
+  /* 灯 */
+  --lamp:#6E9EA8;
+  --lamp-deep:#4E7E8C;
+  --lamp-core:#E4EDE6;
+  --trough:#35443F;
+  /* 書体 */
+  --min:'Shippori Mincho','Yu Mincho','YuMincho',serif;
+  --got:'Zen Kaku Gothic New','Yu Gothic UI','Yu Gothic','Meiryo',sans-serif;
+  --num:'Archivo','Segoe UI',system-ui,sans-serif;
+  /* 落ち影（描いた接地影・暖かい黒） */
+  --contact:0 2px 0 rgba(26,20,16,.28), 0 6px 12px -6px rgba(26,20,16,.45);
+  /* 紙目。白寄りに寄せた乗算ノイズなので、地の明度をほとんど下げずに高周波だけを足せる */
+  --noise:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='130' height='130'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='matrix' values='1 1 1 0 -0.575  1 1 1 0 -0.575  1 1 1 0 -0.575  0 0 0 0 1'/></filter><rect width='130' height='130' filter='url(%23n)'/></svg>");
+}
+
+/* 二本線の枠。単線の純金ヘアラインはベクターの署名（§6.3） */
+.rule2{ box-shadow: inset 0 0 0 1px rgba(58,44,30,.60), 0 0 0 1px rgba(185,154,94,.80); }
+.rule2c{ box-shadow: inset 0 0 0 1px rgba(58,44,30,.60), 0 0 0 1px rgba(185,154,94,.80), var(--contact); }
+
+/* 紙目（全面・微細）。UIパネルの内部にも同じ密度で残す（§3.5 / §7）。
+   重要：この層は「文字の下」に敷く。パネル本体・カード本体では本文が z-index:2 で紙目の上に載る。 */
+.grain::before,
+.panel__hd::after,
+.panel__bd::before,
+.card__in::before,
+.list::after,
+.gauge__cap::before,
+.gauge__tube::after{
+  content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit;
+  background-image:var(--noise); background-size:130px 130px;
+  mix-blend-mode:multiply; z-index:1;
+}
+/* 文字は必ず紙目より上に置く（読ませる面ではインクが紙の上に載る順序を守る） */
+.panel__hd h3,.panel__hd .sub{position:relative;z-index:2}
+.plaque > *,.med__well,.chip .n,.chip svg{position:relative;z-index:2}
+/* 顔料ムラ（低周波・強い）。文字が載る中央だけ弱める＝可読性を素材で殺さない */
+.mottle::after{
+  content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='300' height='300' filter='url(%23m)'/></svg>");
+  background-size:300px 300px; mix-blend-mode:multiply; opacity:.20;
+  -webkit-mask-image:radial-gradient(118% 96% at 46% 52%, transparent 0%, transparent 34%, rgba(0,0,0,.55) 66%, #000 100%);
+          mask-image:radial-gradient(118% 96% at 46% 52%, transparent 0%, transparent 34%, rgba(0,0,0,.55) 66%, #000 100%);
+}
+
+/* ---------- 見本帳そのものの地（部品より必ず静かにする） ---------- */
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#DED2BA;
+  background-image:
+    radial-gradient(140% 100% at 18% 6%, rgba(239,228,204,.75), transparent 62%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23b)' opacity='0.5'/></svg>");
+  color:var(--ink-text); font-family:var(--got); font-weight:500;
+  -webkit-font-smoothing:antialiased;
+}
+.sheet{max-width:1240px;margin:0 auto;padding:40px 34px 64px}
+
+.sheet-hd{border-bottom:1px solid rgba(47,41,34,.42);padding-bottom:16px;margin-bottom:8px}
+.sheet-hd h1{font-family:var(--min);font-weight:700;font-size:27px;margin:0 0 6px;letter-spacing:.06em}
+.sheet-hd p{margin:0;font-size:12.5px;color:var(--ink-soft);line-height:1.85;max-width:78ch}
+.sheet-hd .kv{font-family:var(--num);font-weight:600;font-size:11px;letter-spacing:.12em;color:var(--ink-soft);text-transform:uppercase}
+
+.sec{margin-top:38px}
+.sec-hd{display:flex;align-items:baseline;gap:12px;margin-bottom:14px}
+.sec-hd .no{font-family:var(--num);font-weight:700;font-size:12px;letter-spacing:.14em;color:var(--rust-ink)}
+.sec-hd h2{font-family:var(--min);font-weight:600;font-size:17px;margin:0;letter-spacing:.08em}
+.sec-hd .en{font-family:var(--num);font-weight:500;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft)}
+.sec-hd .line{flex:1;height:1px;background:rgba(47,41,34,.28)}
+.note{font-size:12px;line-height:1.85;color:var(--ink-soft);max-width:82ch;margin:0 0 16px}
+.note b{color:var(--ink-text);font-weight:700}
+.lab{font-family:var(--num);font-weight:600;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:7px;display:block}
+.bay{display:flex;flex-wrap:wrap;gap:22px;align-items:flex-start}
+.bay.col{flex-direction:column}
+.stack{display:flex;flex-direction:column;gap:10px}
+
+/* ============================================================
+   1. パネル  ── 見出し帯 / 枠 / 紙の身
+   ============================================================ */
+.panel{
+  position:relative; border-radius:6px; padding:5px;
+  background:linear-gradient(178deg, #57452D 0%, #4A3A26 42%, #40311F 100%);
+  box-shadow: inset 0 0 0 1px rgba(58,44,30,.60), 0 0 0 1px rgba(185,154,94,.80), var(--contact);
+}
+.panel--verd{background:linear-gradient(178deg,#4A6155 0%,#3E5450 46%,#334642 100%)}
+/* 角の押印は2隅だけ（左右対称の均整＝没個性の署名を避ける §6.3） */
+.panel::after{
+  content:''; position:absolute; width:9px; height:9px; border-radius:50%;
+  left:8px; top:8px; z-index:3; pointer-events:none;
+  background:radial-gradient(circle at 34% 30%, #C9AC74 0 28%, #9A7B44 46%, #5E4826 100%);
+  box-shadow:0 1px 0 rgba(26,20,16,.5);
+}
+.panel__hd{
+  position:relative; z-index:2; border-radius:3px 3px 0 0; overflow:hidden;
+  background:linear-gradient(180deg,#4A6155 0%,#3E5450 58%,#33443F 100%);
+  padding:9px 14px 9px 26px; display:flex; align-items:center; gap:10px;
+  border-bottom:1px solid rgba(26,20,16,.55);
+}
+.panel__hd::before{ /* 受光面：上辺だけ・途切れさせる（連続ベベルの回避 §2.1） */
+  content:''; position:absolute; left:9%; right:22%; top:0; height:1px;
+  background:linear-gradient(90deg,transparent,rgba(241,228,198,.36) 24%,rgba(241,228,198,.20) 70%,transparent);
+}
+.panel__hd h3{font-family:var(--min);font-weight:600;font-size:15px;color:var(--ivory);margin:0;letter-spacing:.09em;line-height:1.45}
+.panel__hd .sub{font-family:var(--got);font-weight:500;font-size:11px;color:#E4D6B6;letter-spacing:.04em}
+.panel__hd .sp{flex:1}
+.panel__bd{
+  position:relative; z-index:1; border-radius:0 0 3px 3px; overflow:hidden;
+  background:linear-gradient(172deg,#F1E7D1 0%, #EFE4CC 40%, #E7DBC0 100%);
+  padding:14px 16px 15px;
+}
+.panel--noHd .panel__bd{border-radius:3px}
+.panel__bd > *{position:relative;z-index:2}
+.panel__bd p{margin:0 0 8px;font-size:13px;line-height:1.78}
+.panel__bd p:last-child{margin-bottom:0}
+.panel--dark .panel__bd{background:linear-gradient(172deg,#54422C 0%,#4A3A26 44%,#3B2D1D 100%);color:var(--ivory)}
+.panel--dark .panel__bd p{color:var(--ivory)}
+.w300{width:300px}.w360{width:360px}.w420{width:420px}.w460{width:460px}.w520{width:520px}
+
+/* ============================================================
+   2. カード  ── 採録カード（選択可能／選択中／無効）
+   ============================================================ */
+.card{
+  position:relative; width:330px; border-radius:5px; padding:4px;
+  background:linear-gradient(176deg,#6A5537,#4E3D28 60%,#43341F);
+  box-shadow: inset 0 0 0 1px rgba(58,44,30,.60), 0 0 0 1px rgba(185,154,94,.72), var(--contact);
+  transition:none;
+}
+.card__in{
+  position:relative; border-radius:2px; overflow:hidden;
+  background:linear-gradient(170deg,#F2E8D3 0%,#EFE4CC 46%,#E4D6B6 100%);
+  padding:13px 15px 12px 15px;
+}
+.card__in > *{position:relative;z-index:2}
+.card__hd{display:flex;align-items:flex-start;gap:11px;margin-bottom:9px}
+/* アイコンはカードの縁からはみ出す押印ロンデル（§6.5） */
+.card__roundel{
+  flex:0 0 auto; width:46px;height:46px;border-radius:50%; margin:-17px 0 0 -7px; position:relative;
+  background:radial-gradient(circle at 37% 29%, #F4EBD6 0 34%, #E9DDC3 66%, #D6C29A 100%);
+  box-shadow:
+    inset 0 0 0 3px #9A7B44, inset 0 0 0 4.5px rgba(58,44,30,.66),
+    inset 0 -3px 4px -2px rgba(58,44,30,.30),
+    0 0 0 1px rgba(185,154,94,.85), 0 2px 4px rgba(26,20,16,.42);
+  display:grid;place-items:center;
+}
+.card__roundel svg{width:24px;height:24px}
+.card__ttl{flex:1;min-width:0}
+.card__kind{font-family:var(--got);font-weight:700;font-size:10.5px;letter-spacing:.14em;color:var(--rust-ink);display:block;margin-bottom:2px}
+.card__name{font-family:var(--min);font-weight:600;font-size:19px;line-height:1.34;letter-spacing:.03em;margin:0;color:var(--ink-text)}
+.card__body{font-size:13px;line-height:1.8;color:var(--ink-text);margin:0}
+/* キーワードは点線下線ではなく手描きの筆線（§6.5） */
+.kw{
+  font-weight:700; color:var(--ink-text);
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='6'><path d='M1 4.2 C 10 2.6, 18 4.9, 27 3.6 S 44 2.4, 59 3.9' fill='none' stroke='%23A8613C' stroke-width='1.7' stroke-linecap='round' opacity='0.85'/></svg>");
+  background-repeat:repeat-x; background-position:0 100%; background-size:60px 6px; padding-bottom:3px;
+}
+.card__ft{
+  margin-top:11px; padding-top:9px; border-top:1px solid rgba(47,41,34,.26);
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.card__ft .sp{flex:1}
+.card__starter{font-size:11.5px;line-height:1.7;color:var(--ink-soft)}
+/* — 選択中 — */
+.card.is-selected{
+  background:linear-gradient(176deg,#C4A76C,#9A7B44 55%,#7A5F34);
+  box-shadow: inset 0 0 0 1px rgba(58,44,30,.6), 0 0 0 2px rgba(185,154,94,.95), 0 0 0 3px rgba(58,44,30,.45), var(--contact);
+  padding:6px;
+}
+.card.is-selected .card__in{background:linear-gradient(170deg,#F6EDDA 0%,#F1E7D1 50%,#E9DDC3 100%)}
+.card__seal{
+  position:absolute; z-index:4; right:-9px; top:-11px; width:46px;height:46px;border-radius:50%;
+  display:none; place-items:center; transform:rotate(-8deg);
+  background:radial-gradient(circle at 36% 28%, #A54A34 0 26%, #8E3E2A 56%, #6E2C1B 100%);
+  box-shadow: inset 0 0 0 1.5px rgba(46,24,16,.6), 0 0 0 1px rgba(232,205,158,.5), 0 2px 5px rgba(26,20,16,.5);
+  font-family:var(--min); font-weight:700; font-size:15px; color:#F6E7C8; letter-spacing:.04em;
+}
+.card.is-selected .card__seal{display:grid}
+/* — 無効 — */
+.card.is-disabled{background:linear-gradient(176deg,#6A6152,#565043 60%,#4B463A);box-shadow:inset 0 0 0 1px rgba(58,44,30,.45), 0 0 0 1px rgba(150,140,118,.6), 0 1px 0 rgba(26,20,16,.2)}
+.card.is-disabled .card__in{background:linear-gradient(170deg,#D6CDBB 0%,#CFC6B4 50%,#C7BEAC 100%);padding-bottom:44px}
+.card.is-disabled .card__name,.card.is-disabled .card__body{color:var(--ink-disabled)}
+.card.is-disabled .card__kind{color:#6E5B44}
+.card.is-disabled .card__roundel{
+  background:radial-gradient(circle at 37% 29%,#DCD4C3 0 34%,#CFC6B4 66%,#BBB1A0 100%);
+  box-shadow:inset 0 0 0 3px #8A806C, inset 0 0 0 4.5px rgba(58,50,38,.5), 0 0 0 1px rgba(150,140,118,.6);
+}
+.card.is-disabled .card__roundel svg{opacity:.55}
+.card.is-disabled .card__starter{color:var(--ink-disabled)}
+.card__stamp{
+  display:none; position:absolute; z-index:4; right:14px; bottom:14px; transform:rotate(-4.5deg);
+  font-family:var(--min); font-weight:700; font-size:16px; letter-spacing:.16em; color:#78301F;
+  border:2px solid #78301F; border-radius:3px; padding:3px 12px 4px; white-space:nowrap;
+}
+.card.is-disabled .card__stamp{display:block}
+/* 微回転（完全な平行はテンプレの署名 §6.5）— 一覧では使わず、採録画面でのみ付ける */
+.tilt-a{transform:rotate(-1.2deg)}.tilt-b{transform:rotate(.8deg)}.tilt-c{transform:rotate(-.5deg)}
+
+/* ============================================================
+   3. ボタン ── 押せて見えること
+   ============================================================ */
+.btn{
+  position:relative; display:inline-flex; align-items:center; justify-content:center; gap:9px;
+  font-family:var(--min); font-weight:600; font-size:15.5px; letter-spacing:.1em;
+  min-height:46px; padding:0 26px; border:0; border-radius:5px; cursor:pointer;
+  /* 枯れた真鍮の板（S28〜32%）。明るい地なので文字は暗いインク＝§6.1 の不変条件そのまま */
+  background-color:#C2AC84;  /* ＝グラデーションで最も暗い停止色。実測はこの最悪値で行う */
+  background-image:var(--noise),linear-gradient(180deg,#DCC79E 0%,#CEB88C 42%,#C6B08A 72%,#C2AC84 100%);
+  background-size:130px 130px,auto; background-blend-mode:multiply,normal;
+  color:var(--ink-plate);
+  box-shadow:
+    inset 0 0 0 1px rgba(58,44,30,.55),
+    0 0 0 1px rgba(185,154,94,.85),
+    0 3px 0 0 #6B5330,          /* 側面：押すと消える＝押せることの根拠 */
+    0 5px 10px -4px rgba(26,20,16,.55);
+  transform:translateY(0);
+}
+.btn::before{ /* 途切れた温白ハイライト（連続スペキュラの回避） */
+  content:''; position:absolute; left:12%; right:34%; top:1px; height:1px;
+  background:linear-gradient(90deg,transparent,rgba(250,242,226,.75) 30%,rgba(250,242,226,.3) 76%,transparent);
+  border-radius:2px;
+}
+.btn::after{ /* 打刻は角に寄せ、左右で揃えない（§6.3） */
+  content:''; position:absolute; left:9px; top:8px; width:3.5px;height:3.5px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#EBDCB6 0 30%,#9A7B44 66%,#5E4826 100%);
+  box-shadow:0 0 0 .5px rgba(58,44,30,.35);
+}
+.btn .txt{position:relative;z-index:2}
+.btn--wide{width:100%}
+.btn--lg{min-height:54px;font-size:17px;padding:0 34px}
+.btn--sm{min-height:34px;font-size:12.5px;padding:0 15px;letter-spacing:.06em;font-family:var(--got);font-weight:700}
+.btn--sm::after{display:none}
+/* 二次：木＋緑石。地が暗いので文字は象牙へ切り替わる（同じ不変条件の裏返し） */
+.btn--wood{
+  background-color:#5C4A31;
+  background-image:var(--noise),linear-gradient(180deg,#5C4A31 0%,#4A3A26 40%,#40311F 100%);
+  color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6),0 0 0 1px rgba(185,154,94,.62),0 3px 0 0 #2A2013,0 5px 10px -4px rgba(26,20,16,.5);
+}
+.btn--stone{
+  background-color:#4E6A5D;
+  background-image:var(--noise),linear-gradient(180deg,#4E6A5D 0%,#3E5450 42%,#334642 100%);
+  color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(30,38,34,.62),0 0 0 1px rgba(185,154,94,.72),0 3px 0 0 #24322E,0 5px 10px -4px rgba(26,20,16,.5);
+}
+.btn--wood::after,.btn--stone::after{background:radial-gradient(circle at 35% 30%,#C9AC74 0 30%,#7C6134 66%,#3A2C1E 100%)}
+/* 押下：側面が消え、身が沈み、上辺のハイライトが消える */
+.btn.is-pressed{
+  transform:translateY(3px);
+  background-color:#B8A177;
+  background-image:var(--noise),linear-gradient(180deg,#B8A177 0%,#C0A97F 46%,#C8B288 100%);
+  box-shadow:inset 0 2px 4px rgba(26,20,16,.42), inset 0 0 0 1px rgba(58,44,30,.6), 0 0 0 1px rgba(185,154,94,.7);
+}
+.btn--wood.is-pressed{background-color:#3A2D1C;background-image:var(--noise),linear-gradient(180deg,#3A2D1C 0%,#44351F 46%,#4C3B24 100%)}
+.btn--stone.is-pressed{background-color:#42564F;background-image:var(--noise),linear-gradient(180deg,#334642 0%,#3A4E4A 46%,#42564F 100%)}
+.btn.is-pressed::before{opacity:0}
+/* 無効：色を抜いた板。文字は無効でも 4.5:1・Δluma 120 を割らない */
+.btn.is-disabled{
+  cursor:default; transform:translateY(2px);
+  background-color:#C4BDAC;
+  background-image:var(--noise),linear-gradient(180deg,#D2CBBA 0%,#CAC3B2 46%,#C4BDAC 100%);
+  color:var(--ink-disabled);
+  box-shadow:inset 0 0 0 1px rgba(58,50,38,.42),0 0 0 1px rgba(150,140,118,.55),0 1px 0 0 #A79F8D;
+}
+.btn.is-disabled::before{opacity:0}
+.btn.is-disabled::after{background:#9C9482}
+.btn-note{font-size:11px;color:var(--ink-soft);margin-top:7px;letter-spacing:.02em}
+
+/* ============================================================
+   4. 一覧行
+   ============================================================ */
+.list{background:linear-gradient(172deg,#F1E7D1,#E9DDC3);border-radius:3px;overflow:hidden;position:relative}
+.list > *{position:relative;z-index:2}
+.row{
+  display:flex; align-items:center; gap:12px; padding:11px 14px 11px 12px;
+  border-bottom:1px solid rgba(47,41,34,.17); position:relative;
+}
+.row:last-child{border-bottom:0}
+.row__ic{
+  flex:0 0 auto;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 37% 29%, #F1E7D1 0 38%, #E4D6B6 72%, #CFBE99 100%);
+  box-shadow:inset 0 0 0 2px #4A6155, inset 0 0 0 3px rgba(26,20,16,.42), inset 0 -2px 3px -1px rgba(58,44,30,.25), 0 0 0 1px rgba(185,154,94,.5);
+}
+.row__ic svg{width:18px;height:18px}
+.row__tx{flex:1;min-width:0}
+.row__name{font-family:var(--min);font-weight:600;font-size:14.5px;letter-spacing:.03em;line-height:1.4;color:var(--ink-text)}
+.row__sub{font-size:11.5px;line-height:1.6;color:var(--ink-soft);margin-top:2px}
+.row__val{flex:0 0 auto;display:flex;align-items:baseline;gap:4px}
+.row__chev{flex:0 0 auto;width:9px;height:14px;opacity:.5}
+.row.is-current{background:linear-gradient(90deg,rgba(154,123,68,.24),rgba(154,123,68,.07) 62%,transparent)}
+.row.is-current::before{content:'';position:absolute;left:0;top:5px;bottom:5px;width:3px;background:var(--rust);border-radius:0 2px 2px 0}
+.row.is-disabled .row__name,.row.is-disabled .row__sub{color:var(--ink-disabled)}
+.row.is-disabled .row__ic{background:radial-gradient(circle at 37% 29%,#DCD4C3 0 38%,#CFC6B4 72%,#BBB1A0 100%);box-shadow:inset 0 0 0 2px #8A806C, inset 0 0 0 3px rgba(58,50,38,.4), 0 0 0 1px rgba(150,140,118,.5)}
+.row.is-disabled .row__ic svg{opacity:.55}
+
+/* ============================================================
+   5. チップ
+   ============================================================ */
+.chip{
+  position:relative;display:inline-flex;align-items:center;gap:7px;vertical-align:middle;
+  padding:4px 11px 5px 8px;border-radius:3px;
+  background-image:var(--noise),linear-gradient(172deg,#E9DDC3,#DCCFB2);
+  background-size:130px 130px,auto; background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.45), 0 0 0 1px rgba(185,154,94,.6);
+  font-size:12px;line-height:1.4;color:var(--ink-text);letter-spacing:.02em;
+}
+.chip svg{width:15px;height:15px;flex:0 0 auto}
+.chip .n{font-family:var(--num);font-weight:700;font-size:14px;letter-spacing:.01em;font-variant-numeric:tabular-nums lining-nums}
+.chip .u{font-size:10.5px;color:var(--ink-soft)}
+/* 兆候チップ＝暗地の札。数値は札の上（§6.1） */
+.chip--omen{
+  background-image:var(--noise),linear-gradient(172deg,#4A3A26,#3A2D1D);color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.6), 0 0 0 1px rgba(185,154,94,.7);
+  padding-left:11px;
+}
+.chip--omen .u{color:var(--ivory-dim)}
+.chip--omen .n{
+  background:linear-gradient(172deg,#EFE4CC,#DCCFB2);color:var(--ink-text);
+  border-radius:2px;padding:0 5px;box-shadow:inset 0 0 0 1px rgba(58,44,30,.4);
+  font-size:12.5px;
+}
+/* 危険：朱は「印」として面と縁に使い、文字は一段暗い朱を紙の上に置く */
+.chip--danger{position:relative;padding-left:14px}
+.chip--danger::before{content:'';position:absolute;left:3px;top:4px;bottom:4px;width:3px;border-radius:2px;background:var(--danger)}
+.chip--danger .n{color:var(--danger-ink);background:linear-gradient(172deg,#F4EAD5,#E9DDC3)}
+.chip--sm{font-size:11px;padding:2px 8px 3px 6px}
+.chip--sm .n{font-size:12px}
+/* 幕（テーマ）チップ */
+.chip--act{background-image:var(--noise),linear-gradient(172deg,#4A6155,#33443F);color:var(--ivory);box-shadow:inset 0 0 0 1px rgba(26,20,16,.55),0 0 0 1px rgba(185,154,94,.6)}
+.chip--act .u{color:var(--ivory-dim)}
+
+/* ============================================================
+   6. 数値表示  ── 大/中/小。すべて等幅ライニング数字
+   ============================================================ */
+.num{font-family:var(--num);font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1;font-weight:600;letter-spacing:.005em}
+.num--l{font-size:40px;line-height:1}
+.num--m{font-size:21px;line-height:1.1}
+.num--s{font-size:13.5px;line-height:1.2}
+/* 数値は必ず自分の札の上に載る */
+.plaque{
+  display:inline-flex;align-items:baseline;gap:8px;position:relative;
+  padding:8px 15px 9px;border-radius:4px;
+  background-image:var(--noise),linear-gradient(172deg,#F1E7D1,#E4D6B6);
+  background-size:130px 130px,auto; background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.45), 0 0 0 1px rgba(185,154,94,.7), var(--contact);
+}
+.plaque--dark{background-image:var(--noise),linear-gradient(172deg,#4A3A26,#33271A);color:var(--ivory);box-shadow:inset 0 0 0 1px rgba(26,20,16,.6),0 0 0 1px rgba(185,154,94,.75), var(--contact)}
+.plaque .k{font-family:var(--min);font-weight:600;font-size:12.5px;letter-spacing:.12em;opacity:.9}
+.plaque--dark .k{color:var(--ivory-dim);opacity:1}
+.plaque .u{font-size:11px;color:var(--ink-soft)}
+.plaque--dark .u{color:var(--ivory-dim)}
+.delta{font-family:var(--num);font-weight:700;font-size:13px;color:var(--gain)}
+.delta--minus{color:var(--danger-ink)}
+.plaque--dark .delta{color:var(--gain-lite)}
+.plaque--dark .delta--minus{color:var(--loss-lite)}
+
+/* ============================================================
+   7. メダリオン ── 桁が増えると錠剤形へ伸びる
+   ============================================================ */
+.med{
+  position:relative;display:inline-flex;flex-direction:column;align-items:center;justify-content:center;
+  min-width:66px;height:66px;border-radius:999px;padding:0 12px;
+  background-image:
+    var(--noise),
+    radial-gradient(circle at 34% 24%, rgba(246,235,218,.30) 0 14%, transparent 42%),
+    linear-gradient(168deg,#B49258 0%,#9A7B44 40%,#6E5530 78%,#54401F 100%);
+  background-size:130px 130px,auto,auto; background-blend-mode:multiply,normal,normal;
+  box-shadow:inset 0 0 0 2px rgba(58,44,30,.55), 0 0 0 1px rgba(185,154,94,.85), var(--contact);
+}
+.med__well{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-width:46px;height:46px;border-radius:999px;padding:0 9px;
+  background:linear-gradient(172deg,#33271A 0%,#2E241A 52%,#241B12 100%);
+  box-shadow:inset 0 2px 3px rgba(20,14,10,.7), inset 0 -1px 0 rgba(185,154,94,.28);
+}
+.med__k{font-family:var(--min);font-weight:600;font-size:9.5px;letter-spacing:.16em;color:var(--ivory-dim);line-height:1;margin-bottom:2px}
+.med__n{font-family:var(--num);font-variant-numeric:tabular-nums lining-nums;font-weight:600;font-size:23px;line-height:1;color:var(--ivory)}
+.med--lg{min-width:86px;height:86px}
+.med--lg .med__well{min-width:62px;height:62px}
+.med--lg .med__n{font-size:31px}
+.med--sm{min-width:46px;height:46px;padding:0 8px}
+.med--sm .med__well{min-width:32px;height:32px;padding:0 6px}
+.med--sm .med__n{font-size:16px}
+.med--tok .med__well{background:linear-gradient(172deg,#4A6155,#2C3A37)}
+.med__ic{position:absolute;left:-8px;bottom:-6px;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 37% 29%,#F1E7D1 0 38%,#E4D6B6 74%,#CFBE99 100%);
+  box-shadow:inset 0 0 0 2px #9A7B44,inset 0 0 0 3px rgba(58,44,30,.55),0 0 0 1px rgba(185,154,94,.7),0 1px 2px rgba(26,20,16,.5)}
+.med__ic svg{width:15px;height:15px}
+
+/* ============================================================
+   8. ゲージ ── 灯のガラス管（縦・可変）
+   ============================================================ */
+.gauge{position:relative;width:30px;height:var(--h,240px);display:inline-block}
+.gauge__tube{
+  position:absolute;left:3px;right:3px;top:14px;bottom:14px;border-radius:12px;overflow:hidden;
+  background:linear-gradient(92deg,#2C3A36 0%,#35443F 38%,#2E3B37 100%);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.7), 0 0 0 1px rgba(185,154,94,.7);
+}
+.gauge__fill{
+  position:absolute;left:0;right:0;bottom:0;height:calc(var(--v,60) * 1%);
+  background:linear-gradient(180deg,#8FB7BE 0%,#6E9EA8 26%,#5A8C99 62%,#4E7E8C 100%);
+}
+.gauge__meniscus{position:absolute;left:0;right:0;bottom:calc(var(--v,60) * 1% - 3px);height:4px;
+  background:linear-gradient(180deg,#E4EDE6,#BCD6D6);opacity:.95}
+.gauge__glare{ /* 途切れた反射（連続スペキュラではない） */
+  position:absolute;left:6px;top:12%;width:3px;height:52%;border-radius:2px;
+  background:linear-gradient(180deg,rgba(246,235,218,.42),rgba(246,235,218,.06) 62%,transparent);
+}
+.gauge__ticks{position:absolute;inset:0;pointer-events:none}
+.gauge__ticks i{position:absolute;left:0;height:1px;background:rgba(26,20,16,.42)}
+.gauge__cap{
+  position:absolute;left:0;right:0;height:16px;z-index:3;border-radius:4px;
+  background:linear-gradient(180deg,#C0A068 0%,#9A7B44 44%,#6B5330 100%);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6), 0 0 0 1px rgba(185,154,94,.8), 0 1px 2px rgba(26,20,16,.45);
+}
+.gauge__cap--t{top:0}
+.gauge__cap--b{bottom:0;background:linear-gradient(180deg,#B49258 0%,#8A6C3B 50%,#5E4826 100%)}
+.gauge__cap::after{content:'';position:absolute;left:22%;right:56%;top:2px;height:1px;background:rgba(246,235,218,.4)}
+.gauge__ring{position:absolute;left:50%;top:-11px;width:15px;height:15px;margin-left:-7.5px;border-radius:50%;
+  border:2.5px solid #9A7B44;box-shadow:0 0 0 1px rgba(58,44,30,.6), inset 0 0 0 1px rgba(58,44,30,.4)}
+.gauge-set{display:flex;align-items:flex-end;gap:26px}
+.gauge-cap{font-size:11px;color:var(--ink-soft);text-align:center;margin-top:8px}
+
+/* ============================================================
+   9. 伸縮試験 / 絵の上での検証 / 実測
+   ============================================================ */
+.frameA{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.scene{
+  position:relative;width:390px;height:470px;border-radius:6px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6), 0 0 0 1px rgba(185,154,94,.7), var(--contact);
+  background:#7E7A66 url('ref_scene.jpg') center 22% / cover no-repeat;
+}
+.scene__ui{position:absolute;inset:0;padding:12px}
+.scene__top{display:flex;align-items:flex-start;gap:10px}
+.scene__bot{position:absolute;left:12px;right:12px;bottom:12px}
+
+.audit{width:100%;border-collapse:collapse;font-size:12px;background:rgba(241,231,209,.7)}
+.audit th,.audit td{padding:7px 10px;border-bottom:1px solid rgba(47,41,34,.2);text-align:left;vertical-align:middle}
+.audit th{font-family:var(--num);font-weight:600;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);background:rgba(214,199,168,.55)}
+.audit td.n{font-family:var(--num);font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.audit .sw{display:inline-block;width:13px;height:13px;border-radius:2px;vertical-align:-2px;margin-right:6px;box-shadow:inset 0 0 0 1px rgba(47,41,34,.35)}
+.pass{color:#2F5A3C;font-weight:700}
+.fail{color:var(--danger-ink);font-weight:700}
+.verdict{margin-top:14px;padding:13px 16px;border-radius:4px;background:linear-gradient(172deg,#F1E7D1,#E4D6B6);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.4),0 0 0 1px rgba(185,154,94,.7);font-size:13px;line-height:1.85}
+.verdict .num{font-size:15px}
+
+.swatches{display:flex;flex-wrap:wrap;gap:9px}
+.sw2{width:118px;border-radius:3px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(58,44,30,.4),0 0 0 1px rgba(185,154,94,.55)}
+.sw2 .c{height:44px}
+.sw2 .t{padding:5px 7px 6px;background:rgba(241,231,209,.85);font-size:10px;line-height:1.5}
+.sw2 .t b{display:block;font-family:var(--got);font-weight:700;font-size:10.5px;color:var(--ink-text)}
+.sw2 .t span{font-family:var(--num);font-weight:600;font-size:9.5px;color:var(--ink-soft);letter-spacing:.04em}
+</style>
+</head>
+<body>
+
+<!-- ── 意匠アイコン（インク線＋水彩の面。幾何学的に正確にしない） ── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-crystal" viewBox="0 0 24 24">
+      <path d="M12 2.2 L17.3 9.1 L13.6 21.6 L8.0 20.9 L5.4 9.6 Z" fill="#7FA8C4" opacity=".72"/>
+      <path d="M12 2.2 L17.3 9.1 L13.6 21.6 L8.0 20.9 L5.4 9.6 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M12 2.4 L10.6 20.9 M5.5 9.5 L17.1 9.2" fill="none" stroke="#2F2922" stroke-width=".9" opacity=".8"/>
+      <path d="M12.4 4.6 L15.6 9.2 L13.4 15" fill="none" stroke="#EFE4CC" stroke-width="1.1" opacity=".55"/>
+    </symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24">
+      <path d="M19.4 3.6 C10.4 3.1 3.6 7.9 3.9 14.6 C4.1 18.4 6.6 20.6 9.4 20.4 C16.3 19.9 20.2 12.4 19.4 3.6 Z" fill="#7E8E52" opacity=".72"/>
+      <path d="M19.4 3.6 C10.4 3.1 3.6 7.9 3.9 14.6 C4.1 18.4 6.6 20.6 9.4 20.4 C16.3 19.9 20.2 12.4 19.4 3.6 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M18.6 4.4 C13.4 9.6 9.4 14.4 6.4 20.9 M15.2 7.2 L10.4 6.4 M12.6 10.8 L7.6 10.6 M10.2 14.4 L6.2 15" fill="none" stroke="#2F2922" stroke-width=".85" opacity=".72"/>
+    </symbol>
+    <symbol id="i-shroom" viewBox="0 0 24 24">
+      <path d="M3.2 11.6 C3.4 6.4 7.4 3.1 12.1 3.2 C16.9 3.3 20.7 6.8 20.7 11.7 C20.7 12.9 18.1 13.6 12 13.6 C5.7 13.6 3.2 12.8 3.2 11.6 Z" fill="#A8613C" opacity=".7"/>
+      <path d="M3.2 11.6 C3.4 6.4 7.4 3.1 12.1 3.2 C16.9 3.3 20.7 6.8 20.7 11.7 C20.7 12.9 18.1 13.6 12 13.6 C5.7 13.6 3.2 12.8 3.2 11.6 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M9.4 13.6 C9.2 17 9.0 19.2 8.2 21 L15.4 21 C14.6 19.1 14.4 16.9 14.3 13.6" fill="#DCCFBC" opacity=".85"/>
+      <path d="M9.4 13.6 C9.2 17 9.0 19.2 8.2 21 L15.4 21 C14.6 19.1 14.4 16.9 14.3 13.6" fill="none" stroke="#2F2922" stroke-width="1.2" stroke-linejoin="round"/>
+      <circle cx="8.4" cy="8.1" r="1.5" fill="#EFE4CC" opacity=".8"/><circle cx="14.4" cy="6.6" r="1.1" fill="#EFE4CC" opacity=".7"/><circle cx="16.6" cy="10" r=".9" fill="#EFE4CC" opacity=".6"/>
+    </symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24">
+      <path d="M12 3.1 L14.1 4.0 L16.4 3.3 L17.6 5.4 L19.9 6.1 L19.7 8.6 L21.1 10.6 L19.6 12.5 L19.8 15 L17.5 15.8 L16.4 18 L14 17.4 L12 18.6 L10 17.3 L7.7 17.9 L6.5 15.7 L4.3 14.9 L4.5 12.4 L3.1 10.5 L4.6 8.5 L4.4 6.1 L6.7 5.3 L7.9 3.2 L10.1 3.9 Z" fill="#9A7B44" opacity=".78"/>
+      <path d="M12 3.1 L14.1 4.0 L16.4 3.3 L17.6 5.4 L19.9 6.1 L19.7 8.6 L21.1 10.6 L19.6 12.5 L19.8 15 L17.5 15.8 L16.4 18 L14 17.4 L12 18.6 L10 17.3 L7.7 17.9 L6.5 15.7 L4.3 14.9 L4.5 12.4 L3.1 10.5 L4.6 8.5 L4.4 6.1 L6.7 5.3 L7.9 3.2 L10.1 3.9 Z" fill="none" stroke="#2F2922" stroke-width="1.25" stroke-linejoin="round"/>
+      <circle cx="12" cy="10.8" r="3.4" fill="#DCCFBC" opacity=".75"/>
+      <circle cx="12" cy="10.8" r="3.4" fill="none" stroke="#2F2922" stroke-width="1.15"/>
+    </symbol>
+    <symbol id="i-relic" viewBox="0 0 24 24">
+      <path d="M6.1 3.6 L18.2 4.1 L19.1 19.6 L5.2 20.3 Z" fill="#7E6A8E" opacity=".62"/>
+      <path d="M6.1 3.6 L18.2 4.1 L19.1 19.6 L5.2 20.3 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M8.4 7.6 L15.9 7.9 M8.6 11.2 L13.4 11.4 M8.8 14.8 L15.6 15" fill="none" stroke="#2F2922" stroke-width="1.05" opacity=".85"/>
+      <circle cx="15.8" cy="11.4" r="1.5" fill="#EFE4CC" opacity=".8" stroke="#2F2922" stroke-width=".9"/>
+    </symbol>
+    <symbol id="i-spore" viewBox="0 0 24 24">
+      <circle cx="12" cy="12.2" r="5.4" fill="#8FB7BE" opacity=".72"/>
+      <circle cx="12" cy="12.2" r="5.4" fill="none" stroke="#2F2922" stroke-width="1.25"/>
+      <path d="M12 1.9 L12 6.4 M12 18 L12 22.4 M2.1 12.2 L6.6 12.2 M17.6 12.2 L22 12.2 M5.2 5.1 L8.3 8.5 M15.8 15.9 L19.1 19.3 M18.9 5.2 L15.6 8.6 M8.4 15.9 L5.1 19.2" stroke="#2F2922" stroke-width=".95" stroke-linecap="round" opacity=".78"/>
+      <circle cx="10.4" cy="10.6" r="1.4" fill="#E4EDE6" opacity=".85"/>
+    </symbol>
+    <symbol id="i-moss" viewBox="0 0 24 24">
+      <path d="M3.4 18.6 C3.1 13.6 6.6 9.4 11.6 9.2 C16.9 9 20.9 12.6 20.8 18.4 Z" fill="#5E7448" opacity=".72"/>
+      <path d="M3.4 18.6 C3.1 13.6 6.6 9.4 11.6 9.2 C16.9 9 20.9 12.6 20.8 18.4 Z" fill="none" stroke="#2F2922" stroke-width="1.25" stroke-linejoin="round"/>
+      <path d="M6.4 18.4 C6.2 15.2 7 12.6 8.4 10.6 M11.8 18.4 L11.7 9.4 M16.4 18.4 C16.6 14.6 15.6 11.8 14.4 10.2" fill="none" stroke="#2F2922" stroke-width=".9" opacity=".7"/>
+      <path d="M2.6 20.4 L21.4 20.2" stroke="#2F2922" stroke-width="1.2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-shard" viewBox="0 0 24 24">
+      <path d="M4.6 15.4 L9.4 4.4 L19.6 8.1 L16.4 19.8 Z" fill="#B08C4E" opacity=".62"/>
+      <path d="M4.6 15.4 L9.4 4.4 L19.6 8.1 L16.4 19.8 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M9.6 4.6 L12.4 19.2 M4.9 15.2 L19.4 8.3" fill="none" stroke="#2F2922" stroke-width=".9" opacity=".7"/>
+    </symbol>
+    <symbol id="i-beast" viewBox="0 0 24 24">
+      <path d="M3.6 13.8 C3.4 9.6 7.4 6.6 12.2 6.8 C17.4 7 20.9 10.2 20.6 14.2 C20.4 17.4 17 19.4 12.1 19.2 C7.2 19 3.8 17 3.6 13.8 Z" fill="#7C7264" opacity=".76"/>
+      <path d="M3.6 13.8 C3.4 9.6 7.4 6.6 12.2 6.8 C17.4 7 20.9 10.2 20.6 14.2 C20.4 17.4 17 19.4 12.1 19.2 C7.2 19 3.8 17 3.6 13.8 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M7.6 7.6 L6.4 4.2 M11.4 6.8 L11.6 3.4 M15.4 7.4 L16.9 4.4" stroke="#2F2922" stroke-width="1.05" stroke-linecap="round"/>
+      <path d="M5.6 16.4 L18.6 16.1" stroke="#2F2922" stroke-width=".85" opacity=".6"/>
+      <circle cx="9" cy="12.4" r="1.1" fill="#2F2922"/><circle cx="15.2" cy="12.6" r="1.1" fill="#2F2922"/>
+    </symbol>
+    <symbol id="i-chev" viewBox="0 0 10 16"><path d="M2.4 1.4 L8 8 L2.2 14.6" fill="none" stroke="#2F2922" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-lamp" viewBox="0 0 24 24">
+      <rect x="7.4" y="5.4" width="9.4" height="14.2" rx="3.4" fill="#8FB7BE" opacity=".7"/>
+      <rect x="7.4" y="5.4" width="9.4" height="14.2" rx="3.4" fill="none" stroke="#2F2922" stroke-width="1.25"/>
+      <path d="M6.6 5.4 L17.4 5.2 M6.8 19.6 L17.6 19.4" stroke="#2F2922" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M12 2.2 C10.2 2.4 9.6 3.6 9.8 5.2" fill="none" stroke="#2F2922" stroke-width="1.15" stroke-linecap="round"/>
+      <path d="M10 8.4 L10 16.4" stroke="#E4EDE6" stroke-width="1.5" stroke-linecap="round" opacity=".8"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="sheet">
+
+<header class="sheet-hd">
+  <div class="kv">yacho / mockups / v6</div>
+  <h1>UI部品キット ── そろえて、しるす。</h1>
+  <p>
+    <b>構造はオーナー提供の参照（owner_ui_ref.jpg）から、画材は採用コンセプト画から取っている。</b>
+    見出し帯・統一カード・一覧行・平坦で十分な地・明確なボタンという「アプリの骨格」をそのまま借り、
+    その表面だけを真鍮・古紙・インク・水彩・革へ置き換えた。<b>絵はUIを兼ねない。</b>
+    情景は情景の枠の中にとどまり、文字は必ず自分の不透明な札の上に載る。
+    文中の名前（知見・原生種・課目・祝福）はすべて <span class="kv">src/core</span> に実在するものだけを使っている。
+  </p>
+</header>
+
+<!-- ══════════════ 0. 方針 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">00</span><h2>この部品が守る5つの規則</h2><span class="en">rules</span><span class="line"></span></div>
+  <div class="bay">
+    <div class="panel w520 grain">
+      <div class="panel__hd"><h3>文字が安っぽくならないための規則</h3></div>
+      <div class="panel__bd mottle">
+        <p><b>① 数字も文章も、必ず自分の不透明な札の上に載る。</b>賑やかな絵の上に本文を直接置かない。</p>
+        <p><b>② 影と縁取りで可読性を作らない。</b>text-shadow・stroke はこのキットに1件も無い（§10で実測）。チープさの正体はそれ自体である。</p>
+        <p><b>③ 紙目は全面に残すが、文字が載る中央だけ顔料ムラを抜く。</b>素材感と可読性を両立させ、どちらも諦めない。</p>
+        <p><b>④ 書体は役割ごとに1つ。</b>見出し＝明朝600／本文＝ゴシック500／数字＝等幅ライニングのサン600。数字は全画面で同じ1書体。</p>
+        <p><b>⑤ 部品は中身の長さで伸びる。</b>「残灯 6」でも「残灯 107」でも、「胞子弾」でも「早足の測量 ── 盤の四隅が欠ける」でも壊れない（§10）。</p>
+      </div>
+    </div>
+    <div class="panel panel--verd w460 grain">
+      <div class="panel__hd"><h3>参照から取った構造／絵から取った素材</h3></div>
+      <div class="panel__bd mottle">
+        <p><b>構造（参照）</b>：panel の上端に必ず高コントラストの<b>見出し帯</b>。同型のカードを反復。一覧は左にアイコン鉄道、右に数値。ボタンは側面を持つ板。キャラと絵は<b>枠に差し込む</b>だけで、文字の下に潜らせない。</p>
+        <p><b>素材（コンセプト画）</b>：真鍮の環と留め具、古紙の身、インク一色（#2F2922）の輪郭、水彩の面、緑青の凹部、革の帯。<b>灯</b>は真鍮の口金を持つガラス管の中の冷たい発光液。</p>
+        <p><b>この2つを混ぜない。</b>v5の失敗は絵にUIを兼ねさせたこと。v4の失敗は素材を持たなかったこと。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 1. 色 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">01</span><h2>色域</h2><span class="en">palette</span><span class="line"></span></div>
+  <p class="note">ART_GRAMMAR §2.1 の色域そのまま。明部は彩度15〜22%の古紙、暗部は彩度20〜35%を保ち luma 22 を割らない。純黒・純白・彩度50%超の明部は使わない。<b>朱 #C4553E は印と面にのみ使い、紙の上の朱の文字は一段暗い #8E3A29 を使う</b>（コントラストのため）。</p>
+  <div class="swatches" id="swatches"></div>
+</section>
+
+<!-- ══════════════ 2. パネル ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">02</span><h2>パネル</h2><span class="en">panel</span><span class="line"></span></div>
+  <p class="note">見出し帯つき／なし。枠は 5px の真鍮または緑青、身は古紙。<b>中身の高さで伸縮する</b>（9スライス想定：角 6px・辺は伸長）。押印は2隅だけに置き、左右対称に揃えない。二本線の枠（内 #3A2C1E 60% ／ 外 #B99A5E 80%）で、単線の純金ヘアラインを避ける。</p>
+  <div class="bay">
+    <div class="panel w360 grain">
+      <div class="panel__hd"><h3>本層の課目</h3><span class="sp"></span><span class="sub">深度 5</span></div>
+      <div class="panel__bd mottle">
+        <p>ひとつだけ。中身が短ければパネルも短い。</p>
+      </div>
+    </div>
+    <div class="panel w360 grain">
+      <div class="panel__hd"><h3>裂坑掘り</h3><span class="sp"></span><span class="sub">警戒級</span></div>
+      <div class="panel__bd mottle">
+        <p>自分から遠い2×2を亀裂として予告し、2手後にそのマスを3手ふさぐ。</p>
+        <p>予告された2×2の中で駒を1つでも消せば崩落は止まる。</p>
+        <p>棲息は深度4〜7。崩れやすい礫層と、菌糸の走る古い壁の境界。周囲に自分が開けた縦孔が複数あり、その壁面に岩粉が扇状に積もる。</p>
+        <p>天敵は<b>未観測</b>。逃走孔を掘る習性から、上位捕食者の存在だけが推定される。</p>
+      </div>
+    </div>
+    <div class="panel panel--noHd w300 grain">
+      <div class="panel__bd mottle">
+        <p>見出し帯を持たないパネル。注記・吹き出し・小さな受け皿に使う。</p>
+      </div>
+    </div>
+    <div class="panel panel--dark panel--verd w300 grain">
+      <div class="panel__hd"><h3>暗地の身</h3></div>
+      <div class="panel__bd mottle">
+        <p>暗い身の上では文字は象牙 #F1E4C6 へ切り替える。地の明度が文字の明度を決める。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 3. カード ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">03</span><h2>カード</h2><span class="en">card</span><span class="line"></span></div>
+  <p class="note">採録カード。<b>選択可能／選択中／無効</b>の3状態。アイコンはカードの縁からはみ出す押印ロンデル、キーワードの下線は点線ではなく手描きの筆線。選択中は色だけで示さず、枠の太りと朱の押印を同時に使う。無効は判子で理由を言う（色だけで殺さない）。</p>
+  <div class="bay">
+    <div class="card grain">
+      <div class="card__in mottle">
+        <div class="card__hd">
+          <div class="card__roundel"><svg><use href="#i-spore"/></svg></div>
+          <div class="card__ttl"><span class="card__kind">知見 ・ 植物</span><h4 class="card__name">胞子繁殖</h4></div>
+        </div>
+        <p class="card__body">植物を<span class="kw">3つ以上</span>消すと、胞子が2つ生まれる。</p>
+        <div class="card__ft">
+          <span class="chip chip--sm"><svg><use href="#i-leaf"/></svg>植物</span>
+          <span class="sp"></span>
+          <span class="chip chip--sm">呼応 <span class="n">1</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card is-selected grain">
+      <div class="card__seal">採</div>
+      <div class="card__in mottle">
+        <div class="card__hd">
+          <div class="card__roundel"><svg><use href="#i-gear"/></svg></div>
+          <div class="card__ttl"><span class="card__kind">知見 ・ ギア</span><h4 class="card__name">自律機構</h4></div>
+        </div>
+        <p class="card__body">ギアが<span class="kw">起動</span>するたび、盤上のギアが1つ増える。</p>
+        <div class="card__ft">
+          <span class="card__starter">採録時のおまけ ── 盤の中央にギアを1つ置く</span>
+          <span class="sp"></span>
+          <span class="chip chip--sm">呼応 <span class="n">3</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card is-disabled grain">
+      <div class="card__in mottle">
+        <div class="card__stamp">枠 が な い</div>
+        <div class="card__hd">
+          <div class="card__roundel"><svg><use href="#i-relic"/></svg></div>
+          <div class="card__ttl"><span class="card__kind">知見 ・ 遺物</span><h4 class="card__name">賭博師の壺</h4></div>
+        </div>
+        <p class="card__body">遺物マッチのたび、半々で特殊駒か邪魔ピースが生まれる。</p>
+        <div class="card__ft">
+          <span class="card__starter">8枠すべて埋まっている。1つ捨てると採れる</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:20px"></div>
+  <span class="lab">採録画面での使い方 ── 微回転を付ける（完全な平行はテンプレの署名）</span>
+  <div class="bay">
+    <div class="card tilt-a grain"><div class="card__in mottle">
+      <div class="card__hd"><div class="card__roundel"><svg><use href="#i-shroom"/></svg></div>
+        <div class="card__ttl"><span class="card__kind">知見 ・ 植物</span><h4 class="card__name">深呼吸</h4></div></div>
+      <p class="card__body">キノコを消すと、跡地の近くの1つが<span class="kw">植物</span>に変わる。</p>
+    </div></div>
+    <div class="card tilt-b grain"><div class="card__in mottle">
+      <div class="card__hd"><div class="card__roundel"><svg><use href="#i-crystal"/></svg></div>
+        <div class="card__ttl"><span class="card__kind">知見 ・ 鉱物</span><h4 class="card__name">共振破砕</h4></div></div>
+      <p class="card__body">爆発鉱石の爆発が十字から<span class="kw">3×3</span>に広がる。</p>
+    </div></div>
+    <div class="card tilt-c grain"><div class="card__in mottle">
+      <div class="card__hd"><div class="card__roundel"><svg><use href="#i-leaf"/></svg></div>
+        <div class="card__ttl"><span class="card__kind">知見 ・ 異種</span><h4 class="card__name">機械庭園</h4></div></div>
+      <p class="card__body">ギア起動のたび、盤上の植物が<span class="kw">1つ育つ</span>。</p>
+    </div></div>
+  </div>
+</section>
+
+<!-- ══════════════ 4. ボタン ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">04</span><h2>ボタン</h2><span class="en">button</span><span class="line"></span></div>
+  <p class="note"><b>押せて見えることの根拠は「側面」</b>。板の下に 3px の暗い側面があり、押下すると側面が消えて板が沈む。上辺の温白ハイライトは全幅に通さず途切れさせる（連続ベベル＝CG金属の署名を避ける）。<br>
+  <b>明るい真鍮の板には暗いインクの文字、暗い木・緑石の板には象牙の文字。</b>これは好みではなく実測の結果で、当初は真鍮に象牙を載せていたが §12 の実測で 2.48:1 しか出ず（合格線 4.5:1）、地の側を選び直した。<b>地の明度が文字の明度を決める</b>という不変条件そのままである。無効の板も<b>無効のまま 4.5:1 と Δluma 120 を割らない</b>。</p>
+  <div class="bay">
+    <div><span class="lab">主 ・ 真鍮 / 通常</span><button class="btn"><span class="txt">この知見を採る</span></button></div>
+    <div><span class="lab">主 / 押下</span><button class="btn is-pressed"><span class="txt">この知見を採る</span></button></div>
+    <div><span class="lab">主 / 無効</span><button class="btn is-disabled"><span class="txt">この知見を採る</span></button></div>
+  </div>
+  <div style="height:18px"></div>
+  <div class="bay">
+    <div><span class="lab">副 ・ 木 / 通常</span><button class="btn btn--wood"><span class="txt">くらべる</span></button></div>
+    <div><span class="lab">副 ・ 木 / 押下</span><button class="btn btn--wood is-pressed"><span class="txt">くらべる</span></button></div>
+    <div><span class="lab">緑石 / 通常</span><button class="btn btn--stone btn--lg"><span class="txt">深度 17 へ潜る</span></button></div>
+    <div><span class="lab">小 / 通常</span><button class="btn btn--sm"><span class="txt">採録帖</span></button></div>
+    <div><span class="lab">小 / 押下</span><button class="btn btn--sm is-pressed"><span class="txt">採録帖</span></button></div>
+  </div>
+</section>
+
+<!-- ══════════════ 5. 一覧行 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">05</span><h2>一覧行</h2><span class="en">list row</span><span class="line"></span></div>
+  <p class="note">アイコン＋名前＋補助＋値。<b>左のアイコンは古紙の円板に緑青の環</b>（カードの押印ロンデルは真鍮の環で、行では格を一段下げる）。<b>円板の地は必ず明るく保つ</b>──暗い凹みに黒いインク線の図を入れると、絵として正しくても盤上・一覧では潰れて読めなくなる。値は右端で等幅数字が縦に揃い、行の高さは名前と補助の長短で変わる。</p>
+  <div class="bay">
+    <div class="panel w520 grain">
+      <div class="panel__hd"><h3>手持ちの知見</h3><span class="sp"></span><span class="sub">8枠中 6</span></div>
+      <div class="panel__bd mottle" style="padding:0">
+        <div class="list">
+          <div class="row"><div class="row__ic"><svg><use href="#i-spore"/></svg></div>
+            <div class="row__tx"><div class="row__name">胞子繁殖</div><div class="row__sub">植物を3つ以上消すと、胞子が2つ生まれる</div></div>
+            <div class="row__val"><span class="num num--m">14</span><span class="chip chip--sm" style="margin-left:6px">呼応 <span class="n">2</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+          <div class="row is-current"><div class="row__ic"><svg><use href="#i-gear"/></svg></div>
+            <div class="row__tx"><div class="row__name">自律機構</div><div class="row__sub">ギアが起動するたび、盤上のギアが1つ増える</div></div>
+            <div class="row__val"><span class="num num--m">31</span><span class="chip chip--sm" style="margin-left:6px">呼応 <span class="n">3</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+          <div class="row"><div class="row__ic"><svg><use href="#i-crystal"/></svg></div>
+            <div class="row__tx"><div class="row__name">共振破砕</div><div class="row__sub">爆発鉱石の爆発が十字から3×3に広がる</div></div>
+            <div class="row__val"><span class="num num--m">8</span><span class="chip chip--sm" style="margin-left:6px">呼応 <span class="n">1</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+          <div class="row is-disabled"><div class="row__ic"><svg><use href="#i-relic"/></svg></div>
+            <div class="row__tx"><div class="row__name">遺物共鳴</div><div class="row__sub">呪い「石の記憶」で枠が潰れている</div></div>
+            <div class="row__val"><span class="num num--m">—</span></div>
+            <svg class="row__chev" style="opacity:.22"><use href="#i-chev"/></svg></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel panel--verd w460 grain">
+      <div class="panel__hd"><h3>原生種</h3><span class="sp"></span><span class="sub">採録帖</span></div>
+      <div class="panel__bd mottle" style="padding:0">
+        <div class="list">
+          <div class="row"><div class="row__ic"><svg><use href="#i-beast"/></svg></div>
+            <div class="row__tx"><div class="row__name">裂坑掘り</div><div class="row__sub">深度 4 – 7 ／ 警戒級</div></div>
+            <div class="row__val"><span class="chip chip--sm chip--omen">崩落 <span class="n">2</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+          <div class="row"><div class="row__ic"><svg><use href="#i-beast"/></svg></div>
+            <div class="row__tx"><div class="row__name">岩殻獣</div><div class="row__sub">深度 7 – 12 ／ 警戒級</div></div>
+            <div class="row__val"><span class="chip chip--sm chip--omen">甲殻 <span class="n">3</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+          <div class="row"><div class="row__ic"><svg><use href="#i-beast"/></svg></div>
+            <div class="row__tx"><div class="row__name">灯喰み</div><div class="row__sub">深度 9 – 20 ／ 退避級</div></div>
+            <div class="row__val"><span class="chip chip--sm chip--danger">灯 <span class="n">−3</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+          <div class="row"><div class="row__ic"><svg><use href="#i-beast"/></svg></div>
+            <div class="row__tx"><div class="row__name">深匣主</div><div class="row__sub">深度 10 ／ 災害級 ── 封印匣を4枚剥がす</div></div>
+            <div class="row__val"><span class="chip chip--sm chip--danger">灯 <span class="n">−5</span></span></div>
+            <svg class="row__chev"><use href="#i-chev"/></svg></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 6. チップ ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">06</span><h2>チップ</h2><span class="en">chip</span><span class="line"></span></div>
+  <p class="note">課目は<b>残数</b>で書く（「9 / 50」は逆算を強いるので使わない）。兆候は<b>動作名＋残り手</b>。灯を奪うものだけ朱を差すが、<b>朱は左端の印と縁に使い、数字は明るい札の上に一段暗い朱で置く</b>──朱の文字を暗地に直接載せるとコントラストが足りないため。</p>
+  <div class="bay">
+    <div class="stack"><span class="lab">課目</span>
+      <div class="bay" style="gap:9px">
+        <span class="chip"><svg><use href="#i-leaf"/></svg>植物標本　あと <span class="n">41</span></span>
+        <span class="chip"><svg><use href="#i-moss"/></svg>蔦苔　あと <span class="n">8</span></span>
+        <span class="chip"><svg><use href="#i-shard"/></svg>陶片　あと <span class="n">7</span></span>
+        <span class="chip"><svg><use href="#i-beast"/></svg>原生種　あと <span class="n">1</span></span>
+      </div>
+    </div>
+  </div>
+  <div style="height:16px"></div>
+  <div class="bay">
+    <div class="stack"><span class="lab">兆候</span>
+      <div class="bay" style="gap:9px">
+        <span class="chip chip--omen">崩落 <span class="n">2</span></span>
+        <span class="chip chip--omen">掘削 <span class="n">1</span></span>
+        <span class="chip chip--omen">甲殻 <span class="n">3</span></span>
+        <span class="chip chip--omen">捕食 <span class="n">2</span></span>
+        <span class="chip chip--omen">目星 <span class="n">2</span></span>
+        <span class="chip chip--omen">動かない</span>
+        <span class="chip chip--danger">灯 <span class="n">−3</span></span>
+        <span class="chip chip--danger">灯 <span class="n">−5</span></span>
+      </div>
+    </div>
+  </div>
+  <div style="height:16px"></div>
+  <div class="bay">
+    <div class="stack"><span class="lab">幕・系統・接続</span>
+      <div class="bay" style="gap:9px">
+        <span class="chip chip--act">第一幕　空明かり</span>
+        <span class="chip chip--act">第二幕　炉あかり</span>
+        <span class="chip chip--act">第三幕　岩あかり</span>
+        <span class="chip"><svg><use href="#i-leaf"/></svg>植物</span>
+        <span class="chip"><svg><use href="#i-crystal"/></svg>鉱物</span>
+        <span class="chip"><svg><use href="#i-gear"/></svg>ギア</span>
+        <span class="chip"><svg><use href="#i-relic"/></svg>遺物</span>
+        <span class="chip">呼応 <span class="n">3</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 7. 数値表示 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">07</span><h2>数値表示</h2><span class="en">numerals</span><span class="line"></span></div>
+  <p class="note">全画面で数字は1書体（等幅ライニングのサン 600、太細比 ≤1.6:1）。明朝の ExtraBold で数字を描かない──ヘアラインが実機で1px に落ち、灰色にエイリアスするのがチープさの機構だった。<b>数値は必ず自分の札の上に載る</b>ので、数値と札は分離できない1部品として定義する。</p>
+  <div class="bay" style="align-items:flex-end">
+    <div><span class="lab">大 40px / 暗地の札</span>
+      <span class="plaque plaque--dark grain"><span class="k">残灯</span><span class="num num--l">66</span></span></div>
+    <div><span class="lab">大 / 紙の札 ＋ 増減</span>
+      <span class="plaque grain"><span class="k">残灯</span><span class="num num--l">107</span><span class="delta">+7</span></span></div>
+    <div><span class="lab">中 21px</span>
+      <span class="plaque grain"><span class="k">最高到達</span><span class="num num--m">23</span><span class="u">深度</span></span></div>
+    <div><span class="lab">中 / 減</span>
+      <span class="plaque plaque--dark grain"><span class="k">補給</span><span class="num num--m">8</span><span class="delta delta--minus">−3</span></span></div>
+    <div><span class="lab">小 13.5px</span>
+      <span class="plaque grain" style="padding:5px 11px 6px"><span class="k" style="font-size:11px">手数</span><span class="num num--s">148</span><span class="u">／ 最大連鎖 5</span></span></div>
+  </div>
+</section>
+
+<!-- ══════════════ 8. メダリオン ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">08</span><h2>メダリオン</h2><span class="en">medallion</span><span class="line"></span></div>
+  <p class="note">円形。真鍮の環に暗い凹みが沈み、そこに数字が載る。<b>桁が増えると円は錠剤形へ伸びる</b>（border-radius:999px ＋ min-width）ので、1桁でも4桁でも壊れない。トークン用は凹みを緑青に変え、真鍮の小さな意匠を左下に食い込ませる（重なりを作る）。</p>
+  <div class="bay" style="align-items:center">
+    <div style="text-align:center"><span class="lab">大 / 深度</span>
+      <span class="med med--lg grain"><span class="med__well"><span class="med__k">深度</span><span class="med__n">5</span></span></span></div>
+    <div style="text-align:center"><span class="lab">大 / 3桁で伸びる</span>
+      <span class="med med--lg grain"><span class="med__well"><span class="med__k">残灯</span><span class="med__n">107</span></span></span></div>
+    <div style="text-align:center"><span class="lab">中</span>
+      <span class="med grain"><span class="med__well"><span class="med__k">深度</span><span class="med__n">17</span></span></span></div>
+    <div style="text-align:center"><span class="lab">中 / トークン</span>
+      <span class="med med--tok grain"><span class="med__ic"><svg><use href="#i-spore"/></svg></span><span class="med__well"><span class="med__n">12</span></span></span></div>
+    <div style="text-align:center"><span class="lab">小</span>
+      <span class="med med--sm grain"><span class="med__well"><span class="med__n">3</span></span></span></div>
+    <div style="text-align:center"><span class="lab">小 / 4桁</span>
+      <span class="med med--sm grain"><span class="med__well"><span class="med__n">1024</span></span></span></div>
+  </div>
+</section>
+
+<!-- ══════════════ 9. ゲージ ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">09</span><h2>ゲージ ── 灯のガラス管</h2><span class="en">gauge</span><span class="line"></span></div>
+  <p class="note">コンセプト画の探窟灯そのもの。真鍮の口金・吊り環と、緑青の空トラフ、冷たい発光液。<b>高さと量は CSS 変数（管の高さ／充填率）で可変</b>。液面（メニスカス）だけが古紙まで明るく抜け、内側は彩度を保つ（発光体の芯は「紙」）。反射は途切れさせ、連続スペキュラにしない。<b>数字はガラス管の中に入れず、隣のメダリオンへ出す。</b></p>
+  <div class="gauge-set">
+    <div><div class="gauge" style="--h:250px;--v:82">
+        <div class="gauge__ring"></div>
+        <div class="gauge__tube"><div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div>
+          <div class="gauge__ticks"><i style="bottom:12%;width:9px"></i><i style="bottom:26%;width:6px"></i><i style="bottom:39%;width:9px"></i><i style="bottom:53%;width:6px"></i><i style="bottom:67%;width:9px"></i><i style="bottom:81%;width:6px"></i></div></div>
+        <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+      </div><div class="gauge-cap">h250 / 82%</div></div>
+
+    <div><div class="gauge" style="--h:250px;--v:34">
+        <div class="gauge__ring"></div>
+        <div class="gauge__tube"><div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div>
+          <div class="gauge__ticks"><i style="bottom:12%;width:9px"></i><i style="bottom:26%;width:6px"></i><i style="bottom:39%;width:9px"></i><i style="bottom:53%;width:6px"></i><i style="bottom:67%;width:9px"></i><i style="bottom:81%;width:6px"></i></div></div>
+        <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+      </div><div class="gauge-cap">h250 / 34%</div></div>
+
+    <div><div class="gauge" style="--h:250px;--v:9">
+        <div class="gauge__ring"></div>
+        <div class="gauge__tube"><div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div>
+          <div class="gauge__ticks"><i style="bottom:12%;width:9px"></i><i style="bottom:26%;width:6px"></i><i style="bottom:39%;width:9px"></i><i style="bottom:53%;width:6px"></i><i style="bottom:67%;width:9px"></i><i style="bottom:81%;width:6px"></i></div></div>
+        <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+      </div><div class="gauge-cap">h250 / 9%</div></div>
+
+    <div><div class="gauge" style="--h:150px;--v:58">
+        <div class="gauge__ring"></div>
+        <div class="gauge__tube"><div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div>
+          <div class="gauge__ticks"><i style="bottom:18%;width:8px"></i><i style="bottom:44%;width:6px"></i><i style="bottom:71%;width:8px"></i></div></div>
+        <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+      </div><div class="gauge-cap">h150 / 58%</div></div>
+
+    <div style="display:flex;align-items:center;gap:14px;padding-bottom:26px">
+      <div class="gauge" style="--h:110px;--v:66">
+        <div class="gauge__tube"><div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div></div>
+        <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+      </div>
+      <span class="med grain"><span class="med__ic"><svg><use href="#i-lamp"/></svg></span><span class="med__well"><span class="med__k">残灯</span><span class="med__n">66</span></span></span>
+      <div style="font-size:11.5px;color:var(--ink-soft);line-height:1.7;max-width:15ch">管と数字は<br>別部品として組む</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 10. 伸縮 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">10</span><h2>伸縮試験</h2><span class="en">elasticity</span><span class="line"></span></div>
+  <p class="note">同じ部品に、実在する最短と最長の中身を入れる。<b>固定サイズで作っていないことの証明</b>。壊れる箇所があればここで出る。</p>
+
+  <span class="lab">数値 ── 1桁 / 2桁 / 3桁 / 4桁</span>
+  <div class="bay" style="align-items:flex-end;gap:12px">
+    <span class="plaque plaque--dark grain"><span class="k">残灯</span><span class="num num--l">6</span></span>
+    <span class="plaque plaque--dark grain"><span class="k">残灯</span><span class="num num--l">66</span></span>
+    <span class="plaque plaque--dark grain"><span class="k">残灯</span><span class="num num--l">107</span></span>
+    <span class="plaque plaque--dark grain"><span class="k">残灯</span><span class="num num--l">1024</span></span>
+    <span class="plaque grain"><span class="k">採録</span><span class="num num--l">8</span></span>
+    <span class="plaque grain"><span class="k">得点</span><span class="num num--l">71,840</span></span>
+  </div>
+
+  <div style="height:20px"></div>
+  <span class="lab">カード ── 最短の名前 / 最長の名前と本文</span>
+  <div class="bay">
+    <div class="card grain" style="width:300px"><div class="card__in mottle">
+      <div class="card__hd"><div class="card__roundel"><svg><use href="#i-spore"/></svg></div>
+        <div class="card__ttl"><span class="card__kind">知見 ・ 植物</span><h4 class="card__name">胞子弾</h4></div></div>
+      <p class="card__body">爆発のあとに胞子が1つ残る。</p>
+      <div class="card__ft"><span class="sp"></span><span class="chip chip--sm">呼応 <span class="n">1</span></span></div>
+    </div></div>
+    <div class="card grain" style="width:300px"><div class="card__in mottle">
+      <div class="card__hd"><div class="card__roundel"><svg><use href="#i-leaf"/></svg></div>
+        <div class="card__ttl"><span class="card__kind">知見 ・ 植物</span><h4 class="card__name">菌糸の目覚め</h4></div></div>
+      <p class="card__body">植物マッチ時、マッチ跡地の近くに植物が生える。<span class="kw">マッチが繋がる位置</span>を優先し、列詰めの前に発生する。</p>
+      <div class="card__ft"><span class="card__starter">採録時のおまけ ── 原生種のとなりに胞子を1つ置く</span><span class="sp"></span><span class="chip chip--sm">呼応 <span class="n">4</span></span></div>
+    </div></div>
+    <div class="card grain" style="width:300px"><div class="card__in mottle">
+      <div class="card__hd"><div class="card__roundel"><svg><use href="#i-relic"/></svg></div>
+        <div class="card__ttl"><span class="card__kind">呪い</span><h4 class="card__name">早足の測量 ── 盤の四隅が欠ける</h4></div></div>
+      <p class="card__body">すべての課目の要求が<span class="kw">2割へる</span>。代わりに盤の四隅が欠ける。ただし隅に課目の材料が置かれている層では、その隅は欠けない。</p>
+      <div class="card__ft"><span class="card__starter">祝福と呪いは同じ大きさで示す。隠しデメリットは作らない</span></div>
+    </div></div>
+  </div>
+
+  <div style="height:20px"></div>
+  <span class="lab">一覧行・チップ ── 短い値 / 長い値</span>
+  <div class="bay">
+    <div class="panel w520 grain">
+      <div class="panel__hd"><h3>祝福と呪い</h3><span class="sp"></span><span class="sub">深度 20</span></div>
+      <div class="panel__bd mottle" style="padding:0"><div class="list">
+        <div class="row"><div class="row__ic"><svg><use href="#i-lamp"/></svg></div>
+          <div class="row__tx"><div class="row__name">早鐘</div><div class="row__sub">その層の最初の1手は灯を消費しない</div></div>
+          <div class="row__val"><span class="chip chip--sm">祝福</span></div></div>
+        <div class="row"><div class="row__ic"><svg><use href="#i-lamp"/></svg></div>
+          <div class="row__tx"><div class="row__name">底ゆきの勘</div><div class="row__sub">深度5から下では層を出るときの補給が4ふえる ／ 深度4までは補給が4へる</div></div>
+          <div class="row__val"><span class="chip chip--sm">両</span></div></div>
+        <div class="row"><div class="row__ic"><svg><use href="#i-shard"/></svg></div>
+          <div class="row__tx"><div class="row__name">忘れ形見</div><div class="row__sub">一度だけ、灯が尽きた瞬間に灯が12もどる</div></div>
+          <div class="row__val"><span class="num num--m">1</span><span class="u" style="font-size:11px;color:var(--ink-soft);margin-left:3px">回</span></div></div>
+      </div></div>
+    </div>
+    <div class="panel panel--noHd w360 grain">
+      <div class="panel__bd mottle">
+        <div class="bay" style="gap:8px">
+          <span class="chip"><svg><use href="#i-leaf"/></svg>植物標本　あと <span class="n">4</span></span>
+          <span class="chip"><svg><use href="#i-leaf"/></svg>植物標本　あと <span class="n">128</span></span>
+          <span class="chip"><svg><use href="#i-shard"/></svg>深匣主の封印匣　あと <span class="n">4</span></span>
+          <span class="chip chip--omen">深匣主 ・ 封印匣 <span class="n">4</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:20px"></div>
+  <span class="lab">ボタン ── 最短 / 最長</span>
+  <div class="bay">
+    <button class="btn btn--sm"><span class="txt">採る</span></button>
+    <button class="btn"><span class="txt">この知見を採る</span></button>
+    <button class="btn btn--stone"><span class="txt">この祝福を受けて深度 21 へ潜る</span></button>
+    <div style="width:300px"><button class="btn btn--wide btn--wood"><span class="txt">採録帖をひらく</span></button></div>
+  </div>
+</section>
+
+<!-- ══════════════ 11. 絵の上での検証 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">11</span><h2>絵の上での検証</h2><span class="en">on scene</span><span class="line"></span></div>
+  <p class="note">
+    採用コンセプト画（concept3_1）を実寸 390px の画面に敷き、その上に本キットの部品だけを載せた。
+    <b>左＝正しい載せ方</b>：文字はすべて不透明な札の上にあり、絵は札の外側だけで生きている。
+    <b>右＝v5でやってしまった載せ方</b>：本文を絵に直接置き、影と縁取りで無理やり読ませている。
+    これが「チープに見える」の実体で、右は本キットでは<b>禁止</b>する。
+  </p>
+  <div class="frameA">
+    <div>
+      <span class="lab">◯ 部品を載せる（このキット）</span>
+      <div class="scene">
+        <div class="scene__ui">
+          <div class="scene__top">
+            <span class="med grain"><span class="med__well"><span class="med__k">深度</span><span class="med__n">5</span></span></span>
+            <div style="flex:1"></div>
+            <span class="plaque plaque--dark grain" style="padding:6px 12px 7px"><span class="k">残灯</span><span class="num" style="font-size:28px">66</span></span>
+            <div class="gauge" style="--h:88px;--v:66;margin-left:8px">
+              <div class="gauge__tube"><div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div></div>
+              <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+            </div>
+          </div>
+          <div style="margin-top:10px" class="bay">
+            <span class="chip"><svg><use href="#i-leaf"/></svg>植物標本　あと <span class="n">41</span></span>
+            <span class="chip chip--omen">崩落 <span class="n">2</span></span>
+          </div>
+          <div class="scene__bot">
+            <div class="panel grain" style="width:100%">
+              <div class="panel__hd"><h3>深度5 踏破</h3><span class="sp"></span><span class="sub">知見をひとつ採る</span></div>
+              <div class="panel__bd mottle">
+                <p style="font-size:12.5px">胞子繁殖・共振破砕・機械庭園の3つから選ぶ。取ると枠が1つ埋まる。</p>
+                <button class="btn btn--wide" style="margin-top:9px"><span class="txt">採録へ</span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <span class="lab">✕ 絵にUIを兼ねさせる（v5の失敗・禁止）</span>
+      <div class="scene">
+        <div class="scene__ui" style="display:flex;flex-direction:column;justify-content:space-between">
+          <div style="text-align:center;padding-top:8px">
+            <div style="font-family:var(--min);font-weight:700;font-size:34px;color:#F6EFDD;text-shadow:0 2px 5px rgba(0,0,0,.9),0 0 14px rgba(0,0,0,.8);letter-spacing:.1em">残灯 66</div>
+            <div style="font-family:var(--got);font-size:13px;color:#EDE3CD;text-shadow:0 1px 4px rgba(0,0,0,.95);margin-top:6px">植物標本　あと 41　／　崩落 2</div>
+          </div>
+          <div style="padding-bottom:8px">
+            <div style="font-family:var(--min);font-weight:600;font-size:19px;color:#F6EFDD;text-shadow:0 2px 6px rgba(0,0,0,.95);letter-spacing:.06em">深度5 踏破 ── 知見をひとつ採る</div>
+            <div style="font-family:var(--got);font-size:12.5px;line-height:1.8;color:#E8DDC6;text-shadow:0 1px 4px rgba(0,0,0,.95);margin-top:7px">
+              胞子繁殖・共振破砕・機械庭園の3つから選ぶ。取ると枠が1つ埋まる。
+            </div>
+            <div style="margin-top:11px;text-align:center;border:1.5px solid rgba(246,235,218,.75);border-radius:22px;padding:11px 0;color:#F6EFDD;font-family:var(--min);font-size:15px;letter-spacing:.12em;text-shadow:0 1px 4px rgba(0,0,0,.9);background:rgba(0,0,0,.22)">採録へ</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 12. 実測 ══════════════ -->
+<section class="sec">
+  <div class="sec-hd"><span class="no">12</span><h2>実測 ── 文字は安っぽくないか</h2><span class="en">measured</span><span class="line"></span></div>
+  <p class="note">
+    このページに実際に描画されている文字を JavaScript で走査し、<b>算出済みの文字色</b>と<b>その文字が実際に載っている不透明な地の色</b>を取り出して、
+    WCAG コントラスト比と ART_GRAMMAR §6.1 の Δluma を計算している。表の数値は書いた値ではなく<b>描画された値</b>である。
+    合格線は <b>本文 4.5:1 以上</b>（WCAG AA）かつ <b>Δluma 120 以上</b>（一次資料の最小値116を安全側に丸めた値）。
+  </p>
+  <div class="panel panel--noHd grain" style="width:100%">
+    <div class="panel__bd" style="padding:0">
+      <table class="audit"><thead><tr>
+        <th>部品／役割</th><th>文字色</th><th>地の色</th><th>字送り</th><th>WCAG</th><th>Δluma</th><th>影・縁取り</th><th>判定</th>
+      </tr></thead><tbody id="auditBody"></tbody></table>
+    </div>
+  </div>
+  <div class="verdict" id="verdict"></div>
+
+  <div style="height:18px"></div>
+  <span class="lab">紙目の実測 ── このページを描画した PNG を Pillow で測った値</span>
+  <div class="panel panel--noHd grain" style="width:100%">
+    <div class="panel__bd mottle">
+      <p>ART_GRAMMAR §3.2 は、UI が「別の画材で描かれた異物」に見える原因を<b>高周波エネルギー HF ＝ mean|L − Gaussian(σ=2)|</b> で定式化している。
+      一次資料の UI プラーク内部は <b>HF 20.97</b>、実機の <span class="kv">hud_kit_v5</span> は <b>HF 3.52</b>。合格線は <b>HF ≧ 12</b>。</p>
+      <p>本キットのパネル本体（文字のない帯）を実測すると <b>HF 12.1 / 13.2</b>、平均 luma <b>207 / 211</b>（羊皮紙の規定域 200〜225 の内側）。
+      <b>UI は絵と同じ紙の上に描かれている。</b></p>
+      <p>そのうえで可読性が壊れていないことも測った。紙目で地は局所的に沈むが、σ=2 で均した<b>実効的な地</b>の下位1%は luma <b>188</b>、
+      そこに本文インク <span class="kv">#3A2E20</span> が載ったときのコントラストは <b>7.1:1</b>。最悪の一点（luma 152）でも <b>5.2:1</b> で、合格線 4.5:1 を割らない。
+      <b>紙目を入れても文字は安っぽくならない</b>──ただしそれは、紙目を<b>文字の下</b>に敷き、影と縁取りを一切使わなかった場合に限る。</p>
+    </div>
+  </div>
+</section>
+
+<footer style="margin-top:44px;border-top:1px solid rgba(47,41,34,.35);padding-top:14px;font-size:11.5px;color:var(--ink-soft);line-height:1.9">
+  yacho ／ mockups/v6/ui_kit.html ── 構造の出典 owner_ui_ref.jpg（オーナー提供）、画材の出典 concept3_1 / v5_title / v5_draft、規格の出典 ART_GRAMMAR.md §2・§3・§6 と PHASE2.md §3。
+  文字はすべて HTML テキストで、画像に焼き込んだ文字は1文字も無い。
+</footer>
+
+</div>
+
+<script>
+/* ── 色域スウォッチ ── */
+const PAL=[
+ ['紙（最大光量）','#EFE4CC'],['紙（中）','#E4D6B6'],['紙（暗）','#D6C7A8'],
+ ['木札','#4A3A26'],['凹面','#2E241A'],['緑青（見出し帯）','#3E5450'],['緑青（明）','#4A6155'],
+ ['真鍮','#9A7B44'],['真鍮（明）','#B99A5E'],['輪郭インク','#2F2922'],['紙上の文字','#3A2E20'],
+ ['暗地の文字','#F1E4C6'],['錆','#A8613C'],['朱（印・面）','#C4553E'],['朱（紙上の文字）','#8E3A29'],
+ ['灯','#6E9EA8'],['灯の芯','#E4EDE6'],['空トラフ','#35443F']
+];
+const hex2rgb=h=>[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
+const luma=([r,g,b])=>0.299*r+0.587*g+0.114*b;
+const sat=([r,g,b])=>{const M=Math.max(r,g,b),m=Math.min(r,g,b);return M===0?0:(M-m)/M*100};
+document.getElementById('swatches').innerHTML=PAL.map(([n,h])=>{
+  const rgb=hex2rgb(h);
+  return `<div class="sw2"><div class="c" style="background:${h}"></div><div class="t"><b>${n}</b><span>${h.toUpperCase()} · L${luma(rgb).toFixed(0)} · S${sat(rgb).toFixed(0)}%</span></div></div>`;
+}).join('');
+
+/* ── コントラスト実測 ── */
+const parseRGB=s=>{const m=s.match(/[\d.]+/g);return m?[+m[0],+m[1],+m[2],m[3]===undefined?1:+m[3]]:null};
+const lin=c=>{c/=255;return c<=0.04045?c/12.92:Math.pow((c+0.055)/1.055,2.4)};
+const relL=([r,g,b])=>0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b);
+const ratio=(a,b)=>{const A=relL(a),B=relL(b);return (Math.max(A,B)+0.05)/(Math.min(A,B)+0.05)};
+const toHex=([r,g,b])=>'#'+[r,g,b].map(v=>Math.round(v).toString(16).padStart(2,'0')).join('').toUpperCase();
+// 文字が実際に載っている地＝祖先を遡って最初に見つかる不透明な背景色（＋その上のグラデーション基色）
+function groundOf(el){
+  let n=el;
+  while(n && n!==document.documentElement){
+    const cs=getComputedStyle(n);
+    const bg=parseRGB(cs.backgroundColor);
+    if(bg && bg[3]>0.92) return bg.slice(0,3);
+    const bi=cs.backgroundImage;
+    if(bi && bi!=='none' && /linear-gradient|radial-gradient/.test(bi)){
+      const cols=[...bi.matchAll(/rgba?\(([\d.,\s]+)\)/g)].map(m=>parseRGB('rgb('+m[1]+')')).filter(c=>c&&c[3]>0.92);
+      if(cols.length){ // グラデーションは最も暗い停止色で評価する（最悪ケース）
+        let worst=cols[0]; const tl=relL(parseRGB(getComputedStyle(el).color).slice(0,3));
+        cols.forEach(c=>{ if(Math.abs(relL(c.slice(0,3))-tl) < Math.abs(relL(worst.slice(0,3))-tl)) worst=c; });
+        return worst.slice(0,3);
+      }
+    }
+    n=n.parentElement;
+  }
+  return [222,210,186];
+}
+const TARGETS=[
+  ['パネル見出し帯','.panel .panel__hd h3'],
+  ['パネル見出し帯・補助','.panel .panel__hd .sub'],
+  ['パネル本文（紙）','.panel__bd p'],
+  ['パネル本文（暗地）','.panel--dark .panel__bd p'],
+  ['カード題（明朝19px）','.card:not(.is-disabled):not(.is-selected) .card__name'],
+  ['カード本文','.card:not(.is-disabled) .card__body'],
+  ['カード分類（朱・小）','.card:not(.is-disabled) .card__kind'],
+  ['カード補助（採録時のおまけ）','.card:not(.is-disabled) .card__starter'],
+  ['カード・選択中の本文','.card.is-selected .card__body'],
+  ['カード・無効の本文','.card.is-disabled .card__body'],
+  ['ボタン（真鍮・通常）','.btn:not(.is-pressed):not(.is-disabled):not(.btn--wood):not(.btn--stone) .txt'],
+  ['ボタン（押下）','.btn.is-pressed .txt'],
+  ['ボタン（無効）','.btn.is-disabled .txt'],
+  ['ボタン（木）','.btn--wood:not(.is-pressed) .txt'],
+  ['ボタン（緑石）','.btn--stone:not(.is-pressed) .txt'],
+  ['一覧行・名前','.row:not(.is-disabled) .row__name'],
+  ['一覧行・補助（11.5px）','.row:not(.is-disabled) .row__sub'],
+  ['一覧行・無効の名前','.row.is-disabled .row__name'],
+  ['一覧行・値（等幅）','.row__val .num'],
+  ['チップ（課目）','.chip:not(.chip--omen):not(.chip--act)'],
+  ['チップ数値（課目）','.chip:not(.chip--omen):not(.chip--danger) .n'],
+  ['チップ（兆候・暗地）','.chip--omen'],
+  ['チップ数値（兆候）','.chip--omen .n'],
+  ['チップ数値（朱・危険）','.chip--danger .n'],
+  ['チップ（幕）','.chip--act'],
+  ['数値 大（暗地の札）','.plaque--dark .num--l'],
+  ['数値 大（紙の札）','.plaque:not(.plaque--dark) .num--l'],
+  ['札の見出し語','.plaque:not(.plaque--dark) .k'],
+  ['メダリオン数値','.med__n'],
+  ['メダリオン見出し語','.med__k'],
+  ['増減（紙の札）','.plaque:not(.plaque--dark) .delta'],
+  ['増減（暗地の札）','.plaque--dark .delta--minus'],
+  ['採録の押印（選択中）','.card__seal'],
+  ['無効の判子','.card__stamp'],
+  ['見本帳の本文','.note'],
+  ['ゲージの見出し','.gauge-cap'],
+];
+let rows='',pass=0,fail=0,minR=99,minD=999,shadowCount=0;
+TARGETS.forEach(([name,sel])=>{
+  const el=document.querySelector(sel); if(!el) return;
+  const cs=getComputedStyle(el);
+  const fg=parseRGB(cs.color).slice(0,3);
+  const bg=groundOf(el);
+  const r=ratio(fg,bg), d=Math.abs(luma(fg)-luma(bg));
+  const fs=parseFloat(cs.fontSize);
+  const big=fs>=24||(fs>=18.66&&+cs.fontWeight>=700);
+  const needR=big?3.0:4.5;
+  const sh=(cs.textShadow&&cs.textShadow!=='none')||(cs.webkitTextStrokeWidth&&parseFloat(cs.webkitTextStrokeWidth)>0);
+  if(sh) shadowCount++;
+  const ok=r>=needR && d>=120 && !sh;
+  ok?pass++:fail++;
+  if(!big){minR=Math.min(minR,r);}
+  minD=Math.min(minD,d);
+  rows+=`<tr>
+    <td>${name}</td>
+    <td><span class="sw" style="background:${toHex(fg)}"></span>${toHex(fg)}</td>
+    <td><span class="sw" style="background:${toHex(bg)}"></span>${toHex(bg)}</td>
+    <td class="n">${fs.toFixed(1)}px</td>
+    <td class="n ${r>=needR?'pass':'fail'}">${r.toFixed(2)}:1</td>
+    <td class="n ${d>=120?'pass':'fail'}">${d.toFixed(0)}</td>
+    <td class="${sh?'fail':'pass'}">${sh?'あり':'無し'}</td>
+    <td class="${ok?'pass':'fail'}">${ok?'合格':'要修正'}</td>
+  </tr>`;
+});
+document.getElementById('auditBody').innerHTML=rows;
+
+// キット全体の影・縁取り走査（第11節の「禁止例」だけは除外して数える）
+const kitRoot=document.querySelectorAll('.sec:not(#banned) *');
+let allShadow=0,scanned=0;
+document.querySelectorAll('.panel,.card,.btn,.row,.chip,.plaque,.med,.gauge').forEach(root=>{
+  root.querySelectorAll('*').forEach(n=>{
+    if(!n.textContent||!n.textContent.trim())return;
+    scanned++;
+    const cs=getComputedStyle(n);
+    if(cs.textShadow&&cs.textShadow!=='none')allShadow++;
+    if(cs.webkitTextStrokeWidth&&parseFloat(cs.webkitTextStrokeWidth)>0)allShadow++;
+  });
+});
+document.getElementById('verdict').innerHTML=
+ `<b>実測の結果</b>　── 測定した ${pass+fail} 箇所のうち <span class="num pass">${pass}</span> 箇所が合格、<span class="num ${fail?'fail':'pass'}">${fail}</span> 箇所が要修正。<br>
+  本文サイズの最小コントラストは <span class="num">${minR.toFixed(2)}:1</span>（合格線 4.5:1）、最小 Δluma は <span class="num">${minD.toFixed(0)}</span>（合格線 120）。<br>
+  部品内の文字要素 <span class="num">${scanned}</span> 個を走査し、<b>text-shadow / text-stroke を持つものは <span class="num ${allShadow?'fail':'pass'}">${allShadow}</span> 個</b>。
+  可読性は影でも縁取りでもなく、<b>地の選択だけ</b>で作られている。`;
+</script>
+</body>
+</html>

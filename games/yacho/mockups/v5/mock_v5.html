@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>yacho v5 モックアップ — 探窟中（深度5）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Shippori+Mincho:wght@500;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ivory:#F4E9CE;        /* 主数値（暗地の上） */
+  --ivory-2:#EFE0BE;      /* 暗地の上の和文 */
+  --label:#CDBB94;        /* ラベル（古紙色・暗地の上） */
+  --ink:#2A2014;          /* 紙の上の文字 */
+  --vermilion:#E08A6A;    /* 灯を奪う兆候だけに使う朱（PHASE2 §3） */
+  --gnumw:2ch;            /* 課目の数値カラム幅＝その層の最大桁数（JSが設定） */
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.86' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#0d0b09;overflow:hidden}
+body{-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+
+/* 端末＝.phone（既定 390x844 CSS px、?w=&h= で変えられる）。
+   絵（853x1844）は cover で敷き、注視点（盤の中心 y=985）を画面中央へ寄せる。
+   world 層＝絵に貼り付く要素（絵と一緒に拡縮する）。hud 層＝画面の隅に留まる要素（拡縮しない）。 */
+.phone{position:absolute;left:0;top:0;width:390px;height:844px;overflow:hidden;background:#12100c}
+.stage{position:absolute;left:0;top:0;width:853px;height:1844px;transform-origin:0 0}
+.bg{position:absolute;left:0;top:0;width:853px;height:1844px;display:block}
+.hud{position:absolute;inset:0;pointer-events:none}
+
+.p{position:absolute}
+.mi{font-family:'Shippori Mincho',"Yu Mincho",serif;font-weight:600}
+.go{font-family:'Zen Kaku Gothic New',"Noto Sans JP","Yu Gothic UI",sans-serif;font-weight:500}
+.num{font-family:'Archivo',"Segoe UI",sans-serif;font-weight:600;
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1;
+  letter-spacing:.004em}
+.grain::after{content:"";position:absolute;inset:0;background-image:var(--grain);
+  background-size:160px 160px;opacity:.13;mix-blend-mode:multiply;pointer-events:none;border-radius:inherit}
+
+/* ============ ① 深度（画面固定・崖の岩肌に落とした軟らかい影の上） ============ */
+#depthShade{left:-18px;top:-27px;width:183px;height:156px;
+  background:radial-gradient(ellipse 96px 80px at 69px 87px,
+    rgba(14,10,6,.66) 0%, rgba(14,10,6,.42) 46%, rgba(14,10,6,0) 100%)}
+#depthLab{left:22px;top:19px;font-size:13.5px;color:var(--label);letter-spacing:.34em;
+  text-shadow:0 1px 3px rgba(10,7,4,.75)}
+#depthNum{left:19.5px;top:27px;font-size:46px;line-height:1;color:var(--ivory);
+  text-shadow:0 2px 4px rgba(10,7,4,.72),0 1px 0 rgba(0,0,0,.4)}
+#depthRule{left:22px;top:76px;width:63px;height:1px;
+  background:linear-gradient(90deg,rgba(196,166,106,.9),rgba(196,166,106,.04));
+  box-shadow:0 1px 0 rgba(0,0,0,.45)}
+#depthAct{left:22px;top:80.5px;font-size:10.5px;color:#B7A480;letter-spacing:.13em;
+  text-shadow:0 1px 2px rgba(10,7,4,.7)}
+
+/* ============ ② 残灯（ランタン基部の真鍮メダリオン。ART_GRAMMAR §6.4） ============ */
+#lampMed{left:19px;top:921px;width:126px;height:126px;border-radius:50%;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(circle at 36% 26%,#604E2C 0%,#42351D 54%,#211910 100%);
+  box-shadow:inset 0 0 0 2px rgba(18,12,7,.88),
+             inset 0 0 0 5px rgba(188,156,98,.44),
+             inset 0 6px 10px rgba(228,200,140,.14),
+             inset 0 -7px 11px rgba(0,0,0,.48),
+             0 4px 11px rgba(0,0,0,.52)}
+#lampMed .lab{font-size:24px;color:#E6D6B0;letter-spacing:.30em;text-indent:.30em;
+  line-height:1;margin-bottom:5px;text-shadow:0 1px 3px rgba(0,0,0,.75)}
+#lampMed .n{font-size:60px;line-height:.94;color:var(--ivory);
+  text-shadow:0 3px 7px rgba(8,5,3,.8)}
+#lampMed.wide .n{font-size:47px}
+/* 打刻は左右で揃えない（§6.3） */
+#lampMed .rv{position:absolute;border-radius:50%;
+  background:radial-gradient(circle at 34% 30%,#D6BA7E,#7C6435);box-shadow:0 1px 1px rgba(0,0,0,.7)}
+
+/* ============ ③ 課目（ピン留めカードの上に刷る。カードの傾き 3.1° に合わせる） ============ */
+#goalSlip{left:288px;top:528px;width:max-content;min-width:284px;max-width:322px;
+  border-radius:2px;overflow:hidden;transform:rotate(3.1deg);
+  background:linear-gradient(172deg,#D3C09B 0%,#C7B38B 46%,#B9A47A 100%);
+  box-shadow:inset 0 2px 6px rgba(92,70,42,.30),
+             inset 0 -1px 0 rgba(255,246,222,.30),
+             0 2px 5px rgba(52,38,22,.32)}
+.grow{display:flex;align-items:center;gap:8px;height:53px;padding:0 10px;white-space:nowrap}
+.glab{font-size:26px;color:var(--ink);letter-spacing:.02em;white-space:nowrap}
+/* 5字の課目名（蔦苔の浄化・陶片の回収・胞子の搬送）が来る層だけ級数を落として札からはみ出させない */
+#goalSlip.long .glab{font-size:23px}
+.gnum{margin-left:auto;padding-left:14px;flex:0 0 auto;display:flex;align-items:baseline;gap:4px;
+  color:var(--ink);white-space:nowrap}
+.gnum .a{font-size:23px;opacity:.78;white-space:nowrap}
+.gnum b{font-size:36px;line-height:1;font-weight:600;min-width:var(--gnumw);text-align:right}
+#goalRule{height:1px;margin:0 12px;background:rgba(66,50,30,.40)}
+.gico{position:relative;width:54px;height:50px;flex:0 0 54px;overflow:hidden}
+.ic{position:absolute;background-image:url("concept3_1.png");background-repeat:no-repeat;
+  -webkit-mask-image:radial-gradient(closest-side,#000 66%,rgba(0,0,0,0) 100%);
+  mask-image:radial-gradient(closest-side,#000 66%,rgba(0,0,0,0) 100%)}
+#goalTag{left:200px;top:538px;writing-mode:vertical-rl;font-size:27px;color:#241A0F;
+  letter-spacing:.24em;transform:rotate(3.1deg)}
+
+/* ============ ④ 兆候（原生種の脇。動作名＋残り手） ============ */
+#omen{left:502px;top:956px;height:50px;padding:0 13px 0 12px;border-radius:3px;
+  display:flex;align-items:center;gap:9px;transform:rotate(3.5deg);
+  background:linear-gradient(180deg,rgba(46,34,21,.92) 0%,rgba(24,17,11,.94) 100%);
+  box-shadow:inset 0 0 0 1px rgba(12,8,5,.9),
+             inset 0 0 0 2px rgba(178,146,90,.40),
+             0 3px 7px rgba(0,0,0,.45)}
+#omen .w{font-size:25px;color:var(--ivory-2);letter-spacing:.06em;white-space:nowrap}
+#omen .n{font-size:30px;line-height:1;color:var(--ivory)}
+#omen.drain .w{color:var(--vermilion)}
+/* 初遭遇の名前札（PHASE2 §5④）。既定は出さない */
+#omenName{left:496px;top:900px;padding:3px 12px 5px;border-radius:2px;display:none;
+  transform:rotate(3.5deg);font-size:24px;color:#2C2114;letter-spacing:.10em;white-space:nowrap;
+  background:linear-gradient(174deg,#D9C7A2,#C3AE85);
+  box-shadow:inset 0 -1px 0 rgba(255,246,222,.34),0 2px 5px rgba(40,28,16,.42)}
+
+/* ============ ⑤ 崩落予告（2x2 の亀裂・鉛筆ハッチ／罫の台形に合わせる） ============ */
+#fissure{left:430px;top:1105px;width:190px;height:190px;
+  clip-path:polygon(27.4px 6.7px,181.4px 17.3px,160px 181.7px,6px 171.1px);
+  background:
+    repeating-linear-gradient(48deg,rgba(48,35,20,.30) 0 2px,rgba(48,35,20,0) 2px 11px),
+    rgba(48,35,20,.07)}
+#fissureMk{left:430px;top:1105px;width:190px;height:190px;overflow:visible}
+
+/* ============ ⑥ 知見（丸トークン列の見出し） ============ */
+#kenLine{left:120px;top:1248px;display:flex;align-items:baseline;gap:8px;color:#241A10;
+  transform:rotate(3.9deg);transform-origin:0 50%}
+#kenLine .w{font-size:24px;letter-spacing:.22em}
+#kenLine .n{font-size:24px;line-height:1;letter-spacing:.02em;opacity:.9}
+
+/* ============ ⑦ 採録帖（画面固定・背嚢に提げた革の札） ============ */
+#noteBtn{left:19px;bottom:55px;width:104px;height:49.5px;border-radius:3.4px;
+  display:flex;align-items:center;justify-content:center;transform:rotate(-1.4deg);
+  background:linear-gradient(177deg,#40331F 0%,#2D2316 60%,#1F1810 100%);
+  box-shadow:inset 0 0 0 1px rgba(20,14,8,.92),
+             inset 0 0 0 1.6px rgba(180,148,90,.46),
+             inset 0 1.4px 0 rgba(214,184,122,.20),
+             inset 0 -1.4px 3px rgba(0,0,0,.5),
+             0 2.5px 6px rgba(0,0,0,.55)}
+#noteBtn span{font-size:17.5px;color:var(--ivory-2);letter-spacing:.15em;text-indent:.15em;
+  text-shadow:0 1px 2px rgba(0,0,0,.6)}
+#noteBtn i{position:absolute;left:11px;top:8px;width:5px;height:5px;border-radius:50%;
+  background:radial-gradient(circle at 34% 30%,#DCC085,#7A6234);box-shadow:0 1px 1px rgba(0,0,0,.6)}
+
+/* ============ ⑧ メニュー（画面固定・真鍮の押し込み） ============ */
+#menuBtn{right:32px;bottom:56px;width:53px;height:53px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:radial-gradient(circle at 36% 28%,#715C35 0%,#48391F 55%,#2A2113 100%);
+  box-shadow:inset 0 0 0 1px rgba(18,12,7,.85),
+             inset 0 0 0 2px rgba(188,156,98,.48),
+             inset 0 2px 3px rgba(226,198,138,.16),
+             inset 0 -2.5px 4px rgba(0,0,0,.5),
+             0 2.5px 6px rgba(0,0,0,.55)}
+#menuBtn svg{transform:rotate(7deg) translate(.4px,-.3px)}
+</style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- ===== 絵に貼り付く層（絵と一緒に拡縮する） ===== -->
+  <div class="stage" id="stage">
+    <img class="bg" src="concept3_1.png" alt="">
+
+    <!-- ② 残灯 -->
+    <div class="p grain" id="lampMed">
+      <div class="mi lab">残灯</div>
+      <div class="num n" id="lampNum">19</div>
+      <i class="rv" style="left:14px;top:38px;width:8px;height:8px"></i>
+      <i class="rv" style="left:103px;top:35px;width:6px;height:6px"></i>
+      <i class="rv" style="left:51px;top:109px;width:7px;height:7px"></i>
+    </div>
+
+    <!-- ③ 課目 -->
+    <div class="p grain" id="goalSlip">
+      <div class="grow">
+        <div class="gico" id="ico1">
+          <div class="ic" style="left:15px;top:12px;width:42px;height:42px;
+            background-position:-204px -784px;transform:scale(.80);transform-origin:50% 50%;
+            filter:contrast(1.14)"></div>
+          <div class="ic" style="left:-1px;top:0;width:50px;height:50px;
+            background-position:-211px -698px;transform:scale(.96);transform-origin:50% 50%"></div>
+        </div>
+        <div class="go glab" id="goal1">植物標本</div>
+        <div class="num gnum"><span class="a go">あと</span><b id="goal1n">31</b></div>
+      </div>
+      <div id="goalRule"></div>
+      <div class="grow">
+        <div class="gico" id="ico2">
+          <div class="ic" style="left:-23px;top:-18px;width:100px;height:86px;
+            background-position:-330px -915px;transform:scale(.56);transform-origin:50% 50%;
+            filter:contrast(1.16) brightness(.95);
+            -webkit-mask-image:radial-gradient(closest-side,#000 74%,rgba(0,0,0,0) 100%);
+            mask-image:radial-gradient(closest-side,#000 74%,rgba(0,0,0,0) 100%)"></div>
+        </div>
+        <div class="go glab" id="goal2">掃討</div>
+        <div class="num gnum"><span class="a go">あと</span><b id="goal2n">1</b></div>
+      </div>
+    </div>
+    <div class="p mi" id="goalTag">課目</div>
+
+    <!-- ④ 兆候 -->
+    <div class="p go" id="omenName">小型胞子虫</div>
+    <div class="p" id="omen"><span class="go w" id="omenW">崩落</span><span class="num n" id="omenN">1</span></div>
+
+    <!-- ⑤ 崩落予告 -->
+    <div class="p" id="fissure"></div>
+    <svg class="p" id="fissureMk" viewBox="0 0 170 196" fill="none"
+         stroke="#3B2C1A" stroke-width="3" stroke-linecap="round" stroke-opacity=".52">
+      <path d="M49.3 8.2 L27.4 6.7 L24.6 28.5"/>
+      <path d="M159.4 15.8 L181.4 17.3 L178.6 39.1"/>
+      <path d="M162.8 159.9 L160 181.7 L138.1 180.2"/>
+      <path d="M8.8 149.3 L6 171.1 L27.9 172.6"/>
+    </svg>
+
+    <!-- ⑥ 知見 -->
+    <div class="p" id="kenLine"><span class="go w">知見</span><span class="num n" id="kenN">5 ／ 8</span></div>
+  </div>
+
+  <!-- ===== 画面の隅に留まる層（拡縮しない） ===== -->
+  <div class="hud">
+    <!-- ① 深度 -->
+    <div class="p" id="depthShade"></div>
+    <div class="p mi" id="depthLab">深度</div>
+    <div class="p num" id="depthNum">5</div>
+    <div class="p" id="depthRule"></div>
+    <div class="p go" id="depthAct">第一幕　空明かり</div>
+
+    <!-- ⑦ 採録帖 -->
+    <div class="p grain" id="noteBtn"><span class="mi">採録帖</span><i></i></div>
+
+    <!-- ⑧ メニュー -->
+    <div class="p grain" id="menuBtn">
+      <svg width="28" height="28" viewBox="0 0 62 62" fill="none"
+           stroke="#E6D6AC" stroke-opacity=".82" stroke-width="3.4" stroke-linecap="round">
+        <circle cx="31" cy="31" r="13.5"/>
+        <circle cx="30.4" cy="31.5" r="5" stroke-width="2.6"/>
+        <path d="M31 8.5v8M31 45.5v7M8.5 31h8M45.5 31h8
+                 M15.1 15.1l5.7 5.7M41.2 41.2l6.4 6.4M46.9 15.1l-5.7 5.7M20.8 41.2l-5.2 5.2"/>
+      </svg>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  var AW=853, AH=1844, FOCUS=985; // FOCUS = 盤の縦中心（絵の実px）
+  var q=new URLSearchParams(location.search);
+  var phone=document.querySelector('.phone'), stage=document.getElementById('stage');
+  if(q.get('w')) phone.style.width=q.get('w')+'px';
+  if(q.get('h')) phone.style.height=q.get('h')+'px';
+  function fit(){
+    var vw=phone.clientWidth, vh=phone.clientHeight;
+    var k=Math.max(vw/AW, vh/AH);           // cover：絵で画面を必ず埋める
+    var dx=(vw-AW*k)/2;
+    var dy=Math.min(0, Math.max(vh-AH*k, vh/2-FOCUS*k));
+    stage.style.transform='translate('+dx+'px,'+dy+'px) scale('+k+')';
+  }
+  window.addEventListener('resize',fit); fit();
+
+  // 課目の数値カラム幅＝その層の最大桁数（「あと」を行間で揃える）
+  function syncGoalWidth(){
+    var d=Math.max(document.getElementById('goal1n').textContent.trim().length,
+                   document.getElementById('goal2n').textContent.trim().length);
+    document.documentElement.style.setProperty('--gnumw', d+'ch');
+    var L=Math.max(document.getElementById('goal1').textContent.trim().length,
+                   document.getElementById('goal2').textContent.trim().length);
+    document.getElementById('goalSlip').classList.toggle('long', L>=5);
+  }
+
+  // ?stress=1 …… 文字が最長になる合成状態（到達可能なランではない。文字組の限界試験用）
+  if(q.get('stress')==='1'){
+    document.getElementById('depthNum').textContent='28';
+    document.getElementById('depthAct').textContent='第三幕　岩あかり';
+    document.getElementById('lampNum').textContent='107';
+    document.getElementById('lampMed').classList.add('wide');
+    document.getElementById('goal1').textContent='蔦苔の浄化';
+    document.getElementById('goal1n').textContent='107';
+    document.getElementById('goal2').textContent='陶片の回収';
+    document.getElementById('goal2n').textContent='96';
+    document.getElementById('omenW').innerHTML='灯−<span class="num" style="font-size:24px">3</span>';
+    document.getElementById('omenN').textContent='3';
+    document.getElementById('omen').classList.add('drain');
+    document.getElementById('omenName').style.display='block';
+    document.getElementById('kenN').textContent='8 ／ 8';
+  }
+  syncGoalWidth();
+})();
+</script>
+</body>
+</html>
