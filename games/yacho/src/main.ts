@@ -11,7 +11,7 @@ import { buildPostmortem, thinningFloor, type DrainSample, type FloorLight } fro
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, type Rng } from './core/rng'
 import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
-import { applyDeepen, applyFusion, deepenOptions, fusionOptions } from './core/fusion'
+import { applyDeepen, applyFusion, deepenOptions, fusionOptions, PHASE28_ENABLED } from './core/fusion'
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
@@ -2722,8 +2722,8 @@ async function boot() {
       const padX = Math.max(20, vw * 0.05)
       // 3つの行為（PHASE2.md §2.8）。合成できる／深められるときだけ札が増える。
       // 上限3件はカード枠と同数（既存の3枚レイアウトをそのまま使い、新しい作法を持ち込まない）
-      const fuseOpts = fusionOptions(run.upgrades).slice(0, 3)
-      const deepOpts = deepenOptions(run).slice(0, 3)
+      const fuseOpts = PHASE28_ENABLED ? fusionOptions(run.upgrades).slice(0, 3) : []
+      const deepOpts = PHASE28_ENABLED ? deepenOptions(run).slice(0, 3) : []
       const modes: DraftMode[] = ['take']
       if (fuseOpts.length) modes.push('fuse')
       if (deepOpts.length) modes.push('deepen')
@@ -3527,7 +3527,8 @@ async function boot() {
       metrics: () => ({ S: view.S, ox: view.root.position.x, oy: view.root.position.y, vw, vh }),
       busy: () => tw.activeCount(),
       // 採録画面の行為タブ（PHASE2 §2.8）の検品用：いま合成・深化がいくつ出るか
-      draftActions: () => ({ fuse: fusionOptions(run.upgrades).length, deepen: deepenOptions(run).length }),
+      draftActions: () =>
+        PHASE28_ENABLED ? { fuse: fusionOptions(run.upgrades).length, deepen: deepenOptions(run).length } : { fuse: 0, deepen: 0 },
       // 野帳シートQA用フック（実装検証：main.ts本体の open 経路と同じ関数を直接叩けるようにする）
       openFieldNote: showFieldNote,
       closeFieldNote,

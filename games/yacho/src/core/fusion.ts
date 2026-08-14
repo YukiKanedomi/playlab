@@ -26,7 +26,7 @@ const defOf = (id: string): UpgradeDef | undefined => UPGRADES.find((u) => u.id 
  * false にすれば採録画面は行為タブごと消えて、承認ずみの「採る」だけの採録に完全に戻る
  * （知見の定義に残る deepen / fusion 欄は、どこからも読まれない死荷重になるだけで悪さはしない）。
  */
-export const PHASE28_ENABLED = true
+export const PHASE28_ENABLED = false
 
 /**
  * 合成・深化の上限（**私が足した歯止め。要判断**。PHASE2 §2.8 の記載を参照）。
@@ -48,7 +48,9 @@ export const DEEPEN_MAX = 3
  * 合成でできた知見どうしはさらに合成しない（環の環を作らない）。
  */
 export function fusionOptions(ownedIds: readonly string[]): FusionOption[] {
-  if (!PHASE28_ENABLED) return []
+  // PHASE28_ENABLED はここでは見ない。フラグは「採録画面に行為タブを出すか」という境界の判断なので
+  // 呼び出し側（main.ts / runsim.ts）が持つ。ここに置くと、機能を切っている間だけ規則のテストが
+  // 通らなくなり、テストが機能の入り切りに依存してしまう。
   const owned = ownedIds.map(defOf).filter((u): u is UpgradeDef => !!u && !u.fusion)
   if (ownedIds.filter((id) => defOf(id)?.fusion).length >= FUSION_MAX) return []
   const out: FusionOption[] = []
@@ -76,7 +78,7 @@ export function applyFusion(run: RunState, opt: FusionOption) {
  * 後ろの遺物・異種シナジーは一度も深化の札に出ないまま上限に達する（Codexレビュー2回目 2026-08-15）。
  */
 export function deepenOptions(run: RunState): UpgradeDef[] {
-  if (!PHASE28_ENABLED || run.deepened.length >= DEEPEN_MAX) return []
+  if (run.deepened.length >= DEEPEN_MAX) return [] // フラグを見ない理由は fusionOptions のコメント参照
   return run.upgrades.map(defOf).filter((u): u is UpgradeDef => !!u && !!u.deepen && !run.deepened.includes(u.id))
 }
 

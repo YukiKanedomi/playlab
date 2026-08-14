@@ -17,7 +17,7 @@ import { FLOORS, type FloorDef } from './floors'
 import { UPGRADES, type UpgradeDef } from './upgrades'
 import { makeRng, randInt, type Rng } from './rng'
 import { connectedOwned, pickDraftOptions } from './draft'
-import { applyDeepen, applyFusion, deepenOptions, fusionOptions } from './fusion'
+import { applyDeepen, applyFusion, deepenOptions, fusionOptions, PHASE28_ENABLED } from './fusion'
 import { systemOf, type System } from './hooks'
 import type { BoardEvent, Color, GoalType, LevelDef, XY } from './types'
 
@@ -235,8 +235,9 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
       //   それ以外                     → 採る
       // としている。合成・深化を切れば従来（採るだけ）の較正と直接比べられる。
       const full = run.upgrades.length >= run.slots
-      const fuses = opts.fusion === false ? [] : fusionOptions(run.upgrades)
-      const deeps = opts.deepen === false ? [] : deepenOptions(run)
+      // 既定は本編の入り切り（PHASE28_ENABLED）に従う。opts で明示すれば両方を測って比較できる
+      const fuses = (opts.fusion ?? PHASE28_ENABLED) ? fusionOptions(run.upgrades) : []
+      const deeps = (opts.deepen ?? PHASE28_ENABLED) ? deepenOptions(run) : []
       if (full && fuses.length > 0) {
         const f = fuses[randInt(moveRng, fuses.length)]
         firesById.delete(f.a.id)
@@ -556,8 +557,10 @@ export function formatReport(results: SeedResult[]): string {
 
 function main() {
   const seeds = Number(process.argv[2]) || 120
-  // 第2引数で PHASE2 §2.8 の入り切りを変える（同じシードで比べるため）: on(既定) / off / fuse(合成だけ) / deep(深化だけ)
-  const mode = process.argv[3] ?? 'on'
+  // 第2引数で PHASE2 §2.8 の入り切りを変える（同じシードで比べるため）: on / off / fuse(合成だけ) / deep(深化だけ)。
+  // **既定は本編と同じ**（PHASE28_ENABLED）。ここを 'on' 固定にしていると、本編で切っているのに
+  // 較正だけ入りの数字を測ることになり、出荷する状態と報告がずれる
+  const mode = process.argv[3] ?? (PHASE28_ENABLED ? 'on' : 'off')
   const opts: SimOptions = { fusion: mode === 'on' || mode === 'fuse', deepen: mode === 'on' || mode === 'deep' }
   const results: SeedResult[] = []
   for (let i = 0; i < seeds; i++) results.push(simulateSeed(1000 + i * 7919, opts))
