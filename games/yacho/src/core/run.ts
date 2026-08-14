@@ -26,6 +26,13 @@ export const OXYGEN_LOW = 8
 export const OXYGEN_CRITICAL = 3
 
 /**
+ * 知見の所持上限（PHASE2.md §2）。枠が埋まった後の採録は「取る＝1つ捨てる」になる。
+ * 呪いが「枠を1つ潰す」代償として成立するよう、実体は RunState.slots に持って可変にしてある
+ * （この定数はラン開始時の初期値）。スターター知見も1枠を消費する。
+ */
+export const UPGRADE_SLOTS_DEFAULT = 8
+
+/**
  * ラン開始時に配布する強化の抽選プール（プレイテスト反省：連鎖の起点を最初から1つ持たせる）。
  * 夜間監査[C]10/15：20種全体だと依存度・難度がばらばらで、前提物（遺物/爆発鉱石/特殊駒等）が
  * 無いと機能しない強化まで初手に出てしまう。単体で即座に盤面を動かす8種だけに絞る。
@@ -57,6 +64,9 @@ export interface RunRecords {
 
 export interface RunState {
   upgrades: string[] // 取得済み強化ID（upgrades.ts の UpgradeDef.id）
+  /** 知見の枠数（PHASE2.md §2）。upgrades.length がこれに達したら、採録には1つ捨てることが要る。
+   *  呪いが減らせるように定数ではなくラン状態として持つ */
+  slots: number
   gearCharge: number // ギア起動カウンタ（自律機構/機械庭園/遺物共鳴の判定に使用）
   /** 唯一の資源（PLAN_LOOP.md §1.4）。1手で-1、0で遭難。層クリアで +OXYGEN_SUPPLY_PER_FLOOR（上限なし） */
   oxygen: number
@@ -83,6 +93,7 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
   const initialUpgrades = upgrades ?? [STARTER_UPGRADE_IDS[randInt(rng, STARTER_UPGRADE_IDS.length)]]
   return {
     upgrades: initialUpgrades,
+    slots: UPGRADE_SLOTS_DEFAULT,
     gearCharge: 0,
     oxygen: OXYGEN_START,
     floor: 1,
@@ -91,4 +102,17 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
     progress: {},
     startersApplied: [],
   }
+}
+
+/**
+ * 知見を1つ手放す（PHASE2.md §2「取る＝捨てる」）。
+ * 効果はその場で消える：Board は構築時に run.upgrades からフック一覧を組むので、
+ * ここで外れた知見は次に組まれる盤面（＝採録直後の層）で既に働かない。
+ * startersApplied と progress も落とす＝あとで採り直したときに「採録時のおまけ」も進捗も新品として扱う
+ * （残しておくと、採り直した知見だけおまけが出ない不整合になる）。
+ */
+export function discardUpgrade(run: RunState, id: string) {
+  run.upgrades = run.upgrades.filter((u) => u !== id)
+  run.startersApplied = run.startersApplied.filter((u) => u !== id)
+  delete run.progress[id]
 }

@@ -3,7 +3,7 @@
 import { Application, Container, Graphics, Point, Sprite, Text, Texture } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
-import { createRunState, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
+import { createRunState, discardUpgrade, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
 import { FLOORS, type FloorDef } from './core/floors'
 import { UPGRADES, type UpgradeDef, type Resource } from './core/upgrades'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
@@ -2392,6 +2392,117 @@ async function boot() {
       })
     }
 
+    /**
+     * 知見の枠が埋まっているときの「手放す1つを選ぶ」画面（PHASE2.md §2「取る＝捨てる」）。
+     * ビジュアルの方向が決まるまでの繋ぎなので、採録画面の作法（暗幕・紙色の面・下部の確定ボタン）を
+     * そのまま踏襲した最小限にとどめる（凝らない。あとで採録画面ごと作り直す前提）。
+     */
+    const showDiscardPanel = (picked: UpgradeDef, onDone: () => void) => {
+      const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
+      const padX = Math.max(20, vw * 0.05)
+
+      const panel = new Container()
+      const dimG = new Graphics()
+      dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 1 }) // 背面の採録パネルを透かさない（文字が二重に見える）
+      dimG.eventMode = 'static' // 背面（採録パネル）のタップを吸収
+      panel.addChild(dimG)
+      playRoot.addChild(panel)
+
+      const title = new Text({
+        text: `枠がいっぱい（${owned.length}/${run.slots}）— ひとつ手放す`,
+        style: { fill: 0xf4e8cf, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
+      })
+      title.anchor.set(0, 0.5)
+      title.position.set(padX, vh * 0.045)
+      panel.addChild(title)
+
+      const sub = new Text({ text: `採る：${picked.name}`, style: { fill: 0xd8b855, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+      sub.anchor.set(0, 0.5)
+      sub.position.set(padX, vh * 0.09)
+      panel.addChild(sub)
+
+      const rowH = vh * 0.075
+      const rowGap = vh * 0.012
+      const rowW = Math.min(vw - padX * 2, vh * 0.62 - 32)
+      const rowX = (vw - rowW) / 2
+      const rowTop = vh * 0.135
+      const iconSize = Math.max(24, Math.min(34, rowH * 0.66))
+      let selected: number | null = null
+      const rowBgs: Graphics[] = []
+
+      const btnHost = new Container()
+      panel.addChild(btnHost)
+      const renderBtn = () => {
+        btnHost.removeChildren().forEach((c) => c.destroy({ children: true }))
+        const btnW = Math.min(rowW, vw * 0.7)
+        const btnH = vh * 0.062
+        const enabled = selected !== null
+        const btn = new Container()
+        const bg = new Graphics()
+        if (enabled) bg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill(UI.wood).stroke({ width: 2.5, color: UI.brass })
+        else bg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill({ color: 0x33291c, alpha: 0.75 }).stroke({ width: 2, color: 0x6b5f45 })
+        btn.addChild(bg)
+        const label = new Text({
+          text: enabled ? 'この知見を手放す' : '手放す知見を選ぶ',
+          style: { fill: enabled ? 0xf4e8cf : 0x8a8270, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
+        })
+        label.anchor.set(0.5)
+        btn.addChild(label)
+        btn.position.set(vw / 2, vh * 0.93)
+        if (enabled) {
+          btn.eventMode = 'static'
+          btn.cursor = 'pointer'
+          btn.hitArea = { contains: (x: number, y: number) => x >= -btnW / 2 && x <= btnW / 2 && y >= -btnH / 2 && y <= btnH / 2 }
+          btn.on('pointertap', () => {
+            // 手放した知見はその場で効果を失う（次の層の Board はもうこの知見を持たずに組まれる）
+            discardUpgrade(run, owned[selected!].id)
+            onDone()
+          })
+        }
+        btnHost.addChild(btn)
+      }
+
+      owned.forEach((u, i) => {
+        const y = rowTop + i * (rowH + rowGap)
+        const row = new Container()
+        row.position.set(rowX, y)
+        const bg = new Graphics()
+        bg.roundRect(0, 0, rowW, rowH, rowH * 0.22).fill({ color: UI.paper, alpha: 0.96 }).stroke({ width: 2, color: UI.brass, alpha: 0.7 })
+        row.addChild(bg)
+        rowBgs.push(bg)
+        const icon = makeUniqueUpgradeIcon(u.id, iconSize)
+        icon.position.set(rowH * 0.5, rowH / 2)
+        row.addChild(icon)
+        const nameT = new Text({ text: u.name, style: { fill: UI.paperInk, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
+        nameT.anchor.set(0, 0.5)
+        nameT.position.set(rowH * 0.5 + iconSize * 0.75, rowH * 0.38)
+        row.addChild(nameT)
+        const catT = new Text({
+          text: CATEGORY_LABEL[UPGRADE_CATEGORY[u.id]] ?? '',
+          style: { fill: 0x8a6a3f, fontSize: fs(0.02), fontFamily: FONT },
+        })
+        catT.anchor.set(0, 0.5)
+        catT.position.set(rowH * 0.5 + iconSize * 0.75, rowH * 0.72)
+        row.addChild(catT)
+        row.eventMode = 'static'
+        row.cursor = 'pointer'
+        row.hitArea = { contains: (x: number, y2: number) => x >= 0 && x <= rowW && y2 >= 0 && y2 <= rowH }
+        row.on('pointertap', () => {
+          selected = selected === i ? null : i // 再タップで解除（採録カードと同じ作法）
+          rowBgs.forEach((g, idx) => {
+            g.clear()
+              .roundRect(0, 0, rowW, rowH, rowH * 0.22)
+              .fill({ color: UI.paper, alpha: idx === selected ? 1 : 0.96 })
+              .stroke({ width: idx === selected ? 4 : 2, color: idx === selected ? 0xf2d98a : UI.brass, alpha: idx === selected ? 0.95 : 0.7 })
+          })
+          renderBtn()
+        })
+        panel.addChild(row)
+      })
+
+      renderBtn()
+    }
+
     // ドラフト3択 v2（codex_consult_ui.md [D]）：タップ即取得をやめ「選択→下部バーで確定」式にし、
     // 所持強化ストリップと読めるシナジー（因果の一文バッジ）を追加する。縦バンド予算は[D]推奨表に固定で従う：
     // 0-9%タイトル+野帳 / 9-20%所持ストリップ / 20-82%候補カード3枚(各18%・間4%) / 82-96%接続要約+確定 / 96-100%safe area
@@ -2443,7 +2554,7 @@ async function boot() {
       // ---- 9〜20%：所持強化ストリップ（[D]：40pxアイコン横スクロール、左に所持N、右に一覧、系統内訳） ----
       const stripRowY = vh * 0.135
       const stripIconSize = Math.max(30, Math.min(40, fs(0.1)))
-      const ownedLabel = new Text({ text: `手持ち ${owned.length}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
+      const ownedLabel = new Text({ text: `手持ち ${owned.length}/${run.slots}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
       ownedLabel.anchor.set(0, 0.5)
       ownedLabel.position.set(padX, stripRowY)
       panel.addChild(ownedLabel)
@@ -2550,12 +2661,17 @@ async function boot() {
       const cardGlows: Graphics[] = []
 
       const confirmPick = (i: number) => {
-        run.upgrades.push(options[i].id)
-        const next = floor + 1
-        playRoot.removeAllListeners()
-        playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
-        buildFloorScene(next)
-        ensureBgm(themeFloorId(next))
+        const goNext = () => {
+          run.upgrades.push(options[i].id)
+          const next = floor + 1
+          playRoot.removeAllListeners()
+          playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
+          buildFloorScene(next)
+          ensureBgm(themeFloorId(next))
+        }
+        // 枠が埋まっているなら、採るまえに手放す1つを選ばせる（PHASE2.md §2「取る＝捨てる」）
+        if (run.upgrades.length >= run.slots) showDiscardPanel(options[i], goNext)
+        else goNext()
       }
 
       const renderBottom = () => {

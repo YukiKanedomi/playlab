@@ -11,13 +11,13 @@
 // （seeds省略時は120。このファイル自体はNode専用ツールで、main.ts/viewからは一切importされない）
 import { pathToFileURL } from 'node:url'
 import { Board, H, W } from './board'
-import { createRunState, OXYGEN_SUPPLY_PER_FLOOR } from './run'
+import { createRunState, discardUpgrade, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './run'
 import { FLOORS, type FloorDef } from './floors'
 import { UPGRADES, type UpgradeDef } from './upgrades'
 import { makeRng, randInt, type Rng } from './rng'
 import { connectedOwned, pickDraftOptions } from './draft'
 import { systemOf, type System } from './hooks'
-import type { Color, GoalType, LevelDef, XY } from './types'
+import type { BoardEvent, Color, GoalType, LevelDef, XY } from './types'
 
 // ---- ドラフト抽選は core/draft.ts に一本化済み（UIと計測で同じ規則を使う） ----
 // 監査[B]：旧実装は同系統/同フック種を疑似シナジーとしており、閉ループの部品が届く保証がなかった
@@ -27,6 +27,17 @@ function pickDraftChoice(owned: UpgradeDef[], options: UpgradeDef[], rng: Rng): 
   const synergistic = options.filter((o) => connectedOwned(owned, o).length > 0)
   const pool = synergistic.length > 0 ? synergistic : options
   return pool[randInt(rng, pool.length)]
+}
+
+/**
+ * 枠が埋まったときに手放す1つを選ぶ（PHASE2.md §2「取る＝捨てる」のソルバー側の規則）。
+ * 規則：**このランで発火回数が最も少なかった知見を捨てる。同数なら先に採録したもの（古い方）**。
+ * run.upgrades は採録順なので、strict `<` で走査すれば同数のとき先頭側が残り＝古い方が捨てられる。
+ */
+function pickDiscard(run: RunState, fires: Map<string, number>): string {
+  let worst = run.upgrades[0]
+  for (const id of run.upgrades) if ((fires.get(id) ?? 0) < (fires.get(worst) ?? 0)) worst = id
+  return worst
 }
 
 // ---- 手選択（solver.ts の「そこそこ上手い人」ヒューリスティックを踏襲。未達成の目標に効くマスへの近さで優先する） ----
@@ -109,9 +120,16 @@ export interface MoveSample {
   buildKills: number // 撃破総数からswarm伝播ぶんを除いたもの（＝ビルド由来）
 }
 
+/** 1回の採録（層クリア後のドラフト）の記録。PHASE2 §2 の合否②「入れ替えが実際に起きているか」の元データ */
+export interface DraftSample {
+  floor: number // 採録が起きた層（この層をクリアした直後）
+  discardedId: string | null // 枠が埋まっていて捨てた知見。捨てずに済んだなら null
+}
+
 export interface SeedResult {
   seed: number
   moves: MoveSample[]
+  drafts: DraftSample[]
   clearedFloors: number[] // クリアできた層番号
   endOxygenByFloor: Map<number, number> // 層クリア直後（補給+7を含む）の酸素
   deathFloor: number | null // 力尽きた層（run-over）。生存クリアなら null
@@ -128,6 +146,12 @@ export interface SeedResult {
 export function simulateSeed(seed: number): SeedResult {
   const run = createRunState(undefined, makeRng(seed))
   const moves: MoveSample[] = []
+  const drafts: DraftSample[] = []
+  // 知見ごとの発火回数（ラン通算）。捨てる1つを決める規則がこれだけを見る
+  const firesById = new Map<string, number>()
+  const countFires = (evs: BoardEvent[]) => {
+    for (const e of evs) if (e.t === 'upgrade-fire') firesById.set(e.id, (firesById.get(e.id) ?? 0) + 1)
+  }
   const clearedFloors: number[] = []
   const endOxygenByFloor = new Map<number, number>()
   let deathFloor: number | null = null
@@ -138,6 +162,7 @@ export function simulateSeed(seed: number): SeedResult {
     run.floor = floor
     const floorSeed = (seed + floor * 7919) | 0
     const board = new Board(buildFloorLevelDef(floor, floorSeed, FLOORS[floor - 1]), run, FLOORS[floor - 1])
+    countFires(board.initEvents) // 採録時のおまけ（starter）もその知見の働きとして数える
     const moveRng = makeRng((floorSeed ^ 0x5bd1e995) >>> 0) // 盤面seedとは別系統の決定的乱数（手選択・ドラフト選択用）
     let cleared = false
     let over = false
@@ -151,6 +176,7 @@ export function simulateSeed(seed: number): SeedResult {
       const propBefore = run.records.swarmPropagationKills
       const evs = mv.tap ? board.tap(mv.tap) : board.swap(mv.swap!.a, mv.swap!.b)
       const swarmPropKills = run.records.swarmPropagationKills - propBefore
+      countFires(evs)
       const totalDefeated = evs.filter((e) => e.t === 'enemy-defeated').length
       moves.push({
         floor,
@@ -176,6 +202,14 @@ export function simulateSeed(seed: number): SeedResult {
       const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
       const options = pickDraftOptions(run.upgrades, makeRng((seed + floor * 104729 + 17) | 0), floor)
       const choice = pickDraftChoice(owned, options, moveRng)
+      // 枠が埋まっていれば「取る＝捨てる」（PHASE2.md §2）
+      let discardedId: string | null = null
+      if (run.upgrades.length >= run.slots) {
+        discardedId = pickDiscard(run, firesById)
+        discardUpgrade(run, discardedId)
+        firesById.delete(discardedId) // 採り直したときに新品として扱う（discardUpgrade と同じ扱い）
+      }
+      drafts.push({ floor, discardedId })
       run.upgrades.push(choice.id)
     }
   }
@@ -183,6 +217,7 @@ export function simulateSeed(seed: number): SeedResult {
   return {
     seed,
     moves,
+    drafts,
     clearedFloors,
     endOxygenByFloor,
     deathFloor,
@@ -305,6 +340,18 @@ export function verdictLines(results: SeedResult[]): string[] {
   const finals = results.map((r) => r.finalOxygen).filter((v): v is number => v !== null).sort((a, b) => a - b)
   const medFinal = percentile(finals, 0.5)
   out.push(`(h) クリア時の残酸素 中央値 : ${mark(finals.length > 0 && medFinal <= 12)}  ${finals.length ? medFinal : '-'}（≦12なら「ぎりぎり勝った」）`)
+
+  // PHASE2 §2（知見の枠）の合否：①発火/手が深層で頭打ちになるか ②後半の採録で入れ替えが起きるか
+  const firesOf = (f: number) => aggs[f - 1].avgFires
+  const midFires = (firesOf(6) + firesOf(7)) / 2
+  const deepFires = (firesOf(8) + firesOf(9) + firesOf(10)) / 3
+  const ratio = midFires > 0 ? deepFires / midFires : 0
+  out.push(`(i) 発火/手が深層で頭打ち  : ${mark(ratio <= 1.2)}  層6-7平均 ${midFires.toFixed(2)} → 層8-10平均 ${deepFires.toFixed(2)}（比 ${ratio.toFixed(2)}。1.20以下を頭打ちとみなす）`)
+
+  const lateDrafts = results.flatMap((r) => r.drafts).filter((d) => d.floor >= 6)
+  const swapped = lateDrafts.filter((d) => d.discardedId !== null).length
+  const swapPct = lateDrafts.length ? (swapped / lateDrafts.length) * 100 : 0
+  out.push(`(j) 後半の採録が入れ替えに : ${mark(swapPct >= 50)}  層6以降の採録 ${swapped}/${lateDrafts.length}=${swapPct.toFixed(1)}%`)
   return out
 }
 
@@ -326,6 +373,15 @@ export function formatReport(results: SeedResult[]): string {
   for (const r of results) if (r.deathFloor !== null) deaths.set(r.deathFloor, (deaths.get(r.deathFloor) ?? 0) + 1)
   const deathHist = [...deaths.entries()].sort((a, b) => a[0] - b[0]).map(([f, n]) => `層${f}:${n}`)
   lines.push(`遭難した層: ${deathHist.length ? deathHist.join('　') : 'なし'}`)
+  // 知見の枠（PHASE2 §2）：どの層の採録から「取る＝捨てる」になったかを層別に出す
+  const swapHist: string[] = []
+  for (let f = 1; f <= 9; f++) {
+    const ds = results.flatMap((r) => r.drafts).filter((d) => d.floor === f)
+    if (!ds.length) continue
+    const n = ds.filter((d) => d.discardedId !== null).length
+    swapHist.push(`層${f}:${((n / ds.length) * 100).toFixed(0)}%`)
+  }
+  lines.push(`採録が入れ替えになった割合: ${swapHist.join('　')}`)
   lines.push('')
   lines.push('--- 較正の合否（SPEC_OXYGEN.md §10.3）---')
   lines.push(...verdictLines(results))
