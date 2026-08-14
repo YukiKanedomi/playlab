@@ -5,17 +5,7 @@ import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
 import { FLOORS, type FloorDef } from './core/floors'
-import {
-  UPGRADES,
-  type UpgradeDef,
-  AUTONOMOUS_MECHANISM_ID,
-  MECHANICAL_GARDEN_ID,
-  PREHEAT_ID,
-  RELIC_RESONANCE_ID,
-  RESONANT_SHATTER_ID,
-  SPORE_BULLET_ID,
-  VINE_ROCKET_ID,
-} from './core/upgrades'
+import { UPGRADES, type UpgradeDef, type Resource } from './core/upgrades'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, type Rng } from './core/rng'
 import { pickDraftOptions as pickDraftOptionsGraph } from './core/draft'
@@ -100,47 +90,19 @@ function splitDesc(desc: string): { condition: string | null; effect: string } {
 }
 
 // ---- 読めるシナジー表示（codex_consult_ui.md [D]：金文字の名前羅列をやめ、因果の一文にする） ----
-// 各強化が「盤面に何を供給し（produces）」「何を消費して発火するか（consumes）」を手作業でタグ付けする。
-// upgrades.ts の hooks は on種別のみで内容までは表せないため、この表は実装の実挙動（起動条件テキストと一致）を
-// 見て作った近似表。目的は「必ず正しい因果グラフ」ではなく「繋がりを説明できる一文」を機械的に組み立てること。
-const RESOURCE_LABEL: Record<string, string> = {
+// 資源の語彙は upgrades.ts の RESOURCES ただ1つを正とする（抽選 core/draft.ts・表示・計測が同じ定義を読む）。
+// 以前ここに produces/consumes の「近似表」を別語彙（plantPiece/ore/gearPiece/relicBoost）で持っており、
+// upgrades.ts の正式語彙（plant/volatile-ore/gear-trigger/relic-match）と混ざって
+// ラベル解決が undefined になる不具合を出した。真実の源を2つ持つのをやめ、近似表は削除した。
+// Resource で型付けしておくことで、RESOURCES が増えたときにラベル漏れを tsc が検出する。
+const RESOURCE_LABEL: Record<Resource, string> = {
   spore: '胞子',
-  ore: '爆発鉱石',
+  'volatile-ore': '爆発鉱石',
+  'gear-trigger': 'ギアの起動',
   special: '特殊駒',
-  gearPiece: 'ギアの駒',
-  relicBoost: '遺物の共鳴',
-  plantPiece: '植物の駒',
-}
-const UPGRADE_PRODUCES: Record<string, string[]> = {
-  'spore-bloom': ['spore'],
-  'fungal-awakening': ['plantPiece'],
-  'deep-breath': ['plantPiece'],
-  'root-eating-ore': ['ore'],
-  'crystal-bud': ['ore'],
-  [AUTONOMOUS_MECHANISM_ID]: ['special'],
-  [PREHEAT_ID]: ['gearPiece'],
-  [RELIC_RESONANCE_ID]: ['relicBoost'],
-  'gamblers-pot': ['special'],
-  [VINE_ROCKET_ID]: ['plantPiece'],
-  [SPORE_BULLET_ID]: ['spore'],
-  [MECHANICAL_GARDEN_ID]: ['plantPiece'],
-  'relic-root': ['spore'],
-}
-const UPGRADE_CONSUMES: Record<string, string[]> = {
-  'spore-bloom': ['plantPiece'],
-  'fungal-awakening': ['plantPiece'],
-  'toxic-spore': ['spore'],
-  'deep-breath': ['plantPiece'],
-  'root-eating-ore': ['spore'],
-  [RESONANT_SHATTER_ID]: ['ore'],
-  'magnetic-mining': ['ore', 'gearPiece'],
-  [AUTONOMOUS_MECHANISM_ID]: ['gearPiece'],
-  overrev: ['gearPiece'],
-  [RELIC_RESONANCE_ID]: ['gearPiece'],
-  'transformation-furnace': ['relicBoost'],
-  [VINE_ROCKET_ID]: ['plantPiece'],
-  [SPORE_BULLET_ID]: ['special'],
-  [MECHANICAL_GARDEN_ID]: ['gearPiece'],
+  plant: '植物の駒',
+  'relic-match': '遺物の共鳴',
+  'enemy-damage': '敵へのダメージ',
 }
 /** カード本文「効果」の要約（接続一文に埋め込む短縮版。読点までを最大16字で切る） */
 function shortEffect(def: UpgradeDef): string {
@@ -159,14 +121,14 @@ interface ConnectionInfo {
  */
 function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): ConnectionInfo {
   // 資源はcore/upgrades.tsのconsumes/producesを正とする（抽選・表示・計測が同じ定義を読む。監査[C]5）
-  const candProduces: string[] = [...(candidate.produces ?? []), ...(UPGRADE_PRODUCES[candidate.id] ?? [])]
-  const candConsumes: string[] = [...(candidate.consumes ?? []), ...(UPGRADE_CONSUMES[candidate.id] ?? [])]
+  const candProduces = candidate.produces ?? []
+  const candConsumes = candidate.consumes ?? []
   const kindRank = { produce: 0, consume: 1 } as const
   let best: { rank: number; sentence: string } | null = null
   let count = 0
   for (const o of owned) {
-    const oProduces: string[] = [...(o.produces ?? []), ...(UPGRADE_PRODUCES[o.id] ?? [])]
-    const oConsumes: string[] = [...(o.consumes ?? []), ...(UPGRADE_CONSUMES[o.id] ?? [])]
+    const oProduces = o.produces ?? []
+    const oConsumes = o.consumes ?? []
     const produced = oProduces.find((r) => candConsumes.includes(r))
     const consumed = candProduces.find((r) => oConsumes.includes(r))
     let kind: keyof typeof kindRank | null = null
