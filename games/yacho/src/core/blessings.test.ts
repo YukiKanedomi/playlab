@@ -246,7 +246,8 @@ describe('一意専心（課目1つの層は4分の3／課目2つの層は4分�
     const f9 = applyBlessingsToFloor(FLOORS[8], ['single-minded']) // 深度9：陶片7＋植物50
     expect(f9.goals[1].count).toBe(63) // 植物は補充で湧くのでそのまま5/4
     const hako = FLOORS[8].layout.join('').split('').filter((ch) => ch === 'h').length
-    expect(f9.goals[0].count).toBe(hako) // 陶片は設置数が上限（8.75→9 では詰む）
+    // 陶片は設置数が上限（8.75→9 では詰む）。さらに「全数ちょうど」も避ける＝取りこぼしを1つ許す
+    expect(f9.goals[0].count).toBe(hako - 1)
     expect(f9.goals[0].count).toBeGreaterThanOrEqual(FLOORS[8].goals[0].count)
   })
 

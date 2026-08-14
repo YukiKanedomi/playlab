@@ -173,12 +173,17 @@ function materialCap(type: GoalType, layout: string[]): number | null {
   return null // 色・系統は補充で無限に湧くので上限なし
 }
 
-/** 課目の要求数を倍率で書き換える。殲滅だけは編成数と一致していないと詰むので触らない */
+/**
+ * 課目の要求数を倍率で書き換える。殲滅だけは編成数と一致していないと詰むので触らない。
+ * 頭打ちは「材料の全数」ではなく**全数−1**にする：全数ちょうどだと、盤の材料を1つ残らず処理しないと
+ * 層が終わらない＝取りこぼしが即そのまま遭難になり、呪いが「難しい」ではなく「詰み待ち」になる。
+ * （実測で 一意専心 を持つと深度13/17の蔦苔・深度24の陶片・深度26/29の苔石が全数ちょうどになっていた）
+ */
 function scaleGoal(g: Goal, mul: number, layout: string[]): Goal {
   if (g.type === 'enemy-kill') return g
   const cap = materialCap(g.type, layout)
   let count = Math.max(1, Math.round(g.count * mul))
-  if (cap !== null) count = Math.min(count, cap)
+  if (cap !== null) count = Math.min(count, Math.max(1, cap - 1))
   return { ...g, count }
 }
 

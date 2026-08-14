@@ -391,11 +391,14 @@ export function verdictLines(results: SeedResult[]): string[] {
 
   // PHASE2 §2（知見の枠）の合否：①発火/手が深層で頭打ちになるか ②後半の採録で実際に入れ替えが起きるか。
   // 採録は30回近くあるので、ここで初めて「枠8が効いているか」を評価できる（PHASE2 §2 の要求）
+  // 帯は 11-15 と 21-25 を使う。深度27以降は到達が数十件しか無く、しかも**いちばん強いビルドだけ**が残るので
+  // 平均が跳ねる（実測で深度30は9件で18.9）。頭打ちの判定にはサンプルが安定している帯を使い、
+  // 深層の生の値は下の層別表（発火/手平均の列）で読むこと。
   const firesIn = (from: number, to: number) => avg(aggs.filter((a) => a.floor >= from && a.floor <= to && a.moveCount > 0).map((a) => a.avgFires))
-  const midFires = firesIn(9, 12)
-  const deepFires = firesIn(27, 30)
+  const midFires = firesIn(11, 15)
+  const deepFires = firesIn(21, 25)
   const ratio = midFires > 0 ? deepFires / midFires : 0
-  out.push(`(h) 発火/手が深層で頭打ち   : ${mark(ratio <= 1.2)}  深度9-12平均 ${midFires.toFixed(2)} → 深度27-30平均 ${deepFires.toFixed(2)}（比 ${ratio.toFixed(2)}）`)
+  out.push(`(h) 発火/手が深層で頭打ち   : ${mark(ratio <= 1.2)}  深度11-15平均 ${midFires.toFixed(2)} → 深度21-25平均 ${deepFires.toFixed(2)}（比 ${ratio.toFixed(2)}）`)
 
   const lateDrafts = results.flatMap((r) => r.drafts).filter((d) => d.floor >= 10)
   const swapped = lateDrafts.filter((d) => d.discardedId !== null).length
