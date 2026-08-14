@@ -16,13 +16,17 @@
 
 /* ---------- トークン（ui_kit.html と同一） ---------- */
 :root{
-  --ink:#2F2922; --ink-text:#3A2E20; --ink-soft:#5C4E3C; --ink-disabled:#4A4136; --ink-plate:#2E2415;
+  /* --ink-soft は §05 の実測で 5C4E3C → 4E4131 へ一段暗くした（カード下端は顔料ムラで地が沈み、
+     11.5px の補助文で Δluma が 120 を割ったため。色ではなく地に合わせて文字を決める＝ART_GRAMMAR §6.1） */
+  --ink:#2F2922; --ink-text:#3A2E20; --ink-soft:#453A2C; --ink-disabled:#4A4136; --ink-plate:#2E2415;
   --paper-hi:#EFE4CC; --paper:#E4D6B6; --paper-lo:#D6C7A8; --paper-disabled:#C7BEAC;
   --plate:#4A3A26; --plate-lo:#2E241A;
   --verd:#3E5450; --verd-hi:#4A6155; --verd-lo:#2C3A37;
   --brass:#9A7B44; --brass-hi:#B99A5E; --brass-lo:#3A2C1E;
   --ivory:#F1E4C6; --ivory-dim:#CFC0A0;
-  --rust:#A8613C; --rust-ink:#7E4223; --danger:#C4553E; --danger-ink:#8E3A29;
+  /* --rust-ink は §06 の再実測で 7E4223 → 6F3719 へ一段暗くした（カード上端の朱の小文字は
+     顔料ムラの濃い側に載ると 4.46:1 ／ Δluma 115 で合格線を割っていたため。地に合わせて文字を決める＝§6.1） */
+  --rust:#A8613C; --rust-ink:#6F3719; --danger:#C4553E; --danger-ink:#8E3A29;
   --gain:#2F5A3C; --gain-lite:#9FC1A4; --loss-lite:#E0A692;
   --lamp:#6E9EA8; --lamp-deep:#4E7E8C; --lamp-core:#E4EDE6; --trough:#35443F;
   --min:'Shippori Mincho','Yu Mincho','YuMincho',serif;
@@ -47,7 +51,7 @@ html,body{margin:0}
 .mottle::after{
   content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='300' height='300' filter='url(%23m)'/></svg>");
-  background-size:300px 300px; mix-blend-mode:multiply; opacity:.20;
+  background-size:300px 300px; mix-blend-mode:multiply; opacity:.14;
   -webkit-mask-image:radial-gradient(118% 96% at 46% 52%, transparent 0%, transparent 34%, rgba(0,0,0,.55) 66%, #000 100%);
           mask-image:radial-gradient(118% 96% at 46% 52%, transparent 0%, transparent 34%, rgba(0,0,0,.55) 66%, #000 100%);
 }
@@ -60,16 +64,17 @@ body{
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23b)' opacity='0.35'/></svg>");
   color:#D9CDB4; font-family:var(--got); font-weight:500; -webkit-font-smoothing:antialiased;
 }
-.sheet{width:1820px;margin:0 auto;padding:38px 30px 60px}
+/* 版面は固定幅・左寄せ。表示幅が変わっても一切リフローしない＝§05 の実測で画素座標がずれない */
+.sheet{width:1820px;margin:0;padding:38px 30px 60px}
 .doc-hd{border-bottom:1px solid rgba(185,154,94,.38);padding-bottom:16px;margin-bottom:26px;display:flex;gap:40px;align-items:flex-end}
 .doc-hd .kv{font-family:var(--num);font-weight:600;font-size:11px;letter-spacing:.18em;color:#9A8767;text-transform:uppercase}
 .doc-hd h1{font-family:var(--min);font-weight:700;font-size:28px;margin:5px 0 0;letter-spacing:.07em;color:#F1E4C6}
-.doc-hd p{margin:0;font-size:12.5px;line-height:1.9;color:#C0B294;max-width:96ch}
+.doc-hd p{margin:0;font-size:12.5px;line-height:1.9;color:#C0B294;width:1180px;flex:0 0 auto}
 .doc-hd p b{color:#F1E4C6;font-weight:700}
 
 .rack{display:flex;gap:32px;align-items:flex-start}
 .unit{width:390px;margin:0}
-.cap{margin-bottom:12px;min-height:118px}
+.cap{margin-bottom:12px;height:174px}
 .cap .no{font-family:var(--num);font-weight:700;font-size:11px;letter-spacing:.16em;color:#B99A5E}
 .cap h2{font-family:var(--min);font-weight:600;font-size:18px;margin:3px 0 6px;letter-spacing:.08em;color:#F1E4C6}
 .cap p{margin:0;font-size:11.5px;line-height:1.85;color:#B7A98C}
@@ -133,7 +138,9 @@ body{
 .card__body{font-size:13px;line-height:1.8;color:var(--ink-text);margin:0}
 .kw{font-weight:700;color:var(--ink-text);
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='6'><path d='M1 4.2 C 10 2.6, 18 4.9, 27 3.6 S 44 2.4, 59 3.9' fill='none' stroke='%23A8613C' stroke-width='1.7' stroke-linecap='round' opacity='0.85'/></svg>");
-  background-repeat:repeat-x;background-position:0 100%;background-size:60px 6px;padding-bottom:3px;}
+  background-repeat:repeat-x;background-position:0 100%;background-size:60px 6px;padding-bottom:6px;}
+/* 傍線は和文グリフの下端に触れないよう 3px→6px 下げた。触れると、その一点だけ地が朱になり
+   （実測 Δluma 112・WCAG 4.99）、墨の読みが傍線の色に引きずられる。ART_GRAMMAR §6.1 */
 .card__ft{margin-top:11px;padding-top:9px;border-top:1px solid rgba(47,41,34,.26);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .card__ft .sp{flex:1}
 .card__starter{font-size:11.5px;line-height:1.7;color:var(--ink-soft)}
@@ -142,11 +149,12 @@ body{
 .card.is-selected .card__in{background:linear-gradient(170deg,#F6EDDA 0%,#F1E7D1 50%,#E9DDC3 100%)}
 .card__seal{position:absolute;z-index:4;right:-9px;top:-11px;width:46px;height:46px;border-radius:50%;
   display:none;place-items:center;transform:rotate(-8deg);
-  background:radial-gradient(circle at 36% 28%, #A54A34 0 26%, #8E3E2A 56%, #6E2C1B 100%);
+  background:radial-gradient(circle at 36% 28%, #8E3B27 0 26%, #7A311F 56%, #5C2414 100%);
   box-shadow:inset 0 0 0 1.5px rgba(46,24,16,.6), 0 0 0 1px rgba(232,205,158,.5), 0 2px 5px rgba(26,20,16,.5);
   font-family:var(--min);font-weight:700;font-size:15px;color:#F6E7C8;letter-spacing:.04em;}
 .card.is-selected .card__seal{display:grid}
 .tilt-a{transform:rotate(-1.2deg)}.tilt-b{transform:rotate(.8deg)}.tilt-c{transform:rotate(-.5deg)}
+.cards-tall .card__in{padding-top:19px;padding-bottom:17px}
 
 /* — ボタン — */
 .btn{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:9px;
@@ -294,7 +302,13 @@ body{
   display:grid;place-items:center}
 .cell:nth-child(8n){border-right:0}
 .grid > .cell:nth-child(n+57){border-bottom:0}
-.cell svg{width:29px;height:29px;position:relative;z-index:2}
+.cell svg{width:30px;height:30px;position:relative;z-index:2}
+/* 駒の下の水彩のにじみ。線際で顔料が溜まり、内側は wet-in-wet でぼける（ART_GRAMMAR §1-6） */
+.cell::after{content:'';position:absolute;width:33px;height:33px;border-radius:50%;z-index:1;
+  background:radial-gradient(circle, var(--wash,transparent) 0 34%, transparent 74%)}
+.t-o{--wash:rgba(110,122,120,.26)} .t-l{--wash:rgba(126,142,82,.24)} .t-c{--wash:rgba(127,168,196,.26)}
+.t-r{--wash:rgba(126,106,142,.22)} .t-m{--wash:rgba(168,97,60,.20)} .t-G{--wash:rgba(154,123,68,.26)}
+.t-B{--wash:rgba(185,138,62,.30)}
 /* 特殊駒：真鍮の環をまとう */
 .cell.sp::before{content:'';position:absolute;width:34px;height:34px;border-radius:50%;
   box-shadow:inset 0 0 0 2px rgba(154,123,68,.85), inset 0 0 0 3px rgba(58,44,30,.45);}
@@ -305,7 +319,7 @@ body{
 .tele{position:absolute;z-index:5;border:2px dashed rgba(142,58,41,.85);border-radius:3px;
   background:repeating-linear-gradient(45deg,rgba(196,85,62,.16) 0 5px,rgba(196,85,62,.05) 5px 10px);}
 .tele__n{position:absolute;right:-9px;top:-10px;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
-  background:radial-gradient(circle at 36% 28%,#A54A34 0 26%,#8E3E2A 56%,#6E2C1B 100%);
+  background:radial-gradient(circle at 36% 28%,#8E3B27 0 26%,#7A311F 56%,#5C2414 100%);
   box-shadow:inset 0 0 0 1px rgba(46,24,16,.55),0 0 0 1px rgba(232,205,158,.45),0 1px 3px rgba(26,20,16,.5);
   font-family:var(--num);font-weight:700;font-size:12px;color:#F6E7C8;}
 /* 原生種：ページの上に描かれた個体。セルの罫を跨ぐ */
@@ -348,7 +362,7 @@ body{
 /* — 画面ごとの並べ方 — */
 .hud{display:flex;align-items:center;gap:9px}
 .hud .sp{flex:1}
-.blockrow{display:flex;gap:10px;align-items:stretch}
+.blockrow{display:flex;gap:6px;align-items:stretch}
 .dock{position:absolute;left:14px;right:14px;bottom:14px}
 .ftbtns{display:flex;gap:9px;margin-top:10px}
 
@@ -359,8 +373,16 @@ body{
 .title-rule{display:flex;align-items:center;gap:10px;margin:16px 0 0}
 .title-rule .ln{flex:1;height:1px;background:rgba(47,41,34,.42)}
 .title-rule .dot{width:6px;height:6px;border-radius:50%;background:#9A7B44;box-shadow:0 0 0 1px rgba(58,44,30,.5)}
-.title-sub{font-family:var(--got);font-weight:500;font-size:12.5px;letter-spacing:.22em;color:#4A3E2C;margin-top:11px}
-.title-kv{font-family:var(--num);font-weight:600;font-size:10.5px;letter-spacing:.34em;color:#6B5B44;text-transform:uppercase}
+/* 副題の墨は §06 の3サイズ実測で決めた。端末比が変わると cover の切り取りも変わり、
+   375×667 では副題が絵の暗い側（岩肌 luma 150）へ落ちて 3.23:1 まで下がる。
+   絵に紙色のもや（wash）を敷いて地を作る手も試したが、もやの縁が横一文字の継ぎ目になって
+   情景が濁った。そこで地ではなく墨を、いちばん暗い地に合わせて決める（ART_GRAMMAR §6.1）。 */
+.title-sub{display:inline-flex;align-items:center;margin-top:12px;padding:5px 13px 6px;border-radius:3px;
+  font-family:var(--got);font-weight:500;font-size:12.5px;letter-spacing:.22em;color:var(--ink-text);
+  background-image:var(--noise),linear-gradient(172deg,#EFE4CC,#DCCFB2);
+  background-size:130px 130px,auto;background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.42), 0 0 0 1px rgba(185,154,94,.62), 0 1px 3px rgba(26,20,16,.30);}
+.title-kv{font-family:var(--num);font-weight:600;font-size:10.5px;letter-spacing:.34em;color:#574833;text-transform:uppercase}  /* 6B5B44→574833：情景に直接載る唯一の小さな文字なので、実測の余裕を 4.78 から広げた */
 
 /* — 祝福カード：祝福と呪いを同じ大きさで — */
 .bless{display:flex;gap:9px;align-items:flex-start;margin:0}
@@ -369,7 +391,7 @@ body{
   font-family:var(--min);font-weight:700;font-size:13px;letter-spacing:0;margin-top:1px}
 .bless__seal--boon{color:#F6E7C8;background:linear-gradient(168deg,#4A6155,#2C3A37);
   box-shadow:inset 0 0 0 1px rgba(26,20,16,.5),0 0 0 1px rgba(185,154,94,.7)}
-.bless__seal--bane{color:#F6E7C8;background:radial-gradient(circle at 36% 28%,#A54A34 0 30%,#8E3E2A 62%,#6E2C1B 100%);
+.bless__seal--bane{color:#F6E7C8;background:radial-gradient(circle at 36% 28%,#8E3B27 0 30%,#7A311F 62%,#5C2414 100%);
   box-shadow:inset 0 0 0 1px rgba(46,24,16,.5),0 0 0 1px rgba(232,205,158,.42)}
 .bless__tx{flex:1;font-size:13px;line-height:1.72;color:var(--ink-text)}
 
@@ -554,7 +576,7 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
 
       <!-- 盤＋灯のガラス管。ここより上（課目パネルの下）は情景をそのまま見せる帯 -->
       <div class="blockrow" style="position:absolute;left:14px;right:14px;top:340px">
-        <div class="gauge" style="--w:26px;--h:326px;--v:66">
+        <div class="gauge" style="--w:30px;--h:326px;--v:66;flex:0 0 auto">
           <div class="gauge__ring"></div>
           <div class="gauge__tube">
             <div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div>
@@ -611,14 +633,14 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
     <div class="bg" style="background-image:url('scene_draft.jpg');background-size:auto 145%;background-position:50% 0%"></div>
     <div class="scrim" style="background:linear-gradient(180deg,
         rgba(28,23,17,.04) 0%, rgba(28,23,17,.14) 14%, rgba(26,21,16,.50) 27%,
-        rgba(24,19,14,.78) 44%, rgba(22,18,13,.86) 70%, rgba(20,16,12,.88) 100%)"></div>
+        rgba(24,19,14,.80) 44%, rgba(21,17,12,.90) 66%, rgba(18,15,11,.94) 100%)"></div>
 
     <div class="ui">
       <div class="panel grain">
         <div class="panel__hd"><h3 data-a="採録の見出し">知見をひとつ採る</h3><span class="sp"></span><span class="sub">深度 5 踏破</span></div>
         <div class="panel__bd" style="padding:11px 13px 12px">
           <div style="display:flex;align-items:center;gap:9px">
-            <span style="font-size:11.5px;color:var(--ink-soft);letter-spacing:.04em" data-a="枠の説明文">手持ち <b class="num" style="font-size:13px;color:var(--ink-text)">5</b> ／ 空き <b class="num" style="font-size:13px;color:var(--ink-text)">3</b></span>
+            <span style="font-size:11.5px;color:var(--ink-soft);letter-spacing:.04em;line-height:1.7;white-space:nowrap" data-a="枠の説明文">手持ち <b class="num" style="font-size:13px;color:var(--ink-text)">5</b><br>空き <b class="num" style="font-size:13px;color:var(--ink-text)">3</b></span>
             <span class="sp" style="flex:1"></span>
             <span class="slots" style="gap:4px">
               <span class="slot" style="width:28px;height:28px"><svg style="width:15px;height:15px"><use href="#i-leaf"/></svg></span>
@@ -635,9 +657,9 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
       </div>
 
       <!-- 知見カード3枚 -->
-      <div style="margin-top:16px">
+      <div class="cards-tall" style="margin-top:16px">
         <div class="card is-selected grain tilt-a">
-          <div class="card__seal">採</div>
+          <div class="card__seal" data-a="採録の押印（選択中）">採</div>
           <div class="card__in mottle">
             <div class="card__hd">
               <div class="card__roundel"><svg><use href="#i-blast"/></svg></div>
@@ -702,7 +724,7 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
     <p>見出し／祝福3つ（各々 祝福1行＋呪い1行を<b>同じ 13px で</b>組む）／確定。
       隠しデメリットを作らないという <b>PHASE2 §3 の決定</b>を、字送りと行の重さで見えるようにしている。
       利点と代償の区別は大きさではなく<b>印（緑石の「祝」・朱の「呪」）</b>だけが担う。文言は blessings.ts のまま。</p>
-    <span class="src">背景 v5_blessing.png ／ 絵の中の3枚の紙片には文字を載せず、部品のカードで覆っている</span>
+    <span class="src">背景 v5_blessing.png ／ 絵の中の3枚の紙片は部品のカードで覆っている</span>
   </figcaption>
 
   <div class="phone">
@@ -719,7 +741,7 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
         </div>
       </div>
 
-      <div style="margin-top:14px">
+      <div class="cards-tall" style="margin-top:14px">
         <div class="card grain tilt-b">
           <div class="card__in mottle">
             <div class="card__hd">
@@ -785,7 +807,7 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
 
     <div class="ui" style="padding:0">
       <!-- 題字：非対称・上重心（ART_GRAMMAR §6.7） -->
-      <div style="position:absolute;left:30px;right:30px;top:52px">
+      <div class="title-blk" style="position:absolute;left:30px;right:30px;top:52px">
         <div class="title-kv" data-a="題字の上のローマ字">soroete, shirusu.</div>
         <h1 class="logo" style="margin:9px 0 0">
           <span class="l1" data-a="題字 1行目">そろえて、</span>
@@ -795,16 +817,15 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
         <div class="title-sub" data-a="題字の副題">深 界 採 録 記</div>
       </div>
 
-      <!-- 最深記録：情景の上なので必ず自分の札に載せる -->
-      <div style="position:absolute;left:30px;top:600px">
-        <span class="plaque plaque--dark grain">
-          <span class="k" data-a="最深記録の見出し語">最深記録</span>
-          <span class="u" style="color:var(--ivory-dim)">深度</span>
-          <span class="num num--l" data-a="最深記録の数値">23</span>
-        </span>
-      </div>
-
       <div style="position:absolute;left:30px;right:30px;bottom:34px">
+        <!-- 最深記録：情景の上なので必ず自分の札に載せる（題字だけが例外） -->
+        <div style="margin-bottom:13px">
+          <span class="plaque plaque--dark grain" style="padding:7px 14px 8px">
+            <span class="k" data-a="最深記録の見出し語">最深記録</span>
+            <span class="u" style="color:var(--ivory-dim)">深度</span>
+            <span class="num num--m" data-a="最深記録の数値">23</span>
+          </span>
+        </div>
         <button class="btn btn--wide btn--lg"><span class="txt" data-a="主ボタン（タイトル）">探 窟 へ</span></button>
         <div class="ftbtns" style="margin-top:11px">
           <button class="btn btn--sm btn--wood" style="flex:1"><span class="txt">採録帖</span></button>
@@ -823,16 +844,125 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
   <h2>05　実測 ── 絵の上に文字を載せてもチープにならないか</h2>
   <p class="note">
     合否は書いた値ではなく<b>描画された画素</b>で決める。手順は3つ。
-    ① この4画面を PNG に描画する。② <b>文字だけを消した同一の PNG</b> をもう1枚描画する。
-    ③ 各文字の実際の矩形について、②から<b>その文字が本当に載っている地</b>（背景画像・スクリム・紙目・顔料ムラをすべて合成したあとの画素）を取り出し、
-    ①の文字色との WCAG コントラスト比と ART_GRAMMAR §6.1 の Δluma を計算する。
-    地は平均ではなく<b>最悪側（下位2%分位）</b>で評価する。合格線は本文 <b>4.5:1</b> かつ <b>Δluma 120</b>。
+    ① この4画面を PNG に描画する。② <b>文字だけを消した同一の PNG</b>（`*{color:transparent}` を足しただけで、背景画像・スクリム・枠・紙目・顔料ムラはすべてそのまま）をもう1枚描画する。
+    ③ 各文字が実際に占める矩形について、②から<b>その文字が本当に載っている地</b>を取り出し、①の文字色との WCAG コントラスト比と ART_GRAMMAR §6.1 の Δluma を計算する。
+    <br>
+    矩形は<b>その要素自身の文字だけ</b>を囲う（兆候チップのように暗地の札が明地の数値札を抱える部品があるため、外形で測ると地が混ざる）。
+    行ボックスは字面より上下に張り出すので、<b>中央56%の帯</b>だけを地とする。地は <b>σ1.5 でぼかしてから「その文字のコントラストが最も低くなる側」の2%分位</b>を採る
+    （1画素の紙目の斑点ではなく、1〜2px のグリフが実際に置かれる局所平均が可読性を決めるため）。
+    矩形はwebフォントが乗り切った後（撮影と同じ状態）で取り直している── 読み込み直後に測ると版面が数pxずれ、地を取り違える。合格線は本文 <b>4.5:1</b> かつ <b>Δluma 120</b>。
   </p>
   <table class="audit"><thead><tr>
     <th>画面</th><th>部品／役割</th><th>文字色</th><th>実際の地（下位2%）</th><th>字送り</th><th>WCAG</th><th>Δluma</th><th>影・縁取り</th><th>判定</th>
-  </tr></thead><tbody id="auditBody"><tr><td colspan="9" style="padding:14px">（描画後に実測値を差し込む）</td></tr></tbody></table>
-  <div class="verdict" id="verdict">（描画後に実測値を差し込む）</div>
+  </tr></thead><tbody id="auditBody">
+<tr><td>プレイ</td><td>メダリオン見出し語</td><td><span class="sw" style="background:#CFC0A0"></span>#CFC0A0</td><td><span class="sw" style="background:#31261A"></span>#31261A</td><td class="n">9.5px</td><td class="n pass">8.22:1</td><td class="n pass">153</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>メダリオン数値（深度）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#2E241A"></span>#2E241A</td><td class="n">23.0px</td><td class="n pass">12.04:1</td><td class="n pass">191</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>幕チップ（暗地）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#41554C"></span>#41554C</td><td class="n">12.0px</td><td class="n pass">6.34:1</td><td class="n pass">150</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>札の見出し語（暗地）</td><td><span class="sw" style="background:#CFC0A0"></span>#CFC0A0</td><td><span class="sw" style="background:#3B2D1F"></span>#3B2D1F</td><td class="n">12.5px</td><td class="n pass">7.40:1</td><td class="n pass">145</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>残灯の数値（大・暗地の札）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#3D3020"></span>#3D3020</td><td class="n">40.0px</td><td class="n pass">10.14:1</td><td class="n pass">178</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>パネル見出し帯</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#40554F"></span>#40554F</td><td class="n">15.0px</td><td class="n pass">6.33:1</td><td class="n pass">150</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>見出し帯・補助</td><td><span class="sw" style="background:#E4D6B6"></span>#E4D6B6</td><td><span class="sw" style="background:#3F554F"></span>#3F554F</td><td class="n">11.0px</td><td class="n pass">5.56:1</td><td class="n pass">137</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>課目の名前</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#DAD0BC"></span>#DAD0BC</td><td class="n">14.5px</td><td class="n pass">8.63:1</td><td class="n pass">161</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>課目の補助文</td><td><span class="sw" style="background:#453A2C"></span>#453A2C</td><td><span class="sw" style="background:#D6CCB7"></span>#D6CCB7</td><td class="n">11.5px</td><td class="n pass">6.96:1</td><td class="n pass">145</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>課目の残数（中）</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#D4CAB5"></span>#D4CAB5</td><td class="n">21.0px</td><td class="n pass">8.11:1</td><td class="n pass">155</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>崩落予告の残り手</td><td><span class="sw" style="background:#F6E7C8"></span>#F6E7C8</td><td><span class="sw" style="background:#8E3B27"></span>#8E3B27</td><td class="n">12.0px</td><td class="n pass">6.13:1</td><td class="n pass">150</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>原生種の名前（盤上・暗地）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#453524"></span>#453524</td><td class="n">11.5px</td><td class="n pass">9.31:1</td><td class="n pass">173</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>兆候チップ（盤上・暗地）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#433523"></span>#433523</td><td class="n">11.0px</td><td class="n pass">9.40:1</td><td class="n pass">173</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>枠の呼応バッジ</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#3F534A"></span>#3F534A</td><td class="n">9.5px</td><td class="n pass">6.54:1</td><td class="n pass">152</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>小ボタン（木・暗地）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#483926"></span>#483926</td><td class="n">12.5px</td><td class="n pass">8.82:1</td><td class="n pass">169</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>プレイ</td><td>小ボタン（真鍮・明地）</td><td><span class="sw" style="background:#2E2415"></span>#2E2415</td><td><span class="sw" style="background:#B6A27D"></span>#B6A27D</td><td class="n">12.5px</td><td class="n pass">6.13:1</td><td class="n pass">126</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>採録の見出し</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#40564F"></span>#40564F</td><td class="n">15.0px</td><td class="n pass">6.26:1</td><td class="n pass">150</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>枠の説明文</td><td><span class="sw" style="background:#453A2C"></span>#453A2C</td><td><span class="sw" style="background:#D6CDB9"></span>#D6CDB9</td><td class="n">11.5px</td><td class="n pass">7.02:1</td><td class="n pass">146</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>採録の押印（選択中）</td><td><span class="sw" style="background:#F6E7C8"></span>#F6E7C8</td><td><span class="sw" style="background:#8E3B27"></span>#8E3B27</td><td class="n">15.0px</td><td class="n pass">6.13:1</td><td class="n pass">150</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>カードの分類（朱・小）</td><td><span class="sw" style="background:#6F3719"></span>#6F3719</td><td><span class="sw" style="background:#CAC3B2"></span>#CAC3B2</td><td class="n">10.5px</td><td class="n pass">5.35:1</td><td class="n pass">127</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>カードの題（明朝19px）</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#CBC3B1"></span>#CBC3B1</td><td class="n">19.0px</td><td class="n pass">7.53:1</td><td class="n pass">147</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>カードの本文</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#C6BEAB"></span>#C6BEAB</td><td class="n">13.0px</td><td class="n pass">7.13:1</td><td class="n pass">142</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>カードの補助（採録時のおまけ）</td><td><span class="sw" style="background:#453A2C"></span>#453A2C</td><td><span class="sw" style="background:#C7BDAA"></span>#C7BDAA</td><td class="n">11.5px</td><td class="n pass">5.96:1</td><td class="n pass">130</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>呼応チップ</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#CCC1A7"></span>#CCC1A7</td><td class="n">11.0px</td><td class="n pass">7.38:1</td><td class="n pass">145</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>採録</td><td>主ボタン（真鍮・明地）</td><td><span class="sw" style="background:#2E2415"></span>#2E2415</td><td><span class="sw" style="background:#B6A27D"></span>#B6A27D</td><td class="n">18.0px</td><td class="n pass">6.13:1</td><td class="n pass">126</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>祝福</td><td>祝福の見出し</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#40564F"></span>#40564F</td><td class="n">15.0px</td><td class="n pass">6.26:1</td><td class="n pass">150</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>祝福</td><td>祝福の説明文</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#D6CBB5"></span>#D6CBB5</td><td class="n">12.5px</td><td class="n pass">8.21:1</td><td class="n pass">156</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>祝福</td><td>祝福の名前</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#C7BEAC"></span>#C7BEAC</td><td class="n">19.0px</td><td class="n pass">7.16:1</td><td class="n pass">143</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>祝福</td><td>祝福の1行</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#C6BDAA"></span>#C6BDAA</td><td class="n">13.0px</td><td class="n pass">7.08:1</td><td class="n pass">142</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>祝福</td><td>呪いの1行（祝福と同じ大きさ）</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#C4B9A1"></span>#C4B9A1</td><td class="n">13.0px</td><td class="n pass">6.79:1</td><td class="n pass">138</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>祝福</td><td>主ボタン（緑石・暗地）</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#3D534D"></span>#3D534D</td><td class="n">18.0px</td><td class="n pass">6.55:1</td><td class="n pass">153</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>題字の上のローマ字</td><td><span class="sw" style="background:#574833"></span>#574833</td><td><span class="sw" style="background:#EBE3CF"></span>#EBE3CF</td><td class="n">10.5px</td><td class="n pass">6.90:1</td><td class="n pass">153</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>題字 1行目</td><td><span class="sw" style="background:#2F2922"></span>#2F2922</td><td><span class="sw" style="background:#EAE0CB"></span>#EAE0CB</td><td class="n">41.0px</td><td class="n pass">10.97:1</td><td class="n pass">183</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>題字 2行目</td><td><span class="sw" style="background:#2F2922"></span>#2F2922</td><td><span class="sw" style="background:#F0E9D8"></span>#F0E9D8</td><td class="n">41.0px</td><td class="n pass">11.88:1</td><td class="n pass">191</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>題字の副題</td><td><span class="sw" style="background:#3A2E20"></span>#3A2E20</td><td><span class="sw" style="background:#CDC2A9"></span>#CDC2A9</td><td class="n">12.5px</td><td class="n pass">7.47:1</td><td class="n pass">146</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>最深記録の見出し語</td><td><span class="sw" style="background:#CFC0A0"></span>#CFC0A0</td><td><span class="sw" style="background:#3E3020"></span>#3E3020</td><td class="n">12.5px</td><td class="n pass">7.10:1</td><td class="n pass">142</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>最深記録の数値</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#3A2D1E"></span>#3A2D1E</td><td class="n">21.0px</td><td class="n pass">10.58:1</td><td class="n pass">181</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>主ボタン（タイトル）</td><td><span class="sw" style="background:#2E2415"></span>#2E2415</td><td><span class="sw" style="background:#B6A27D"></span>#B6A27D</td><td class="n">18.0px</td><td class="n pass">6.13:1</td><td class="n pass">126</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+<tr><td>タイトル</td><td>設定ボタン</td><td><span class="sw" style="background:#F1E4C6"></span>#F1E4C6</td><td><span class="sw" style="background:#493926"></span>#493926</td><td class="n">12.5px</td><td class="n pass">8.78:1</td><td class="n pass">169</td><td class="pass">無し</td><td class="pass">合格</td></tr>
+</tbody></table>
+  <div class="verdict" id="verdict"><b>実測の結果</b>　── 4画面から <span class="num">39</span> 箇所を測り、<span class="num pass">39</span> 箇所が合格、<span class="num pass">0</span> 箇所が要修正。<br>最小コントラストは <span class="num">5.35:1</span>（カードの分類（朱・小）・10.5px ／ 合格線 4.5:1）、最小 Δluma は <span class="num">126</span>（小ボタン（真鍮・明地） ／ 合格線 120）。<br>4画面の部品内にある文字要素 <span class="num">169</span> 個を走査し、<b>text-shadow / text-stroke を持つものは <span class="num pass">0</span> 個</b>。情景の上でも、可読性は影でも縁取りでもなく<b>地の選択だけ</b>で作られている。</div>
 </section>
+
+<section class="audit-sec">
+  <h2>06　可変 ── 3サイズ × 最長文で、はみ出しゼロを実測する</h2>
+  <p class="note">
+    部品は同じまま、<b>置き方だけ</b>を端末サイズに追従させた。プレイは縦フレックスで、盤の1セルは
+    <b>幅と高さの小さい方</b>から決まる（375では38px・390では39px・430では44px）。採録／祝福はカード束が自然高で、確定は下端へ寄る。
+    高さ760px未満は<b>「詰めた密度」</b>＝縮めるのは余白と段差だけで、<b>文字サイズには一切触れていない</b>。
+    そこだけ内容の出し方も2つ変える：課目を縦2段から<b>横2枠</b>へ畳む（現行実機と同じ置き方）／カード束の行間を詰める。
+    <br>
+    「最長文」は <b>src/core/{upgrades,blessings,floors}.ts の実データの最長</b>を差し込んだもの
+    ── 残灯107（3桁）、課目2つとも最長（陶片の回収／植物標本）、原生種名＋兆候の最長（小型胞子虫・捕食印3）、
+    知見の本文45字＋おまけ20字、祝福21字＋呪い19字、最深記録 深度100。
+    （本文最長とおまけ最長は実データでは同じ知見に同居しないが、部品の最悪側を見るため意図的に同居させている）
+    <br>
+    判定は3つを画素で数える。<b>①端末の外へ出た部品</b>（.phone は overflow:hidden なので出た＝切れている）、
+    <b>②文字が overflow:hidden の箱から出た数</b>（＝文字が切れた数）、<b>③主要ブロックどうしの重なり</b>。
+    コントラストは<b>行ごと</b>に測る（複数行の文は行間を地として数えない）。
+  </p>
+  <table class="audit"><thead><tr>
+    <th>端末</th><th>相当</th><th>内容</th><th>盤の1セル</th><th>①はみ出し</th><th>②文字切れ</th><th>③重なり</th>
+    <th>測定数</th><th>最小WCAG</th><th>最小Δluma</th><th>判定</th>
+  </tr></thead><tbody>
+<tr><td>375×667</td><td>iPhone SE / 8</td><td>通常</td><td class="n">38px</td><td class="n pass">0</td><td class="n pass">0</td><td class="n pass">0</td><td class="n">38</td><td class="n pass">5.31:1</td><td class="n pass">126</td><td class="pass">合格</td></tr>
+<tr><td>390×844</td><td>iPhone 12〜15</td><td>通常</td><td class="n">39px</td><td class="n pass">0</td><td class="n pass">0</td><td class="n pass">0</td><td class="n">39</td><td class="n pass">5.35:1</td><td class="n pass">126</td><td class="pass">合格</td></tr>
+<tr><td>430×932</td><td>iPhone 15 Pro Max</td><td>通常</td><td class="n">44px</td><td class="n pass">0</td><td class="n pass">0</td><td class="n pass">0</td><td class="n">39</td><td class="n pass">5.32:1</td><td class="n pass">126</td><td class="pass">合格</td></tr>
+<tr><td>375×667</td><td>iPhone SE / 8</td><td>最長文</td><td class="n">38px</td><td class="n pass">0</td><td class="n pass">0</td><td class="n pass">0</td><td class="n">38</td><td class="n pass">5.31:1</td><td class="n pass">126</td><td class="pass">合格</td></tr>
+<tr><td>390×844</td><td>iPhone 12〜15</td><td>最長文</td><td class="n">39px</td><td class="n pass">0</td><td class="n pass">0</td><td class="n pass">0</td><td class="n">39</td><td class="n pass">5.35:1</td><td class="n pass">126</td><td class="pass">合格</td></tr>
+<tr><td>430×932</td><td>iPhone 15 Pro Max</td><td>最長文</td><td class="n">44px</td><td class="n pass">0</td><td class="n pass">0</td><td class="n pass">0</td><td class="n">39</td><td class="n pass">5.35:1</td><td class="n pass">126</td><td class="pass">合格</td></tr>
+  </tbody></table>
+  <div class="verdict">
+    <b>可変の結果</b>　── 6通り（3サイズ×2内容）×4画面＝<span class="num">24</span>画面を撮り、
+    はみ出し <span class="num pass">0</span>／文字切れ <span class="num pass">0</span>／重なり <span class="num pass">0</span>。
+    役割別のコントラストは6通りで計 <span class="num">232</span> 箇所、すべて合格
+    （最小 <span class="num">5.31:1</span>／最小 Δluma <span class="num">126</span>）。<br>
+    さらに<b>役割ラベルの有無によらず、端末の中の文字要素を全部</b>（mock_v6 と6通りで計 <span class="num">666</span> 箇所）測り直しても
+    要修正は <span class="num pass">0</span> 箇所、最小 <span class="num">5.09:1</span>／最小 Δluma <span class="num">122</span>。
+    <b>抜き取りではなく全数</b>で合格している。<br>
+    <b>この工程で実測が設計を変えた5点</b>　──
+    ① カードの分類（朱の小文字）は顔料ムラの濃い側で 4.46:1・Δluma 115 だったため <b>--rust-ink を 7E4223 → 6F3719</b> へ。
+    ② カードの補助文は最悪側で Δluma 118 だったため <b>--ink-soft を 4E4131 → 453A2C</b> へ。
+    ③ キーワードの<b>傍線</b>は和文グリフの下端に触れており、そこだけ地が朱になっていた（4.95:1・Δluma 111）ので 3px→6px 下げた。
+    ④ 題字の副題は、端末比が変わると cover の切り取りも変わり <b>375×667 で 3.23:1</b> まで落ちた（絵の明るい紙に載る保証が無い）。
+    紙色のもやを敷く手は縁が横一文字の継ぎ目になって情景を濁したので、<b>副題を「採録票の標本ラベル」＝自分の地を持つ部品</b>へ変えた。
+    ⑤ 情景に直接載る唯一の小さな文字であるローマ字は <b>6B5B44 → 574833</b>（4.78:1 の余裕を広げた）。<br>
+    残る「絵の上に直接置いた文字」は<b>題字の2行だけ</b>（41px・10.9:1／11.9:1）。ほかはすべて自分の不透明な地の上にある。
+  </div>
+  <p class="note" style="margin-top:14px">
+    ページ： shot_375x667.html ／ shot_390x844.html ／ shot_430x932.html ／
+    stress_375x667.html ／ stress_390x844.html ／ stress_430x932.html（同名の .png が実撮影、_audit.json が実測値）。
+    比較： proof_text.png（絵に直接 対 部品の上）、proof_compare.png（現行実機 対 v6）。
+    再現手順： tools/（gen.py → shoot.mjs → analyze.py → patch_doc.py）。
+  </p>
+</section>
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 <footer>
   yacho ／ mockups/v6/mock_v6.html ── 構造の出典 owner_ui_ref.jpg（オーナー提供）、画材の出典 concept3_1 / v5_draft / v5_blessing / v5_title、
@@ -854,9 +984,9 @@ footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px
    o=鉱石 l=葉 c=結晶 r=遺物 m=茸 G=ギア（特殊駒） B=爆発鉱石（充填ずみ） E=原生種のいるセル */
 const LAYOUT=[
  'lcomlrco',
- 'clromclm',
+ 'clromcGm',
  'omlcromc',
- 'rcGmlomr',
+ 'rccmlomr',
  'colmEclm',
  'mrcolBmo',
  'lomcrlco',
@@ -868,8 +998,14 @@ const grid=document.getElementById('grid');
 LAYOUT.forEach((row,y)=>{
   [...row].forEach((ch,x)=>{
     const d=document.createElement('div');
-    d.className='cell'+(ch==='G'?' sp':'')+(ch==='B'?' hot':'');
-    if(ch!=='E') d.innerHTML='<svg><use href="#'+SYM[ch]+'"/></svg>';
+    d.className='cell'+(ch==='E'?'':' t-'+ch)+(ch==='G'?' sp':'')+(ch==='B'?' hot':'');
+    if(ch!=='E'){
+      /* 手で置いた標本に見せるための微差（完全な平行・等間隔はテンプレの署名 ART_GRAMMAR §6.3）。
+         決定的な式なので、描き直しても同じ位置に落ちる */
+      const rot=(((x*7+y*13)%9)-4)*1.15;
+      const dx=(((x*5+y*3)%5)-2)*0.55, dy=(((x*3+y*7)%5)-2)*0.55;
+      d.innerHTML='<svg style="transform:rotate('+rot.toFixed(2)+'deg) translate('+dx.toFixed(2)+'px,'+dy.toFixed(2)+'px)"><use href="#'+SYM[ch]+'"/></svg>';
+    }
     grid.appendChild(d);
   });
 });
@@ -898,9 +1034,27 @@ board.appendChild(omen);
    （Pillow 側がこの JSON を読み、描画済み PNG から実際の地を取り出す） */
 const SCREENS=[...document.querySelectorAll('.phone')];
 const out=[];
+/* その要素“自身の”文字が占める矩形だけを返す（子要素の別の札は含めない）。
+   兆候チップのように、暗地の札の中にさらに明地の数値札を抱える部品があるため、
+   要素の外形で測ると「文字が載っていない地」まで混ざってしまう */
+function ownTextRect(el){
+  const rg=document.createRange(); let box=null;
+  el.childNodes.forEach(n=>{
+    if(n.nodeType!==3||!n.textContent.trim())return;
+    rg.selectNodeContents(n);
+    for(const b of rg.getClientRects()){
+      if(b.width<1||b.height<1)continue;
+      box=box?{l:Math.min(box.l,b.left),t:Math.min(box.t,b.top),r:Math.max(box.r,b.right),b:Math.max(box.b,b.bottom)}
+             :{l:b.left,t:b.top,r:b.right,b:b.bottom};
+    }
+  });
+  if(!box){const b=el.getBoundingClientRect();box={l:b.left,t:b.top,r:b.right,b:b.bottom};}
+  return box;
+}
 document.querySelectorAll('[data-a]').forEach(el=>{
   const cs=getComputedStyle(el);
-  const r=el.getBoundingClientRect();
+  const bx=ownTextRect(el);
+  const r={left:bx.l,top:bx.t,width:bx.r-bx.l,height:bx.b-bx.t};
   const host=SCREENS.findIndex(p=>p.contains(el));
   const pr=host>=0?SCREENS[host].getBoundingClientRect():{left:0,top:0};
   out.push({

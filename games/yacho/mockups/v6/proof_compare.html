@@ -1,0 +1,696 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>proof_compare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&family=Archivo:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   yacho MOCKUP v6 ── 4画面を「UI部品キット v6」の部品だけで組む
+   ・絵は情景としてのみ使う。絵の中に描かれたUIらしき要素には文字を載せない
+   ・盤の駒は部品として作る（背景に焼き込まない）
+   ・文字はすべて HTML テキスト
+   ============================================================ */
+
+/* ---------- トークン（ui_kit.html と同一） ---------- */
+:root{
+  /* --ink-soft は §05 の実測で 5C4E3C → 4E4131 へ一段暗くした（カード下端は顔料ムラで地が沈み、
+     11.5px の補助文で Δluma が 120 を割ったため。色ではなく地に合わせて文字を決める＝ART_GRAMMAR §6.1） */
+  --ink:#2F2922; --ink-text:#3A2E20; --ink-soft:#453A2C; --ink-disabled:#4A4136; --ink-plate:#2E2415;
+  --paper-hi:#EFE4CC; --paper:#E4D6B6; --paper-lo:#D6C7A8; --paper-disabled:#C7BEAC;
+  --plate:#4A3A26; --plate-lo:#2E241A;
+  --verd:#3E5450; --verd-hi:#4A6155; --verd-lo:#2C3A37;
+  --brass:#9A7B44; --brass-hi:#B99A5E; --brass-lo:#3A2C1E;
+  --ivory:#F1E4C6; --ivory-dim:#CFC0A0;
+  /* --rust-ink は §06 の再実測で 7E4223 → 6F3719 へ一段暗くした（カード上端の朱の小文字は
+     顔料ムラの濃い側に載ると 4.46:1 ／ Δluma 115 で合格線を割っていたため。地に合わせて文字を決める＝§6.1） */
+  --rust:#A8613C; --rust-ink:#6F3719; --danger:#C4553E; --danger-ink:#8E3A29;
+  --gain:#2F5A3C; --gain-lite:#9FC1A4; --loss-lite:#E0A692;
+  --lamp:#6E9EA8; --lamp-deep:#4E7E8C; --lamp-core:#E4EDE6; --trough:#35443F;
+  --min:'Shippori Mincho','Yu Mincho','YuMincho',serif;
+  --got:'Zen Kaku Gothic New','Yu Gothic UI','Yu Gothic','Meiryo',sans-serif;
+  --num:'Archivo','Segoe UI',system-ui,sans-serif;
+  --contact:0 2px 0 rgba(26,20,16,.28), 0 6px 12px -6px rgba(26,20,16,.45);
+  --noise:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='130' height='130'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='matrix' values='1 1 1 0 -0.575  1 1 1 0 -0.575  1 1 1 0 -0.575  0 0 0 0 1'/></filter><rect width='130' height='130' filter='url(%23n)'/></svg>");
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+
+/* 紙目：必ず「文字の下」に敷く */
+.grain{position:relative}
+.grain::before,.panel__hd::after,.panel__bd::before,.card__in::before,.list::after,
+.gauge__cap::before,.gauge__tube::after,.page::before{
+  content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit;
+  background-image:var(--noise); background-size:130px 130px;
+  mix-blend-mode:multiply; z-index:1;
+}
+.panel__hd h3,.panel__hd .sub{position:relative;z-index:2}
+.plaque > *,.med__well,.chip .n,.chip svg{position:relative;z-index:2}
+.mottle::after{
+  content:''; position:absolute; inset:0; pointer-events:none; border-radius:inherit;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='m'><feTurbulence type='fractalNoise' baseFrequency='0.012' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='300' height='300' filter='url(%23m)'/></svg>");
+  background-size:300px 300px; mix-blend-mode:multiply; opacity:.14;
+  -webkit-mask-image:radial-gradient(118% 96% at 46% 52%, transparent 0%, transparent 34%, rgba(0,0,0,.55) 66%, #000 100%);
+          mask-image:radial-gradient(118% 96% at 46% 52%, transparent 0%, transparent 34%, rgba(0,0,0,.55) 66%, #000 100%);
+}
+
+/* ---------- 台紙 ---------- */
+body{
+  background:#1C1710;
+  background-image:
+    radial-gradient(120% 70% at 20% 0%, rgba(74,61,42,.55), transparent 62%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='b'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='140' height='140' filter='url(%23b)' opacity='0.35'/></svg>");
+  color:#D9CDB4; font-family:var(--got); font-weight:500; -webkit-font-smoothing:antialiased;
+}
+/* 版面は固定幅・左寄せ。表示幅が変わっても一切リフローしない＝§05 の実測で画素座標がずれない */
+.sheet{width:1820px;margin:0;padding:38px 30px 60px}
+.doc-hd{border-bottom:1px solid rgba(185,154,94,.38);padding-bottom:16px;margin-bottom:26px;display:flex;gap:40px;align-items:flex-end}
+.doc-hd .kv{font-family:var(--num);font-weight:600;font-size:11px;letter-spacing:.18em;color:#9A8767;text-transform:uppercase}
+.doc-hd h1{font-family:var(--min);font-weight:700;font-size:28px;margin:5px 0 0;letter-spacing:.07em;color:#F1E4C6}
+.doc-hd p{margin:0;font-size:12.5px;line-height:1.9;color:#C0B294;width:1180px;flex:0 0 auto}
+.doc-hd p b{color:#F1E4C6;font-weight:700}
+
+.rack{display:flex;gap:32px;align-items:flex-start}
+.unit{width:390px;margin:0}
+.cap{margin-bottom:12px;height:174px}
+.cap .no{font-family:var(--num);font-weight:700;font-size:11px;letter-spacing:.16em;color:#B99A5E}
+.cap h2{font-family:var(--min);font-weight:600;font-size:18px;margin:3px 0 6px;letter-spacing:.08em;color:#F1E4C6}
+.cap p{margin:0;font-size:11.5px;line-height:1.85;color:#B7A98C}
+.cap p b{color:#E4D6B6;font-weight:700}
+.cap .src{font-family:var(--num);font-size:10px;letter-spacing:.08em;color:#8B7A5C;margin-top:5px;display:block}
+
+/* ---------- 端末（実寸 390×844） ---------- */
+.phone{
+  position:relative; width:390px; height:844px; overflow:hidden; border-radius:3px;
+  box-shadow:0 0 0 1px rgba(58,44,30,.9), 0 0 0 2px rgba(185,154,94,.55), 0 22px 44px -18px rgba(0,0,0,.85);
+  font-family:var(--got); color:var(--ink-text);
+}
+.bg{position:absolute;inset:0;background-repeat:no-repeat}
+.scrim{position:absolute;inset:0}
+.ui{position:absolute;inset:0;padding:14px}
+
+/* ============================================================
+   部品（ui_kit.html から。値は変更していない）
+   ============================================================ */
+/* — パネル — */
+.panel{position:relative;border-radius:6px;padding:5px;
+  background:linear-gradient(178deg,#57452D 0%,#4A3A26 42%,#40311F 100%);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.60), 0 0 0 1px rgba(185,154,94,.80), var(--contact);}
+.panel--verd{background:linear-gradient(178deg,#4A6155 0%,#3E5450 46%,#334642 100%)}
+.panel::after{content:'';position:absolute;width:9px;height:9px;border-radius:50%;left:8px;top:8px;z-index:3;pointer-events:none;
+  background:radial-gradient(circle at 34% 30%, #C9AC74 0 28%, #9A7B44 46%, #5E4826 100%);box-shadow:0 1px 0 rgba(26,20,16,.5);}
+.panel__hd{position:relative;z-index:2;border-radius:3px 3px 0 0;overflow:hidden;
+  background:linear-gradient(180deg,#4A6155 0%,#3E5450 58%,#33443F 100%);
+  padding:9px 14px 9px 26px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(26,20,16,.55);}
+.panel__hd::before{content:'';position:absolute;left:9%;right:22%;top:0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(241,228,198,.36) 24%,rgba(241,228,198,.20) 70%,transparent);}
+.panel__hd h3{font-family:var(--min);font-weight:600;font-size:15px;color:var(--ivory);margin:0;letter-spacing:.09em;line-height:1.45}
+.panel__hd .sub{font-family:var(--got);font-weight:500;font-size:11px;color:#E4D6B6;letter-spacing:.04em}
+.panel__hd .sp{flex:1}
+.panel__bd{position:relative;z-index:1;border-radius:0 0 3px 3px;overflow:hidden;
+  background:linear-gradient(172deg,#F1E7D1 0%,#EFE4CC 40%,#E7DBC0 100%);padding:14px 16px 15px;}
+.panel--noHd .panel__bd{border-radius:3px}
+.panel__bd > *{position:relative;z-index:2}
+.panel__bd p{margin:0 0 8px;font-size:13px;line-height:1.78}
+.panel__bd p:last-child{margin-bottom:0}
+.panel--dark .panel__bd{background:linear-gradient(172deg,#54422C 0%,#4A3A26 44%,#3B2D1D 100%);color:var(--ivory)}
+.panel--dark .panel__bd p{color:var(--ivory)}
+
+/* — カード — */
+.card{position:relative;border-radius:5px;padding:4px;
+  background:linear-gradient(176deg,#6A5537,#4E3D28 60%,#43341F);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.60), 0 0 0 1px rgba(185,154,94,.72), var(--contact);}
+.card__in{position:relative;border-radius:2px;overflow:hidden;
+  background:linear-gradient(170deg,#F2E8D3 0%,#EFE4CC 46%,#E4D6B6 100%);padding:13px 15px 12px 15px;}
+.card__in > *{position:relative;z-index:2}
+.card__hd{display:flex;align-items:flex-start;gap:11px;margin-bottom:9px}
+.card__roundel{flex:0 0 auto;width:46px;height:46px;border-radius:50%;margin:-17px 0 0 -7px;position:relative;
+  background:radial-gradient(circle at 37% 29%, #F4EBD6 0 34%, #E9DDC3 66%, #D6C29A 100%);
+  box-shadow:inset 0 0 0 3px #9A7B44, inset 0 0 0 4.5px rgba(58,44,30,.66), inset 0 -3px 4px -2px rgba(58,44,30,.30),
+    0 0 0 1px rgba(185,154,94,.85), 0 2px 4px rgba(26,20,16,.42);
+  display:grid;place-items:center;}
+.card__roundel svg{width:24px;height:24px}
+.card__ttl{flex:1;min-width:0}
+.card__kind{font-family:var(--got);font-weight:700;font-size:10.5px;letter-spacing:.14em;color:var(--rust-ink);display:block;margin-bottom:2px}
+.card__name{font-family:var(--min);font-weight:600;font-size:19px;line-height:1.34;letter-spacing:.03em;margin:0;color:var(--ink-text)}
+.card__body{font-size:13px;line-height:1.8;color:var(--ink-text);margin:0}
+.kw{font-weight:700;color:var(--ink-text);
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='6'><path d='M1 4.2 C 10 2.6, 18 4.9, 27 3.6 S 44 2.4, 59 3.9' fill='none' stroke='%23A8613C' stroke-width='1.7' stroke-linecap='round' opacity='0.85'/></svg>");
+  background-repeat:repeat-x;background-position:0 100%;background-size:60px 6px;padding-bottom:6px;}
+/* 傍線は和文グリフの下端に触れないよう 3px→6px 下げた。触れると、その一点だけ地が朱になり
+   （実測 Δluma 112・WCAG 4.99）、墨の読みが傍線の色に引きずられる。ART_GRAMMAR §6.1 */
+.card__ft{margin-top:11px;padding-top:9px;border-top:1px solid rgba(47,41,34,.26);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card__ft .sp{flex:1}
+.card__starter{font-size:11.5px;line-height:1.7;color:var(--ink-soft)}
+.card.is-selected{background:linear-gradient(176deg,#C4A76C,#9A7B44 55%,#7A5F34);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6), 0 0 0 2px rgba(185,154,94,.95), 0 0 0 3px rgba(58,44,30,.45), var(--contact);padding:6px;}
+.card.is-selected .card__in{background:linear-gradient(170deg,#F6EDDA 0%,#F1E7D1 50%,#E9DDC3 100%)}
+.card__seal{position:absolute;z-index:4;right:-9px;top:-11px;width:46px;height:46px;border-radius:50%;
+  display:none;place-items:center;transform:rotate(-8deg);
+  background:radial-gradient(circle at 36% 28%, #8E3B27 0 26%, #7A311F 56%, #5C2414 100%);
+  box-shadow:inset 0 0 0 1.5px rgba(46,24,16,.6), 0 0 0 1px rgba(232,205,158,.5), 0 2px 5px rgba(26,20,16,.5);
+  font-family:var(--min);font-weight:700;font-size:15px;color:#F6E7C8;letter-spacing:.04em;}
+.card.is-selected .card__seal{display:grid}
+.tilt-a{transform:rotate(-1.2deg)}.tilt-b{transform:rotate(.8deg)}.tilt-c{transform:rotate(-.5deg)}
+.cards-tall .card__in{padding-top:19px;padding-bottom:17px}
+
+/* — ボタン — */
+.btn{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:9px;
+  font-family:var(--min);font-weight:600;font-size:15.5px;letter-spacing:.1em;
+  min-height:46px;padding:0 26px;border:0;border-radius:5px;cursor:pointer;
+  background-color:#C2AC84;
+  background-image:var(--noise),linear-gradient(180deg,#DCC79E 0%,#CEB88C 42%,#C6B08A 72%,#C2AC84 100%);
+  background-size:130px 130px,auto; background-blend-mode:multiply,normal;
+  color:var(--ink-plate);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.55), 0 0 0 1px rgba(185,154,94,.85),
+    0 3px 0 0 #6B5330, 0 5px 10px -4px rgba(26,20,16,.55);}
+.btn::before{content:'';position:absolute;left:12%;right:34%;top:1px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(250,242,226,.75) 30%,rgba(250,242,226,.3) 76%,transparent);border-radius:2px;}
+.btn::after{content:'';position:absolute;left:9px;top:8px;width:3.5px;height:3.5px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#EBDCB6 0 30%,#9A7B44 66%,#5E4826 100%);box-shadow:0 0 0 .5px rgba(58,44,30,.35);}
+.btn .txt{position:relative;z-index:2}
+.btn--wide{width:100%}
+.btn--lg{min-height:56px;font-size:18px;padding:0 34px}
+.btn--sm{min-height:34px;font-size:12.5px;padding:0 15px;letter-spacing:.06em;font-family:var(--got);font-weight:700}
+.btn--sm::after{display:none}
+.btn--wood{background-color:#5C4A31;background-image:var(--noise),linear-gradient(180deg,#5C4A31 0%,#4A3A26 40%,#40311F 100%);
+  color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6),0 0 0 1px rgba(185,154,94,.62),0 3px 0 0 #2A2013,0 5px 10px -4px rgba(26,20,16,.5);}
+.btn--stone{background-color:#4E6A5D;background-image:var(--noise),linear-gradient(180deg,#4E6A5D 0%,#3E5450 42%,#334642 100%);
+  color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(30,38,34,.62),0 0 0 1px rgba(185,154,94,.72),0 3px 0 0 #24322E,0 5px 10px -4px rgba(26,20,16,.5);}
+.btn--wood::after,.btn--stone::after{background:radial-gradient(circle at 35% 30%,#C9AC74 0 30%,#7C6134 66%,#3A2C1E 100%)}
+
+/* — 一覧行 — */
+.list{background:linear-gradient(172deg,#F1E7D1,#E9DDC3);border-radius:3px;overflow:hidden;position:relative}
+.list > *{position:relative;z-index:2}
+.row{display:flex;align-items:center;gap:11px;padding:9px 12px 9px 10px;border-bottom:1px solid rgba(47,41,34,.17);position:relative}
+.row:last-child{border-bottom:0}
+.row__ic{flex:0 0 auto;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 37% 29%, #F1E7D1 0 38%, #E4D6B6 72%, #CFBE99 100%);
+  box-shadow:inset 0 0 0 2px #4A6155, inset 0 0 0 3px rgba(26,20,16,.42), inset 0 -2px 3px -1px rgba(58,44,30,.25), 0 0 0 1px rgba(185,154,94,.5);}
+.row__ic svg{width:18px;height:18px}
+.row__tx{flex:1;min-width:0}
+.row__name{display:block;font-family:var(--min);font-weight:600;font-size:14.5px;letter-spacing:.03em;line-height:1.4;color:var(--ink-text)}
+.row__sub{display:block;font-size:11.5px;line-height:1.55;color:var(--ink-soft);margin-top:2px}
+.row__val{flex:0 0 auto;display:flex;align-items:baseline;gap:5px}
+.row__val .k{font-size:11px;color:var(--ink-soft)}
+
+/* — チップ — */
+.chip{position:relative;display:inline-flex;align-items:center;gap:7px;vertical-align:middle;
+  padding:4px 11px 5px 8px;border-radius:3px;
+  background-image:var(--noise),linear-gradient(172deg,#E9DDC3,#DCCFB2);
+  background-size:130px 130px,auto;background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.45), 0 0 0 1px rgba(185,154,94,.6);
+  font-size:12px;line-height:1.4;color:var(--ink-text);letter-spacing:.02em;}
+.chip svg{width:15px;height:15px;flex:0 0 auto}
+.chip .n{font-family:var(--num);font-weight:700;font-size:14px;letter-spacing:.01em;font-variant-numeric:tabular-nums lining-nums}
+.chip .u{font-size:10.5px;color:var(--ink-soft)}
+.chip--omen{background-image:var(--noise),linear-gradient(172deg,#4A3A26,#3A2D1D);color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.6), 0 0 0 1px rgba(185,154,94,.7);padding-left:11px;}
+.chip--omen .u{color:var(--ivory-dim)}
+.chip--omen .n{background:linear-gradient(172deg,#EFE4CC,#DCCFB2);color:var(--ink-text);
+  border-radius:2px;padding:0 5px;box-shadow:inset 0 0 0 1px rgba(58,44,30,.4);font-size:12.5px;}
+.chip--danger{position:relative;padding-left:14px}
+.chip--danger::before{content:'';position:absolute;left:3px;top:4px;bottom:4px;width:3px;border-radius:2px;background:var(--danger)}
+.chip--danger .n{color:var(--danger-ink);background:linear-gradient(172deg,#F4EAD5,#E9DDC3)}
+.chip--sm{font-size:11px;padding:2px 8px 3px 6px}
+.chip--sm .n{font-size:12px}
+.chip--act{background-image:var(--noise),linear-gradient(172deg,#4A6155,#33443F);color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.55),0 0 0 1px rgba(185,154,94,.6)}
+.chip--act .u{color:var(--ivory-dim)}
+
+/* — 数値・札 — */
+.num{font-family:var(--num);font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1;font-weight:600;letter-spacing:.005em}
+.num--l{font-size:40px;line-height:1}
+.num--m{font-size:21px;line-height:1.1}
+.num--s{font-size:13.5px;line-height:1.2}
+.plaque{display:inline-flex;align-items:baseline;gap:8px;position:relative;padding:8px 15px 9px;border-radius:4px;
+  background-image:var(--noise),linear-gradient(172deg,#F1E7D1,#E4D6B6);
+  background-size:130px 130px,auto;background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.45), 0 0 0 1px rgba(185,154,94,.7), var(--contact);}
+.plaque--dark{background-image:var(--noise),linear-gradient(172deg,#4A3A26,#33271A);color:var(--ivory);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.6),0 0 0 1px rgba(185,154,94,.75), var(--contact)}
+.plaque .k{font-family:var(--min);font-weight:600;font-size:12.5px;letter-spacing:.12em;opacity:.9}
+.plaque--dark .k{color:var(--ivory-dim);opacity:1}
+.plaque .u{font-size:11px;color:var(--ink-soft)}
+.plaque--dark .u{color:var(--ivory-dim)}
+
+/* — メダリオン — */
+.med{position:relative;display:inline-flex;flex-direction:column;align-items:center;justify-content:center;
+  min-width:66px;height:66px;border-radius:999px;padding:0 12px;
+  background-image:var(--noise),
+    radial-gradient(circle at 34% 24%, rgba(246,235,218,.30) 0 14%, transparent 42%),
+    linear-gradient(168deg,#B49258 0%,#9A7B44 40%,#6E5530 78%,#54401F 100%);
+  background-size:130px 130px,auto,auto;background-blend-mode:multiply,normal,normal;
+  box-shadow:inset 0 0 0 2px rgba(58,44,30,.55), 0 0 0 1px rgba(185,154,94,.85), var(--contact);}
+.med__well{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-width:46px;height:46px;border-radius:999px;padding:0 9px;
+  background:linear-gradient(172deg,#33271A 0%,#2E241A 52%,#241B12 100%);
+  box-shadow:inset 0 2px 3px rgba(20,14,10,.7), inset 0 -1px 0 rgba(185,154,94,.28);}
+.med__k{font-family:var(--min);font-weight:600;font-size:9.5px;letter-spacing:.16em;color:var(--ivory-dim);line-height:1;margin-bottom:2px}
+.med__n{font-family:var(--num);font-variant-numeric:tabular-nums lining-nums;font-weight:600;font-size:23px;line-height:1;color:var(--ivory)}
+.med--sm{min-width:46px;height:46px;padding:0 8px}
+.med--sm .med__well{min-width:32px;height:32px;padding:0 6px}
+.med--sm .med__n{font-size:16px}
+
+/* — ゲージ（灯のガラス管） — */
+.gauge{position:relative;width:var(--w,30px);height:var(--h,240px)}
+.gauge__tube{position:absolute;left:3px;right:3px;top:14px;bottom:14px;border-radius:12px;overflow:hidden;
+  background:linear-gradient(92deg,#2C3A36 0%,#35443F 38%,#2E3B37 100%);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.7), 0 0 0 1px rgba(185,154,94,.7);}
+.gauge__fill{position:absolute;left:0;right:0;bottom:0;height:calc(var(--v,60) * 1%);
+  background:linear-gradient(180deg,#8FB7BE 0%,#6E9EA8 26%,#5A8C99 62%,#4E7E8C 100%);}
+.gauge__meniscus{position:absolute;left:0;right:0;bottom:calc(var(--v,60) * 1% - 3px);height:4px;
+  background:linear-gradient(180deg,#E4EDE6,#BCD6D6);opacity:.95}
+.gauge__glare{position:absolute;left:6px;top:12%;width:3px;height:52%;border-radius:2px;
+  background:linear-gradient(180deg,rgba(246,235,218,.42),rgba(246,235,218,.06) 62%,transparent);}
+.gauge__ticks{position:absolute;inset:0;pointer-events:none}
+.gauge__ticks i{position:absolute;left:0;height:1px;background:rgba(26,20,16,.42)}
+.gauge__cap{position:absolute;left:0;right:0;height:16px;z-index:3;border-radius:4px;
+  background:linear-gradient(180deg,#C0A068 0%,#9A7B44 44%,#6B5330 100%);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6), 0 0 0 1px rgba(185,154,94,.8), 0 1px 2px rgba(26,20,16,.45);}
+.gauge__cap--t{top:0}
+.gauge__cap--b{bottom:0;background:linear-gradient(180deg,#B49258 0%,#8A6C3B 50%,#5E4826 100%)}
+.gauge__cap::after{content:'';position:absolute;left:22%;right:56%;top:2px;height:1px;background:rgba(246,235,218,.4)}
+.gauge__ring{position:absolute;left:50%;top:-11px;width:15px;height:15px;margin-left:-7.5px;border-radius:50%;
+  border:2.5px solid #9A7B44;box-shadow:0 0 0 1px rgba(58,44,30,.6), inset 0 0 0 1px rgba(58,44,30,.4)}
+
+/* ============================================================
+   この画面のために足した部品（盤・駒・枠列）
+   ============================================================ */
+/* — 盤：革と真鍮の枠に留めた採録帖のページ（駒はすべてこの上のDOM要素） — */
+.board{position:relative;padding:7px;border-radius:5px;
+  background:linear-gradient(176deg,#5A4830 0%,#4A3A26 46%,#3A2C1C 100%);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.62), 0 0 0 1px rgba(185,154,94,.82),
+    0 3px 0 rgba(26,20,16,.34), 0 12px 22px -10px rgba(20,15,10,.8);}
+.board::after{ /* 綴じの留め金（左右で揃えない） */
+  content:'';position:absolute;left:12px;top:-4px;width:26px;height:8px;border-radius:3px;z-index:4;
+  background:linear-gradient(180deg,#C9AC74,#8A6C3B 60%,#5E4826);
+  box-shadow:0 0 0 1px rgba(58,44,30,.6),0 1px 2px rgba(26,20,16,.5);}
+.page{position:relative;border-radius:2px;overflow:hidden;
+  background:linear-gradient(166deg,#F2E9D5 0%,#EDE2C8 44%,#E2D3B0 100%);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.45), inset 0 2px 6px -3px rgba(58,44,30,.5);}
+.page::after{ /* 顔料ムラ：駒の下 */
+  content:'';position:absolute;inset:0;pointer-events:none;z-index:1;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><filter id='m2'><feTurbulence type='fractalNoise' baseFrequency='0.014' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='300' height='300' filter='url(%23m2)'/></svg>");
+  background-size:300px 300px;mix-blend-mode:multiply;opacity:.24;}
+.grid{position:relative;z-index:2;display:grid;grid-template-columns:repeat(8,39px);grid-template-rows:repeat(8,39px)}
+.cell{position:relative;border-right:1px solid rgba(47,41,34,.26);border-bottom:1px solid rgba(47,41,34,.26);
+  display:grid;place-items:center}
+.cell:nth-child(8n){border-right:0}
+.grid > .cell:nth-child(n+57){border-bottom:0}
+.cell svg{width:30px;height:30px;position:relative;z-index:2}
+/* 駒の下の水彩のにじみ。線際で顔料が溜まり、内側は wet-in-wet でぼける（ART_GRAMMAR §1-6） */
+.cell::after{content:'';position:absolute;width:33px;height:33px;border-radius:50%;z-index:1;
+  background:radial-gradient(circle, var(--wash,transparent) 0 34%, transparent 74%)}
+.t-o{--wash:rgba(110,122,120,.26)} .t-l{--wash:rgba(126,142,82,.24)} .t-c{--wash:rgba(127,168,196,.26)}
+.t-r{--wash:rgba(126,106,142,.22)} .t-m{--wash:rgba(168,97,60,.20)} .t-G{--wash:rgba(154,123,68,.26)}
+.t-B{--wash:rgba(185,138,62,.30)}
+/* 特殊駒：真鍮の環をまとう */
+.cell.sp::before{content:'';position:absolute;width:34px;height:34px;border-radius:50%;
+  box-shadow:inset 0 0 0 2px rgba(154,123,68,.85), inset 0 0 0 3px rgba(58,44,30,.45);}
+/* 充填ずみ（爆発鉱石）：琥珀のにじみ。加算発光ではなく水彩の染み */
+.cell.hot::before{content:'';position:absolute;width:36px;height:36px;border-radius:50%;
+  background:radial-gradient(circle,rgba(185,138,62,.55) 0 34%,rgba(185,138,62,.16) 62%,transparent 74%);}
+/* 崩落予告の2×2：朱の墨で囲った予告 */
+.tele{position:absolute;z-index:5;border:2px dashed rgba(142,58,41,.85);border-radius:3px;
+  background:repeating-linear-gradient(45deg,rgba(196,85,62,.16) 0 5px,rgba(196,85,62,.05) 5px 10px);}
+.tele__n{position:absolute;right:-9px;top:-10px;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 36% 28%,#8E3B27 0 26%,#7A311F 56%,#5C2414 100%);
+  box-shadow:inset 0 0 0 1px rgba(46,24,16,.55),0 0 0 1px rgba(232,205,158,.45),0 1px 3px rgba(26,20,16,.5);
+  font-family:var(--num);font-weight:700;font-size:12px;color:#F6E7C8;}
+/* 原生種：ページの上に描かれた個体。セルの罫を跨ぐ */
+.beast{position:absolute;z-index:6;display:grid;place-items:center;pointer-events:none}
+.beast svg{width:100%;height:100%}
+/* 兆候の吹き出し（盤の駒に留まる。文字は自分の暗地の札の上） */
+.omen{position:absolute;z-index:7;display:flex;flex-direction:column;align-items:flex-start;gap:4px;
+  padding:6px 8px 7px;border-radius:4px;
+  background-image:var(--noise),linear-gradient(172deg,#4A3A26,#33271A);
+  background-size:130px 130px,auto;background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.65), 0 0 0 1px rgba(185,154,94,.78), 0 4px 9px -3px rgba(20,15,10,.8)}
+.omen::after{content:'';position:absolute;left:19px;bottom:-5px;width:9px;height:9px;transform:rotate(45deg);
+  background:#33271A;box-shadow:1px 1px 0 rgba(185,154,94,.7)}
+.omen__name{font-family:var(--min);font-weight:600;font-size:11.5px;letter-spacing:.06em;color:var(--ivory);line-height:1}
+.omen .chip--omen{box-shadow:inset 0 0 0 1px rgba(26,20,16,.6), 0 0 0 1px rgba(185,154,94,.55)}
+.pips{display:flex;gap:3px}
+
+/* — 知見の枠列（採録した知見＋空き枠） — */
+.slots{display:flex;gap:5px;justify-content:space-between}
+.slot{position:relative;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+  background:radial-gradient(circle at 37% 29%,#F1E7D1 0 38%,#E4D6B6 74%,#CFBE99 100%);
+  box-shadow:inset 0 0 0 2px #9A7B44, inset 0 0 0 3px rgba(58,44,30,.5), 0 0 0 1px rgba(185,154,94,.6), 0 1px 2px rgba(26,20,16,.45);}
+.slot svg{width:19px;height:19px}
+.slot--empty{background:linear-gradient(172deg,#33271A,#241B12);
+  box-shadow:inset 0 2px 3px rgba(20,14,10,.72), inset 0 0 0 1px rgba(58,44,30,.7), 0 0 0 1px rgba(185,154,94,.42);}
+.slot--empty::after{content:'';width:9px;height:1.5px;border-radius:1px;background:rgba(185,154,94,.5)}
+.slot__b{position:absolute;right:-3px;bottom:-3px;min-width:15px;height:15px;border-radius:999px;padding:0 3px;
+  display:grid;place-items:center;font-family:var(--num);font-weight:700;font-size:9.5px;color:#F1E4C6;
+  background:linear-gradient(172deg,#4A6155,#2C3A37);box-shadow:0 0 0 1px rgba(185,154,94,.7),0 1px 2px rgba(26,20,16,.5)}
+
+/* — 小さな真鍮の丸ボタン（メニュー） — */
+.iconbtn{position:relative;width:42px;height:42px;border:0;border-radius:50%;cursor:pointer;display:grid;place-items:center;
+  background-color:#C2AC84;
+  background-image:var(--noise),linear-gradient(180deg,#DCC79E 0%,#CEB88C 46%,#C2AC84 100%);
+  background-size:130px 130px,auto;background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.55), 0 0 0 1px rgba(185,154,94,.85), 0 3px 0 0 #6B5330, 0 5px 9px -4px rgba(26,20,16,.55);}
+.iconbtn i{display:block;width:17px;height:2px;border-radius:1px;background:#2E2415;
+  box-shadow:0 -5px 0 #2E2415, 0 5px 0 #2E2415}
+
+/* — 画面ごとの並べ方 — */
+.hud{display:flex;align-items:center;gap:9px}
+.hud .sp{flex:1}
+.blockrow{display:flex;gap:6px;align-items:stretch}
+.dock{position:absolute;left:14px;right:14px;bottom:14px}
+.ftbtns{display:flex;gap:9px;margin-top:10px}
+
+/* — 題字（タイトル画面） — */
+.logo{font-family:var(--min);font-weight:700;letter-spacing:.1em;color:#2F2922;line-height:1.28}
+.logo .l1{display:block;font-size:41px}
+.logo .l2{display:block;font-size:41px;margin-left:1.1em}
+.title-rule{display:flex;align-items:center;gap:10px;margin:16px 0 0}
+.title-rule .ln{flex:1;height:1px;background:rgba(47,41,34,.42)}
+.title-rule .dot{width:6px;height:6px;border-radius:50%;background:#9A7B44;box-shadow:0 0 0 1px rgba(58,44,30,.5)}
+/* 副題の墨は §06 の3サイズ実測で決めた。端末比が変わると cover の切り取りも変わり、
+   375×667 では副題が絵の暗い側（岩肌 luma 150）へ落ちて 3.23:1 まで下がる。
+   絵に紙色のもや（wash）を敷いて地を作る手も試したが、もやの縁が横一文字の継ぎ目になって
+   情景が濁った。そこで地ではなく墨を、いちばん暗い地に合わせて決める（ART_GRAMMAR §6.1）。 */
+.title-sub{display:inline-flex;align-items:center;margin-top:12px;padding:5px 13px 6px;border-radius:3px;
+  font-family:var(--got);font-weight:500;font-size:12.5px;letter-spacing:.22em;color:var(--ink-text);
+  background-image:var(--noise),linear-gradient(172deg,#EFE4CC,#DCCFB2);
+  background-size:130px 130px,auto;background-blend-mode:multiply,normal;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.42), 0 0 0 1px rgba(185,154,94,.62), 0 1px 3px rgba(26,20,16,.30);}
+.title-kv{font-family:var(--num);font-weight:600;font-size:10.5px;letter-spacing:.34em;color:#574833;text-transform:uppercase}  /* 6B5B44→574833：情景に直接載る唯一の小さな文字なので、実測の余裕を 4.78 から広げた */
+
+/* — 祝福カード：祝福と呪いを同じ大きさで — */
+.bless{display:flex;gap:9px;align-items:flex-start;margin:0}
+.bless + .bless{margin-top:9px;padding-top:9px;border-top:1px solid rgba(47,41,34,.22)}
+.bless__seal{flex:0 0 auto;width:26px;height:26px;border-radius:3px;display:grid;place-items:center;
+  font-family:var(--min);font-weight:700;font-size:13px;letter-spacing:0;margin-top:1px}
+.bless__seal--boon{color:#F6E7C8;background:linear-gradient(168deg,#4A6155,#2C3A37);
+  box-shadow:inset 0 0 0 1px rgba(26,20,16,.5),0 0 0 1px rgba(185,154,94,.7)}
+.bless__seal--bane{color:#F6E7C8;background:radial-gradient(circle at 36% 28%,#8E3B27 0 30%,#7A311F 62%,#5C2414 100%);
+  box-shadow:inset 0 0 0 1px rgba(46,24,16,.5),0 0 0 1px rgba(232,205,158,.42)}
+.bless__tx{flex:1;font-size:13px;line-height:1.72;color:var(--ink-text)}
+
+/* — 実測表 — */
+.audit-sec{margin-top:52px;border-top:1px solid rgba(185,154,94,.38);padding-top:26px}
+.audit-sec h2{font-family:var(--min);font-weight:600;font-size:19px;margin:0 0 8px;letter-spacing:.08em;color:#F1E4C6}
+.audit-sec .note{font-size:12.5px;line-height:1.9;color:#C0B294;max-width:120ch;margin:0 0 18px}
+.audit-sec .note b{color:#F1E4C6}
+.audit{width:100%;border-collapse:collapse;font-size:12px;background:rgba(241,231,209,.94);color:var(--ink-text)}
+.audit th,.audit td{padding:6px 10px;border-bottom:1px solid rgba(47,41,34,.2);text-align:left;vertical-align:middle}
+.audit th{font-family:var(--num);font-weight:600;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-soft);background:rgba(214,199,168,.7)}
+.audit td.n{font-family:var(--num);font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.audit .sw{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:6px;box-shadow:inset 0 0 0 1px rgba(47,41,34,.35)}
+.audit .scr{font-family:var(--num);font-weight:700;font-size:10px;letter-spacing:.06em;color:#6B5B44}
+.pass{color:#2F5A3C;font-weight:700}
+.fail{color:var(--danger-ink);font-weight:700}
+.verdict{margin-top:16px;padding:14px 18px;border-radius:4px;background:linear-gradient(172deg,#F1E7D1,#E4D6B6);color:var(--ink-text);
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.4),0 0 0 1px rgba(185,154,94,.7);font-size:13px;line-height:1.9}
+.verdict .num{font-size:15px}
+footer{margin-top:40px;border-top:1px solid rgba(185,154,94,.3);padding-top:14px;font-size:11.5px;color:#9A8767;line-height:1.9}
+</style><style>
+.hp{width:7px;height:7px;border-radius:50%;background:linear-gradient(172deg,#3A2D1D,#241B12);
+  box-shadow:inset 0 1px 1px rgba(20,14,10,.8),0 0 0 1px rgba(185,154,94,.5)}
+.hp.on{background:radial-gradient(circle at 36% 30%,#C4553E 0 34%,#8E3A29 68%,#6E2C1B 100%)}
+</style>
+<style>
+.sheet{width:auto;padding:30px 30px 36px}
+.pair{display:flex;gap:34px;align-items:flex-start}
+.col{width:390px}
+.col h3{font-family:var(--min);font-weight:600;font-size:17px;margin:0 0 3px;letter-spacing:.07em}
+.col .lead{font-size:11.5px;line-height:1.8;color:#B7A98C;margin:0 0 12px;height:56px}
+.col h3.bad{color:#E0A692}.col h3.good{color:#9FC1A4}
+.numbers{margin-top:14px;background:rgba(241,231,209,.94);border-radius:3px;overflow:hidden}
+.numbers table{width:100%;border-collapse:collapse;font-size:11.5px;color:var(--ink-text)}
+.numbers th,.numbers td{padding:5px 8px;border-bottom:1px solid rgba(47,41,34,.18);text-align:left}
+.numbers th{font-family:var(--num);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);
+  background:rgba(214,199,168,.72)}
+.numbers td.n{font-family:var(--num);font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.numbers .ng{color:#8E3A29;font-weight:700}.numbers .ok{color:#2F5A3C;font-weight:700}
+/* ── 左：絵に直接文字を置いた場合（v5 のやり方）。札を敷かず、影で読ませようとする ── */
+.raw{position:absolute;inset:0;padding:14px;color:#F1E4C6;
+  text-shadow:0 1px 2px rgba(20,14,10,.75), 0 2px 8px rgba(20,14,10,.55)}
+.raw .r-hd{display:flex;align-items:baseline;gap:10px}
+.raw .k{font-family:var(--min);font-weight:600;font-size:12.5px;letter-spacing:.12em}
+.raw .big{font-family:var(--num);font-weight:600;font-size:40px;line-height:1}
+.raw .med{font-family:var(--num);font-weight:600;font-size:23px;line-height:1}
+.raw h4{font-family:var(--min);font-weight:600;font-size:15px;letter-spacing:.09em;margin:22px 0 10px}
+.raw .g-name{font-family:var(--min);font-weight:600;font-size:14.5px;letter-spacing:.03em}
+.raw .g-sub{font-size:11.5px;line-height:1.55;color:#E4D6B6;display:block;margin-top:2px}
+.raw .g-val{font-family:var(--num);font-weight:600;font-size:21px}
+.raw .grow{display:flex;align-items:center;gap:11px;margin-bottom:12px}
+.raw .grow .sp{flex:1}
+.raw .btm{position:absolute;left:14px;right:14px;bottom:16px}
+.raw .btn-t{font-family:var(--min);font-weight:600;font-size:15.5px;letter-spacing:.1em;text-align:center;
+  display:block;padding:12px 0}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-crystal" viewBox="0 0 24 24">
+      <path d="M12 2.2 L17.3 9.1 L13.6 21.6 L8.0 20.9 L5.4 9.6 Z" fill="#7FA8C4" opacity=".72"/>
+      <path d="M12 2.2 L17.3 9.1 L13.6 21.6 L8.0 20.9 L5.4 9.6 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M12 2.4 L10.6 20.9 M5.5 9.5 L17.1 9.2" fill="none" stroke="#2F2922" stroke-width=".9" opacity=".8"/>
+      <path d="M12.4 4.6 L15.6 9.2 L13.4 15" fill="none" stroke="#EFE4CC" stroke-width="1.1" opacity=".55"/>
+    </symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24">
+      <path d="M19.4 3.6 C10.4 3.1 3.6 7.9 3.9 14.6 C4.1 18.4 6.6 20.6 9.4 20.4 C16.3 19.9 20.2 12.4 19.4 3.6 Z" fill="#7E8E52" opacity=".72"/>
+      <path d="M19.4 3.6 C10.4 3.1 3.6 7.9 3.9 14.6 C4.1 18.4 6.6 20.6 9.4 20.4 C16.3 19.9 20.2 12.4 19.4 3.6 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M18.6 4.4 C13.4 9.6 9.4 14.4 6.4 20.9 M15.2 7.2 L10.4 6.4 M12.6 10.8 L7.6 10.6 M10.2 14.4 L6.2 15" fill="none" stroke="#2F2922" stroke-width=".85" opacity=".72"/>
+    </symbol>
+    <symbol id="i-shroom" viewBox="0 0 24 24">
+      <path d="M3.2 11.6 C3.4 6.4 7.4 3.1 12.1 3.2 C16.9 3.3 20.7 6.8 20.7 11.7 C20.7 12.9 18.1 13.6 12 13.6 C5.7 13.6 3.2 12.8 3.2 11.6 Z" fill="#A8613C" opacity=".7"/>
+      <path d="M3.2 11.6 C3.4 6.4 7.4 3.1 12.1 3.2 C16.9 3.3 20.7 6.8 20.7 11.7 C20.7 12.9 18.1 13.6 12 13.6 C5.7 13.6 3.2 12.8 3.2 11.6 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M9.4 13.6 C9.2 17 9.0 19.2 8.2 21 L15.4 21 C14.6 19.1 14.4 16.9 14.3 13.6" fill="#DCCFBC" opacity=".85"/>
+      <path d="M9.4 13.6 C9.2 17 9.0 19.2 8.2 21 L15.4 21 C14.6 19.1 14.4 16.9 14.3 13.6" fill="none" stroke="#2F2922" stroke-width="1.2" stroke-linejoin="round"/>
+      <circle cx="8.4" cy="8.1" r="1.5" fill="#EFE4CC" opacity=".8"/><circle cx="14.4" cy="6.6" r="1.1" fill="#EFE4CC" opacity=".7"/><circle cx="16.6" cy="10" r=".9" fill="#EFE4CC" opacity=".6"/>
+    </symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24">
+      <path d="M12 3.1 L14.1 4.0 L16.4 3.3 L17.6 5.4 L19.9 6.1 L19.7 8.6 L21.1 10.6 L19.6 12.5 L19.8 15 L17.5 15.8 L16.4 18 L14 17.4 L12 18.6 L10 17.3 L7.7 17.9 L6.5 15.7 L4.3 14.9 L4.5 12.4 L3.1 10.5 L4.6 8.5 L4.4 6.1 L6.7 5.3 L7.9 3.2 L10.1 3.9 Z" fill="#9A7B44" opacity=".78"/>
+      <path d="M12 3.1 L14.1 4.0 L16.4 3.3 L17.6 5.4 L19.9 6.1 L19.7 8.6 L21.1 10.6 L19.6 12.5 L19.8 15 L17.5 15.8 L16.4 18 L14 17.4 L12 18.6 L10 17.3 L7.7 17.9 L6.5 15.7 L4.3 14.9 L4.5 12.4 L3.1 10.5 L4.6 8.5 L4.4 6.1 L6.7 5.3 L7.9 3.2 L10.1 3.9 Z" fill="none" stroke="#2F2922" stroke-width="1.25" stroke-linejoin="round"/>
+      <circle cx="12" cy="10.8" r="3.4" fill="#DCCFBC" opacity=".75"/>
+      <circle cx="12" cy="10.8" r="3.4" fill="none" stroke="#2F2922" stroke-width="1.15"/>
+    </symbol>
+    <symbol id="i-relic" viewBox="0 0 24 24">
+      <path d="M6.1 3.6 L18.2 4.1 L19.1 19.6 L5.2 20.3 Z" fill="#7E6A8E" opacity=".62"/>
+      <path d="M6.1 3.6 L18.2 4.1 L19.1 19.6 L5.2 20.3 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M8.4 7.6 L15.9 7.9 M8.6 11.2 L13.4 11.4 M8.8 14.8 L15.6 15" fill="none" stroke="#2F2922" stroke-width="1.05" opacity=".85"/>
+      <circle cx="15.8" cy="11.4" r="1.5" fill="#EFE4CC" opacity=".8" stroke="#2F2922" stroke-width=".9"/>
+    </symbol>
+    <symbol id="i-ore" viewBox="0 0 24 24">
+      <path d="M4.4 9.6 L9.1 3.4 L17.4 4.2 L20.2 11.4 L15.1 20.4 L6.6 19.2 Z" fill="#6E7A78" opacity=".72"/>
+      <path d="M4.4 9.6 L9.1 3.4 L17.4 4.2 L20.2 11.4 L15.1 20.4 L6.6 19.2 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M9.2 3.6 L11.4 10.9 L20 11.3 M11.4 10.9 L7 19.1" fill="none" stroke="#2F2922" stroke-width=".9" opacity=".7"/>
+      <circle cx="15.4" cy="8.1" r="1.3" fill="#B08C4E" opacity=".85"/><circle cx="9.6" cy="14.9" r="1" fill="#B08C4E" opacity=".7"/>
+    </symbol>
+    <symbol id="i-spore" viewBox="0 0 24 24">
+      <circle cx="12" cy="12.2" r="5.4" fill="#8FB7BE" opacity=".72"/>
+      <circle cx="12" cy="12.2" r="5.4" fill="none" stroke="#2F2922" stroke-width="1.25"/>
+      <path d="M12 1.9 L12 6.4 M12 18 L12 22.4 M2.1 12.2 L6.6 12.2 M17.6 12.2 L22 12.2 M5.2 5.1 L8.3 8.5 M15.8 15.9 L19.1 19.3 M18.9 5.2 L15.6 8.6 M8.4 15.9 L5.1 19.2" stroke="#2F2922" stroke-width=".95" stroke-linecap="round" opacity=".78"/>
+      <circle cx="10.4" cy="10.6" r="1.4" fill="#E4EDE6" opacity=".85"/>
+    </symbol>
+    <symbol id="i-lamp" viewBox="0 0 24 24">
+      <rect x="7.4" y="5.4" width="9.4" height="14.2" rx="3.4" fill="#8FB7BE" opacity=".7"/>
+      <rect x="7.4" y="5.4" width="9.4" height="14.2" rx="3.4" fill="none" stroke="#2F2922" stroke-width="1.25"/>
+      <path d="M6.6 5.4 L17.4 5.2 M6.8 19.6 L17.6 19.4" stroke="#2F2922" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M12 2.2 C10.2 2.4 9.6 3.6 9.8 5.2" fill="none" stroke="#2F2922" stroke-width="1.15" stroke-linecap="round"/>
+      <path d="M10 8.4 L10 16.4" stroke="#E4EDE6" stroke-width="1.5" stroke-linecap="round" opacity=".8"/>
+    </symbol>
+    <symbol id="i-blast" viewBox="0 0 24 24">
+      <path d="M4.4 9.6 L9.1 3.4 L17.4 4.2 L20.2 11.4 L15.1 20.4 L6.6 19.2 Z" fill="#8C7148" opacity=".8"/>
+      <path d="M4.4 9.6 L9.1 3.4 L17.4 4.2 L20.2 11.4 L15.1 20.4 L6.6 19.2 Z" fill="none" stroke="#2F2922" stroke-width="1.3" stroke-linejoin="round"/>
+      <path d="M12.4 6.1 L10.1 12.2 L13.6 12.4 L11 18.2" fill="none" stroke="#E8CE96" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="M12.4 6.1 L10.1 12.2 L13.6 12.4 L11 18.2" fill="none" stroke="#2F2922" stroke-width=".7" stroke-linejoin="round" opacity=".55"/>
+    </symbol>
+    <!-- 裂坑掘り：基底＝甲殻の環形／接木＝掘削肢。危険度は「開く器官の数」で示す（ART_GRAMMAR §7） -->
+    <symbol id="i-burrower" viewBox="0 0 64 40">
+      <path d="M9 22.6 C7.4 14.2 14.4 7.4 24.6 7.1 C38 6.7 49.4 11.6 55.6 18.4 C58.6 21.7 57.8 26.2 53.4 28.4 C45.6 32.3 32.4 34.4 21.4 33 C13.4 32 10.1 28.4 9 22.6 Z" fill="#6B5F4E" opacity=".9"/>
+      <path d="M9 22.6 C7.4 14.2 14.4 7.4 24.6 7.1 C38 6.7 49.4 11.6 55.6 18.4 C58.6 21.7 57.8 26.2 53.4 28.4 C45.6 32.3 32.4 34.4 21.4 33 C13.4 32 10.1 28.4 9 22.6 Z" fill="none" stroke="#2F2922" stroke-width="1.7" stroke-linejoin="round"/>
+      <path d="M20.6 8.2 C21.8 16.4 21.4 25.4 19.9 33 M29.4 7.4 C31 16.6 30.8 26 29.4 33.9 M38.4 8.6 C40.4 17 40.6 26 39.4 33.4 M47 12.1 C48.8 19 49 26.1 48.2 31.1" fill="none" stroke="#2F2922" stroke-width="1.05" opacity=".62"/>
+      <path d="M9.6 17.4 C5.4 14.4 3.4 10.6 3.9 6.1 M10.4 27.6 C6.1 29.4 3.6 32.6 3 36.6" fill="none" stroke="#2F2922" stroke-width="2" stroke-linecap="round"/>
+      <path d="M55.4 17.6 C59.6 14.4 61.8 11.4 62.6 7.6" fill="none" stroke="#2F2922" stroke-width="1.7" stroke-linecap="round"/>
+      <ellipse cx="16.4" cy="18.9" rx="3.4" ry="2.4" fill="#C4553E" opacity=".85"/>
+      <ellipse cx="16.4" cy="18.9" rx="3.4" ry="2.4" fill="none" stroke="#2F2922" stroke-width="1.1"/>
+      <path d="M13.4 16.1 L18.9 21.4 M18.9 16.4 L13.6 21.2" stroke="#2F2922" stroke-width=".8" opacity=".7"/>
+    </symbol>
+    <symbol id="i-gearsm" viewBox="0 0 24 24">
+      <path d="M12 3.4 L14.4 4.6 L17 4.1 L17.9 6.6 L20.2 7.9 L19.6 10.4 L20.6 12.6 L18.9 14.4 L18.6 17 L16.1 17.6 L14.4 19.4 L12 18.6 L9.6 19.4 L7.9 17.6 L5.4 17 L5.1 14.4 L3.4 12.6 L4.4 10.4 L3.9 7.9 L6.1 6.6 L7 4.1 L9.6 4.6 Z" fill="#9A7B44" opacity=".8"/>
+      <path d="M12 3.4 L14.4 4.6 L17 4.1 L17.9 6.6 L20.2 7.9 L19.6 10.4 L20.6 12.6 L18.9 14.4 L18.6 17 L16.1 17.6 L14.4 19.4 L12 18.6 L9.6 19.4 L7.9 17.6 L5.4 17 L5.1 14.4 L3.4 12.6 L4.4 10.4 L3.9 7.9 L6.1 6.6 L7 4.1 L9.6 4.6 Z" fill="none" stroke="#2F2922" stroke-width="1.25" stroke-linejoin="round"/>
+      <circle cx="12" cy="11.5" r="3.1" fill="#EFE4CC" opacity=".8"/><circle cx="12" cy="11.5" r="3.1" fill="none" stroke="#2F2922" stroke-width="1.1"/>
+    </symbol>
+    <symbol id="i-cog" viewBox="0 0 24 24">
+      <path d="M9.9 2.6 h4.2 l.5 2.4 2.1 .9 2.1-1.3 3 3 -1.3 2.1 .9 2.1 2.4 .5 v4.2 l-2.4 .5 -.9 2.1 1.3 2.1 -3 3 -2.1-1.3 -2.1 .9 -.5 2.4 h-4.2 l-.5-2.4 -2.1-.9 -2.1 1.3 -3-3 1.3-2.1 -.9-2.1 -2.4-.5 v-4.2 l2.4-.5 .9-2.1 -1.3-2.1 3-3 2.1 1.3 2.1-.9 Z" fill="none" stroke="#2E2415" stroke-width="1.6" stroke-linejoin="round" transform="scale(.86) translate(2,2)"/>
+      <circle cx="12" cy="12" r="3.2" fill="none" stroke="#2E2415" stroke-width="1.6"/>
+    </symbol>
+    <symbol id="i-book" viewBox="0 0 24 24">
+      <path d="M3.4 4.6 C6.9 3.4 9.6 3.9 12 5.4 C14.4 3.9 17.1 3.4 20.6 4.6 L20.6 19.4 C17.1 18.4 14.4 18.9 12 20.4 C9.6 18.9 6.9 18.4 3.4 19.4 Z" fill="none" stroke="#F1E4C6" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M12 5.4 L12 20.4" stroke="#F1E4C6" stroke-width="1.3"/>
+    </symbol>
+  </defs>
+</svg>
+<div class="sheet">
+
+<header class="doc-hd">
+  <div style="flex:0 0 auto"><div class="kv">yacho / mockups / v6 / proof</div>
+  <h1>現行実機 対 v6</h1></div>
+  <p>左は<b>いま動いている実機</b>（assets_src/r1_floor5.png ／ 深度5・390×844）。右は v6 の同じ層。
+  比べるのは絵の巧拙ではなく<b>構造</b>── 見出し帯があるか、同型の部品が反復しているか、数値が読める地に載っているか、
+  そして<b>絵がUIを兼ねていないか</b>。</p>
+</header>
+<div class="pair">
+  <div class="col">
+    <h3 class="bad">現行 ── 深度5</h3>
+    <p class="lead">現行も札は持っている（真鍮のゲージ・羊皮紙のカプセル）。ちがうのは<b>部品どうしが同じ文法で作られていない</b>こと。
+      見出し帯が無く、要素ごとに縁・角丸・地がちがう。駒は彩度と艶の強い別筆で、盤も暗いため焦点が決まらない。</p>
+    <div class="phone"><img src="r1_floor5.png" style="width:390px;height:844px;display:block"></div>
+  </div>
+  <div class="col">
+    <h3 class="good">v6 ── 同じ深度5</h3>
+    <p class="lead">見出し帯・同型の行・同じ角丸と縁で組み直したもの。情景は上半分に残し、
+      盤と札で下半分を覆う。文字はすべて自分の地の上にある。</p>
+    <div class="phone">
+    <div class="bg" style="background-image:url('scene_play.jpg');background-size:auto 240%;background-position:58% 0%"></div>
+    <div class="scrim" style="background:linear-gradient(180deg,
+        rgba(30,25,18,0) 0%, rgba(30,25,18,.05) 24%, rgba(28,23,17,.20) 38%,
+        rgba(26,21,16,.56) 60%, rgba(22,18,13,.84) 80%, rgba(20,16,12,.90) 100%)"></div>
+
+    <div class="ui">
+      <!-- HUD -->
+      <div class="hud">
+        <span class="med grain"><span class="med__well"><span class="med__k" data-a="メダリオン見出し語">深度</span><span class="med__n" data-a="メダリオン数値（深度）">5</span></span></span>
+        <span class="chip chip--act" data-a="幕チップ（暗地）">第一幕</span>
+        <span class="sp"></span>
+        <span class="plaque plaque--dark grain" style="padding:7px 13px 8px">
+          <span class="k" data-a="札の見出し語（暗地）">残灯</span><span class="num num--l" data-a="残灯の数値（大・暗地の札）">66</span>
+        </span>
+        <button class="iconbtn" aria-label="メニュー"><i></i></button>
+      </div>
+
+      <!-- 課目 -->
+      <div class="panel grain" style="margin-top:10px">
+        <div class="panel__hd"><h3 data-a="パネル見出し帯">本層の課目</h3><span class="sp"></span><span class="sub" data-a="見出し帯・補助">空明かり ／ 深度 5</span></div>
+        <div class="panel__bd" style="padding:0">
+          <div class="list">
+            <div class="row">
+              <span class="row__ic" style="box-shadow:inset 0 0 0 2px #8E3A29, inset 0 0 0 3px rgba(26,20,16,.42), inset 0 -2px 3px -1px rgba(58,44,30,.25), 0 0 0 1px rgba(185,154,94,.5)">
+                <svg style="width:22px;height:22px" viewBox="0 0 64 40"><use href="#i-burrower"/></svg>
+              </span>
+              <span class="row__tx">
+                <span class="row__name" data-a="課目の名前">掃討</span>
+                <span class="row__sub" data-a="課目の補助文">裂坑掘り 1体。倒すまで層は明けない</span>
+              </span>
+              <span class="row__val"><span class="k">あと</span><span class="num num--m" data-a="課目の残数（中）">1</span></span>
+            </div>
+            <div class="row">
+              <span class="row__ic"><svg><use href="#i-leaf"/></svg></span>
+              <span class="row__tx">
+                <span class="row__name">植物標本</span>
+                <span class="row__sub">葉と茸のどちらでも進む</span>
+              </span>
+              <span class="row__val"><span class="k">あと</span><span class="num num--m">41</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 盤＋灯のガラス管。ここより上（課目パネルの下）は情景をそのまま見せる帯 -->
+      <div class="blockrow" style="position:absolute;left:14px;right:14px;top:340px">
+        <div class="gauge" style="--w:30px;--h:326px;--v:66;flex:0 0 auto">
+          <div class="gauge__ring"></div>
+          <div class="gauge__tube">
+            <div class="gauge__fill"></div><div class="gauge__meniscus"></div><div class="gauge__glare"></div>
+            <div class="gauge__ticks">
+              <i style="bottom:12%;width:8px"></i><i style="bottom:25%;width:5px"></i><i style="bottom:38%;width:8px"></i>
+              <i style="bottom:51%;width:5px"></i><i style="bottom:64%;width:8px"></i><i style="bottom:77%;width:5px"></i><i style="bottom:90%;width:8px"></i>
+            </div>
+          </div>
+          <div class="gauge__cap gauge__cap--t"></div><div class="gauge__cap gauge__cap--b"></div>
+        </div>
+        <div class="board" id="board">
+          <div class="page grain"><div class="grid" id="grid"></div></div>
+        </div>
+      </div>
+
+      <!-- 知見の枠列＋採録帖 -->
+      <div class="dock">
+        <div class="panel grain">
+          <div class="panel__hd"><h3>採録した知見</h3><span class="sp"></span><span class="sub"><span class="num" style="font-size:13px">5</span> ／ <span class="num" style="font-size:13px">8</span> 枠</span></div>
+          <div class="panel__bd" style="padding:12px 12px 13px">
+            <div class="slots">
+              <span class="slot"><svg><use href="#i-leaf"/></svg><span class="slot__b" data-a="枠の呼応バッジ">2</span></span>
+              <span class="slot"><svg><use href="#i-shroom"/></svg><span class="slot__b">1</span></span>
+              <span class="slot"><svg><use href="#i-gearsm"/></svg><span class="slot__b">3</span></span>
+              <span class="slot"><svg><use href="#i-gearsm"/></svg><span class="slot__b">2</span></span>
+              <span class="slot"><svg><use href="#i-crystal"/></svg><span class="slot__b">1</span></span>
+              <span class="slot slot--empty"></span>
+              <span class="slot slot--empty"></span>
+              <span class="slot slot--empty"></span>
+            </div>
+            <div class="ftbtns">
+              <button class="btn btn--sm btn--wood" style="flex:1"><span class="txt" data-a="小ボタン（木・暗地）">採録帖をひらく</span></button>
+              <button class="btn btn--sm" style="flex:0 0 auto"><span class="txt" data-a="小ボタン（真鍮・明地）">深度図</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+
+</div>
+<style>
+.hp{width:7px;height:7px;border-radius:50%;background:linear-gradient(172deg,#3A2D1D,#241B12);
+  box-shadow:inset 0 1px 1px rgba(20,14,10,.8),0 0 0 1px rgba(185,154,94,.5)}
+.hp.on{background:radial-gradient(circle at 36% 30%,#C4553E 0 34%,#8E3A29 68%,#6E2C1B 100%)}
+</style>
+<script>
+const LAYOUT=[
+ 'lcomlrco',
+ 'clromcGm',
+ 'omlcromc',
+ 'rccmlomr',
+ 'colmEclm',
+ 'mrcolBmo',
+ 'lomcrlco',
+ 'cmlorocl',
+];
+const SYM={o:'i-ore',l:'i-leaf',c:'i-crystal',r:'i-relic',m:'i-shroom',G:'i-gear',B:'i-blast'};
+const CELL=39;
+const grid=document.getElementById('grid');
+LAYOUT.forEach((row,y)=>{
+  [...row].forEach((ch,x)=>{
+    const d=document.createElement('div');
+    d.className='cell'+(ch==='E'?'':' t-'+ch)+(ch==='G'?' sp':'')+(ch==='B'?' hot':'');
+    if(ch!=='E'){
+      /* 手で置いた標本に見せるための微差（完全な平行・等間隔はテンプレの署名 ART_GRAMMAR §6.3）。
+         決定的な式なので、描き直しても同じ位置に落ちる */
+      const rot=(((x*7+y*13)%9)-4)*1.15;
+      const dx=(((x*5+y*3)%5)-2)*0.55, dy=(((x*3+y*7)%5)-2)*0.55;
+      d.innerHTML='<svg style="transform:rotate('+rot.toFixed(2)+'deg) translate('+dx.toFixed(2)+'px,'+dy.toFixed(2)+'px)"><use href="#'+SYM[ch]+'"/></svg>';
+    }
+    grid.appendChild(d);
+  });
+});
+/* 崩落予告の2×2（自分から遠い隅）。盤の座標から算出して重ねる */
+const board=document.getElementById('board');
+function place(el,x,y,w,h){el.style.left=(7+x*CELL)+'px';el.style.top=(7+y*CELL)+'px';el.style.width=(w*CELL)+'px';el.style.height=(h*CELL)+'px';board.appendChild(el);}
+const tele=document.createElement('div');
+tele.className='tele'; tele.innerHTML='<span class="tele__n" data-a="崩落予告の残り手">2</span>';
+place(tele,1,6,2,2);
+/* 原生種：セルの罫を跨いで描かれる（絵から取らず、部品として作る） */
+const beast=document.createElement('div');
+beast.className='beast';
+beast.innerHTML='<svg viewBox="0 0 64 40"><use href="#i-burrower"/></svg>';
+place(beast,3.35,3.85,2.3,1.35);
+/* 兆候：盤上の個体に留まる札。動作名＋残り手（PHASE2 §3）。文字は自分の暗地の札の上にある */
+const omen=document.createElement('div');
+omen.className='omen';
+omen.innerHTML=
+  '<span class="omen__name" data-a="原生種の名前（盤上・暗地）">裂坑掘り</span>'+
+  '<span class="chip chip--omen chip--sm" data-a="兆候チップ（盤上・暗地）">崩落 <span class="n">2</span></span>'+
+  '<span class="pips"><i class="hp on"></i><i class="hp on"></i><i class="hp on"></i><i class="hp on"></i><i class="hp"></i><i class="hp"></i></span>';
+omen.style.left=(7+2.55*CELL)+'px'; omen.style.top=(7+2.16*CELL)+'px';
+board.appendChild(omen);
+
+
+</script>
+</body></html>
