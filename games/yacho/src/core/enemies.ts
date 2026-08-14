@@ -88,7 +88,7 @@ export function enemyIntent(e: EnemyInstance): EnemyIntent {
     case 'rockshell':     return { kind: 'armor', turns, label: '甲殻' }
     case 'sporeling':     return { kind: 'devour', turns, cells: e.markAt ? [e.markAt] : undefined, label: e.markAt ? '捕食' : '目星' }
     case 'burrower':      return { kind: 'fissure', turns, cells: e.telegraph ?? undefined, label: e.telegraph ? '崩落' : '掘削' }
-    case 'breathstealer': return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.breathstealer, label: `酸素-${OXYGEN_DRAIN.breathstealer}` }
-    case 'boss':          return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.boss, label: `酸素-${OXYGEN_DRAIN.boss}` }
+    case 'breathstealer': return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.breathstealer, label: `酸素−${OXYGEN_DRAIN.breathstealer}` }
+    case 'boss':          return { kind: 'drain', turns, oxygen: OXYGEN_DRAIN.boss, label: `酸素−${OXYGEN_DRAIN.boss}` }
   }
 }

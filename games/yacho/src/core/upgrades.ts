@@ -111,8 +111,8 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: 'toxic-spore',
     name: '毒胞子',
-    desc: '胞子が敵のとなりで消えると、その敵に3ダメージ',
-    starterDesc: 'おまけ: 敵のとなりに胞子を1つ置く',
+    desc: '胞子が原生種のとなりで消えると、その原生種に3ダメージ',
+    starterDesc: 'おまけ: 原生種のとなりに胞子を1つ置く',
     hooks: [{ on: 'sporeTouch', act: (_spore, neighbor, ctx) => ctx.damageEnemy(neighbor, 3) }],
     consumes: ['spore'],
     produces: ['enemy-damage'],
@@ -198,7 +198,7 @@ export const UPGRADES: UpgradeDef[] = [
     name: '採掘慣れ',
     // 夜間監査[C]6：説明は「敵の甲殻と岩に追加2ダメージ」だったが、実装は全鉱物マッチで最寄りの任意敵へ2ダメージ。
     // 専用API（甲殻/岩ブロック限定）を新設するのは過剰実装のため、実装に文を合わせる（小さく直す）。
-    desc: '鉱物をそろえて消すと、最寄りの敵に2ダメージ',
+    desc: '鉱物をそろえて消すと、最寄りの原生種に2ダメージ',
     hooks: [{ on: 'match', system: 'mineral', act: (_g, ctx) => ctx.damageEnemy('nearest', 2) }],
     consumes: [],
     produces: ['enemy-damage'],
@@ -312,7 +312,7 @@ export const UPGRADES: UpgradeDef[] = [
   {
     id: MIMIC_SLIME_ID,
     name: '模倣の粘菌',
-    desc: '遺物を3つ以上消すと、直前の強化か特殊駒の効果がもう一度おきる',
+    desc: '遺物を3つ以上消すと、直前の知見か特殊駒の効果がもう一度おきる',
     starterDesc: 'おまけ: 遺物を1つ置く',
     hooks: [{ on: 'match', system: 'relic', minSize: 3, act: (_g, ctx) => ctx.replayLast() }],
     consumes: ['relic-match'],

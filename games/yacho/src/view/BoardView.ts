@@ -2002,7 +2002,7 @@ export class BoardView {
           this.makeFissureFrame(e.id, e.cells, t)
           if (disruptLabelCount < 2) {
             disruptLabelCount++
-            this.floatLabelFx(e.cells[0], 'ほうらくよこく', 0xcbb28a, t + 160)
+            this.floatLabelFx(e.cells[0], '崩落の予兆', 0xcbb28a, t + 160)
           }
           t += 240
           break
@@ -2020,7 +2020,7 @@ export class BoardView {
             if (cells?.length) {
               const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
               const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
-              this.floatLabelFx({ x: cx, y: cy }, `さんそをうばわれた！ -${e.amount}`, 0xff6b5a, t + 100, -0.25)
+              this.floatLabelFx({ x: cx, y: cy }, `酸素を奪われた −${e.amount}`, 0xff6b5a, t + 100, -0.25)
             }
           }
           delay(t, () => this.onOxygenDrained?.(e.id, e.amount))

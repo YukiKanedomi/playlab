@@ -102,13 +102,9 @@ const RESOURCE_LABEL: Record<Resource, string> = {
   special: '特殊駒',
   plant: '植物の駒',
   'relic-match': '遺物の共鳴',
-  'enemy-damage': '敵へのダメージ',
+  'enemy-damage': '原生種へのダメージ',
 }
-/** カード本文「効果」の要約（接続一文に埋め込む短縮版。読点までを最大16字で切る） */
-function shortEffect(def: UpgradeDef): string {
-  const head = splitDesc(def.desc).effect.split('、')[0]
-  return head.length > 16 ? head.slice(0, 16) + '…' : head
-}
+// 呼応の一文が「Aが胞子を生む → Bが使う」形になり、効果文を埋め込まなくなったため shortEffect() は削除した（PHASE2 §3）
 interface ConnectionInfo {
   count: number
   sentence: string | null
@@ -135,10 +131,10 @@ function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): Connecti
     let sentence = ''
     if (produced) {
       kind = 'produce'
-      sentence = `${o.name}で作る${RESOURCE_LABEL[produced]} → この強化で${shortEffect(candidate)}`
+      sentence = `${o.name}が${RESOURCE_LABEL[produced]}を生む → この知見が使う`
     } else if (consumed) {
       kind = 'consume'
-      sentence = `この強化が作る${RESOURCE_LABEL[consumed]} → ${o.name}が使う`
+      sentence = `この知見が${RESOURCE_LABEL[consumed]}を生む → ${o.name}が使う`
     }
     // 同トリガ・同系統は「近縁」であって因果の接続ではないため数えない（監査[C]5）
     if (!kind) continue
@@ -525,33 +521,33 @@ const ENEMY_INFO: Record<EnemyKind, EnemyInfoEntry> = {
 
 const SPECIAL_PIECE_LIST: { key: string; name: string; text: string }[] = [
   { key: 'harpoon', name: '銛（レンチ銛）', text: '駒の向きに合わせて、1列または1行をまとめて消す。' },
-  { key: 'hamushi', name: '羽虫（コンパス甲虫）', text: '離陸地点の周囲を壊してから、目標へ飛んで壊す。' },
+  // 「目標」は課目（層の達成目標）と紛れるため、用語集 sp-hamushi と同じ「狙った1マス」に揃えた
+  { key: 'hamushi', name: '羽虫（コンパス甲虫）', text: '離陸地点の周囲を壊してから、狙った1マスへ飛んで壊す。' },
   { key: 'hitsubo', name: '火壺（歯車爆弾）', text: '着地点を中心に5×5マスを壊す。' },
   { key: 'seiju', name: '星珠（探窟ランタン）', text: '盤面でいちばん多い色をすべて消す。' },
 ]
 
-/** 強化：プレイ中・ドラフト所持欄で共通（[C]表：名前・系統・条件→効果・進捗・獲得ボーナス） */
+/** 知見：プレイ中・採録の手持ち欄で共通（[C]表：名前・系統・起きること・進捗・採録時のおまけ） */
 function buildUpgradeEntry(def: UpgradeDef, run: RunState): FieldNoteEntry {
   const cat = UPGRADE_CATEGORY[def.id]
-  const { condition, effect } = splitDesc(def.desc)
   const blocks: FieldNoteBlock[] = [{ kind: 'row', label: '系統', text: CATEGORY_LABEL[cat] ?? '' }]
-  if (condition) blocks.push({ kind: 'row', label: '条件', text: condition })
-  blocks.push({ kind: 'row', label: '効果', text: effect })
+  // PHASE2 §3：「条件／効果」という開発データの露出をやめ、descを「起きること」1段で通しで読ませる
+  blocks.push({ kind: 'row', label: '起きること', text: def.desc })
   const progress = run.progress[def.id]
   if (progress) blocks.push({ kind: 'row', label: '進捗', text: `${Math.min(progress.cur, progress.max)} / ${progress.max}` })
-  if (def.starterDesc) blocks.push({ kind: 'row', label: '獲得ボーナス', text: def.starterDesc.replace(/^おまけ[:：]\s*/, '') })
-  return { noteKey: `upgrade:${def.id}`, kindLabel: '強化', title: def.name, icon: (size) => makeUpgradeIconContainer(def.id, size), blocks }
+  if (def.starterDesc) blocks.push({ kind: 'row', label: '採録時のおまけ', text: def.starterDesc.replace(/^おまけ[:：]\s*/, '') })
+  return { noteKey: `upgrade:${def.id}`, kindLabel: '知見', title: def.name, icon: (size) => makeUpgradeIconContainer(def.id, size), blocks }
 }
 
 /** 所持強化 一覧：ドラフトv2の所持ストリップ「一覧」ボタンから開く（[D]：所持欄の`一覧`で全画面のビルド一覧） */
 function buildOwnedListEntry(owned: UpgradeDef[]): FieldNoteEntry {
   const blocks: FieldNoteBlock[] = owned.length
     ? [{ kind: 'items', items: owned.map((u) => ({ icon: (size: number) => makeUniqueUpgradeIcon(u.id, size), title: u.name, text: splitDesc(u.desc).effect })) }]
-    : [{ kind: 'text', text: 'まだ強化を所持していません。' }]
+    : [{ kind: 'text', text: 'まだ知見を採録していません。' }]
   return {
     noteKey: 'owned-list',
-    kindLabel: '所持強化',
-    title: `所持強化 一覧（${owned.length}）`,
+    kindLabel: '手持ちの知見',
+    title: `手持ちの知見 一覧（${owned.length}）`,
     icon: (size) => (owned[0] ? makeUniqueUpgradeIcon(owned[0].id, size) : makeTermIconContainer(size)),
     blocks,
   }
@@ -578,16 +574,16 @@ function buildSpecialPieceEntry(): FieldNoteEntry {
 function buildEnemyEntry(enemy: EnemyInstance): FieldNoteEntry {
   const info = ENEMY_INFO[enemy.kind]
   const intent = enemyIntent(enemy)
-  const nextText = intent.kind === 'none' ? '動かない' : `あと${intent.turns}手：${intent.label}`
+  const nextText = intent.kind === 'none' ? '動かない' : `${intent.label}　あと${intent.turns}手`
   const blocks: FieldNoteBlock[] = [
     { kind: 'row', label: 'HP', text: `${Math.max(0, enemy.hp)} / ${enemy.maxHp}` },
-    { kind: 'row', label: '次行動', text: nextText },
+    { kind: 'row', label: '兆候', text: nextText },
   ]
   // 酸素を奪わない敵に「与ダメージ：なし」を出すと妨害屋であることが伝わらないので、行ごと省く
   if (info.oxygenDesc) blocks.push({ kind: 'row', label: '与ダメージ', text: info.oxygenDesc })
   blocks.push({ kind: 'row', label: '妨害', text: info.disruptDesc ?? '妨害は行わない' })
   blocks.push({ kind: 'row', label: '倒し方', text: info.defeatDesc })
-  return { noteKey: `enemy:${enemy.id}`, kindLabel: '敵', title: info.name, icon: (size) => makeEnemyIconContainer(enemy.kind, size), blocks }
+  return { noteKey: `enemy:${enemy.id}`, kindLabel: '原生種', title: info.name, icon: (size) => makeEnemyIconContainer(enemy.kind, size), blocks }
 }
 
 /** 用語：本文・ドラフトカード中の用語リンクから開く（[C]表：2〜3行の定義＋小図。図はアイコンで代替） */
@@ -883,7 +879,7 @@ async function boot() {
     const bestW = vw * 0.42
     header.addChild(plaque(bestX, bestW))
     const bestT = new Text({
-      text: `さいこう とうたつ ${loadRogueBest()}そう`,
+      text: `最深記録　深度${loadRogueBest()}`,
       style: { fill: 0xd8b855, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' },
     })
     bestT.anchor.set(0.5)
@@ -892,7 +888,7 @@ async function boot() {
     mapRoot.addChild(header)
 
     // 中央「ランかいし」ボタン（拠点の主導線。ROGUE.md §8）
-    const startBtn = makeCoveredButton('ランかいし', 'next_forest', vw * 0.58)
+    const startBtn = makeCoveredButton('探窟へ', 'next_forest', vw * 0.58)
     startBtn.position.set(vw / 2, vh * 0.5)
     startBtn.eventMode = 'static'
     startBtn.cursor = 'pointer'
@@ -1448,59 +1444,115 @@ async function boot() {
       }
       return c
     }
-    // ボス層（目標＝ボス撃破1件のみ）では目標バーを出さない。左チップの「匣 n/4 → HP n/m」と
+    // ボス層（課目＝ボス撃破1件のみ）では課目バーを出さない。左チップの「匣 n/4 → HP n/m」と
     // 盤面のボスゲージが同じことを語っており、『掃討 0/1』は層クリアまで一度も動かない純粋なノイズになるため。
     const bossOnlyGoal = board.goals.length === 1 && board.goals[0].type === 'enemy-kill' && board.enemies.some((e) => e.kind === 'boss')
     if (!bossOnlyGoal) {
       const n = board.goals.length
-      const goalGap = vw * 0.03
-      const goalChipW = Math.min(vw * 0.44, (vw * 0.9 - goalGap * (n - 1)) / Math.max(1, n))
-      const totalW = goalChipW * n + goalGap * (n - 1)
-      const startX = (vw - totalW) / 2
+      // [F]§2「課目：分数をやめ、残りを読む」：黒いカプセルを個別に置くのをやめ、羊皮紙一枚の中へ最大2つ納める。
+      // 分数（9/50）は残り作業量の逆算を強いるので、通常時は残数（あと41）だけを出し、長押しのあいだだけ分数を補助表示する。
+      const entryW = Math.min(vw * 0.52, (vw * 0.92) / Math.max(1, n))
+      const sheetW = entryW * n
+      const sheetX = (vw - sheetW) / 2
+      const sheet = new Graphics()
+      sheet.roundRect(0, 0, sheetW, goalBarH, goalBarH * 0.16).fill({ color: UI.paper, alpha: 0.95 }).stroke({ width: 2, color: UI.brass, alpha: 0.9 })
+      if (n > 1) {
+        // 二つ並ぶときだけ、紙の折り目にあたる縦罫を1本入れて「どちらの残数か」を分ける
+        for (let i = 1; i < n; i++) sheet.moveTo(i * entryW, goalBarH * 0.18).lineTo(i * entryW, goalBarH * 0.82)
+        sheet.stroke({ width: 1, color: UI.paperInk, alpha: 0.3 })
+      }
+      sheet.position.set(sheetX, goalBarY)
+      ui.addChild(sheet)
       board.goals.forEach((g, i) => {
         const root = new Container()
-        const bg = new Graphics()
-        bg.roundRect(0, 0, goalChipW, goalBarH, goalBarH * 0.3)
-          .fill({ color: 0x241a10, alpha: 0.92 })
-          .stroke({ width: 2, color: UI.brass })
-        root.addChild(bg)
-        const icon = makeGoalIcon(g, goalBarH * 0.74)
-        icon.position.set(goalBarH * 0.62, goalBarH / 2)
+        const icon = makeGoalIcon(g, goalBarH * 0.7)
+        icon.position.set(goalBarH * 0.56, goalBarH / 2)
         root.addChild(icon)
         // 数字は先に作って実幅を測る（2桁と3桁で幅が変わるため、ラベルの取り分は数字の実測から決める）
         const numFont = goalBarH * 0.42
-        const num = new Text({ text: `0 / ${g.count}`, style: { fill: 0xf4e8cf, fontSize: numFont, fontFamily: FONT, fontWeight: 'bold' } })
+        const num = new Text({ text: `あと${g.count}`, style: { fill: UI.paperInk, fontSize: numFont, fontFamily: FONT, fontWeight: 'bold' } })
         num.anchor.set(1, 0.5)
-        const numRight = goalChipW - goalBarH * 0.26
+        const numRight = entryW - goalBarH * 0.24
         num.position.set(numRight, goalBarH / 2)
-        const numMaxW = goalChipW * 0.42 // 桁が増えてもチップ幅の4割を超えさせない（左のラベルを食い潰さない）
+        const numMaxW = entryW * 0.44 // 桁が増えても枠幅の4割強を超えさせない（左のラベルを食い潰さない）
         const fitNum = () => {
           num.scale.set(1)
           if (num.width > numMaxW) num.scale.set(numMaxW / num.width)
         }
         fitNum()
         root.addChild(num)
-        const labelX = goalBarH * 1.05
+        // 植物標本アイコンは葉＋茸を左右にずらして重ねるぶん実幅が size の約1.3倍ある。ラベルの左端はその外側に置く
+        const labelX = goalBarH * 1.14
         const label = new Text({
-          text: GOAL_LABEL[g.type] ?? '目標',
-          style: { fill: 0xcbb98a, fontSize: goalBarH * 0.3, fontFamily: FONT, fontWeight: 'bold' },
+          text: GOAL_LABEL[g.type] ?? '課目',
+          style: { fill: UI.paperInk, fontSize: goalBarH * 0.3, fontFamily: FONT, fontWeight: 'bold' },
         })
         label.anchor.set(0, 0.5)
+        label.alpha = 0.82 // ラベルは残数より一段降ろす（読み順＝アイコン→残数）
         label.position.set(labelX, goalBarH / 2)
         // ラベルは「数字の左端まで」に必ず収める（溢れたら縮める。改行させないのは1行バーだから）
-        const labelMaxW = Math.max(goalBarH * 0.6, numRight - numMaxW - goalBarH * 0.18 - labelX)
+        const labelMaxW = Math.max(goalBarH * 0.6, numRight - numMaxW - goalBarH * 0.16 - labelX)
         if (label.width > labelMaxW) label.scale.set(labelMaxW / label.width)
         root.addChild(label)
-        root.position.set(startX + i * (goalChipW + goalGap), goalBarY)
+        // 完了印：数字を0にせず金の採録印へ変える（[F]§2）。押印は300msだけ跳ねる
+        const sealR = goalBarH * 0.3
+        const seal = new Container()
+        const sealG = new Graphics()
+        sealG.circle(0, 0, sealR).fill({ color: 0xd8a12a, alpha: 0.96 }).stroke({ width: Math.max(1.5, sealR * 0.14), color: 0x8a5a12, alpha: 0.9 })
+        const sealT = new Text({ text: '採', style: { fill: 0x3a2408, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+        sealT.anchor.set(0.5)
+        seal.addChild(sealG, sealT)
+        seal.position.set(numRight - sealR, goalBarH / 2)
+        seal.rotation = -0.12 // 手で押した傾き
+        seal.visible = false
+        root.addChild(seal)
+        root.position.set(sheetX + i * entryW, goalBarY)
         ui.addChild(root)
+
+        let curV = 0
+        let ratioMode = false // 長押し中だけ true（分数の補助表示）
+        let sealed = false
+        const paint = (v: number) => {
+          if (v >= g.count) {
+            if (sealed) return
+            sealed = true
+            num.visible = false
+            seal.visible = true
+            seal.scale.set(0)
+            tw.tween(seal.scale, { x: 1, y: 1 }, 300, { ease: tw.easeOutBack })
+            return
+          }
+          num.text = ratioMode ? `${v} / ${g.count}` : `あと${g.count - v}`
+          fitNum()
+        }
+        // 長押しで分数を出す。課目バーは盤面の外なので、盤面のスワイプ判定（toCellがnullを返す）とは競合しない
+        root.eventMode = 'static'
+        root.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= entryW && y >= 0 && y <= goalBarH }
+        let holding = false
+        root.on('pointerdown', () => {
+          holding = true
+          tw.delay(400, () => {
+            if (!alive() || !holding || num.destroyed || ratioMode) return
+            ratioMode = true
+            paint(curV)
+          })
+        })
+        const releaseHold = () => {
+          holding = false
+          if (!ratioMode) return
+          ratioMode = false
+          if (!num.destroyed) paint(curV)
+        }
+        root.on('pointerup', releaseHold)
+        root.on('pointerupoutside', releaseHold)
+
         goalChips.push({
           root,
           icon,
           setValue: (v: number) => {
             if (num.destroyed) return
-            num.text = `${v} / ${g.count}`
-            fitNum()
-            num.style.fill = v >= g.count ? 0xf2c14e : 0xf4e8cf // 達成した目標は金字で「もう触らなくていい」と示す
+            curV = v
+            paint(v)
           },
         })
       })
@@ -1774,7 +1826,7 @@ async function boot() {
       divider.moveTo(panelW * 0.06, rowH * 2).lineTo(panelW * 0.94, rowH * 2).stroke({ width: 1.5, color: UI.brass, alpha: 0.5 })
       panel.addChild(divider)
       const abandonRow = new Text({
-        text: 'ランを中断して拠点へ',
+        text: '探窟を切りあげて拠点へ',
         style: { fill: 0xe0a89c, fontSize: fs(0.034), fontFamily: FONT, fontWeight: 'bold' },
       })
       abandonRow.anchor.set(0, 0.5)
@@ -1815,15 +1867,16 @@ async function boot() {
         // （「残敵 3」と「掃討 1/4」で同じ盤面を逆向きの2つの数字で語るのをやめる）
         enemyChip.setText(wipeKindName)
       } else {
-        enemyChip.setText(`残敵 ${info.aliveCount}`)
+        enemyChip.setText(`原生種 のこり${info.aliveCount}`)
       }
       const lethal = run.oxygen > 0 && info.nextOxygenLoss > 0 && run.oxygen - info.nextOxygenLoss <= 0
       if (lethal) {
         actionChip.setText(`あと${info.minTurns ?? 1}手\n遭難`, 0xff8a70)
       } else if (info.minTurns !== null) {
         // 妨害しかしない敵でもチップが必ず語る（外すと10層中8層が「静観中」になる）。
-        // 改行は自分で入れる：自動折返しに任せると『酸素-3』が『酸／素-3』と語の途中で割れる
-        actionChip.setText(`あと${info.minTurns}手\n${info.nextLabel ?? '妨害'}`, info.nextOxygenLoss > 0 ? 0xff8a70 : UI.badgeText)
+        // PHASE2 §3「兆候は動作名＋残り手（崩落 2）」。区切りは全角空白：半角だと『酸素−3 3』が
+        // 『酸素−33』と1つの数に見えてしまう（折り返してもこの位置で割れるので語の途中では切れない）
+        actionChip.setText(`${info.nextLabel ?? '妨害'}　${info.minTurns}`, info.nextOxygenLoss > 0 ? 0xff8a70 : UI.badgeText)
       } else if (info.idleCount > 0) {
         // 定期行動を持たない敵（小型胞子虫）しかいない層で「静観中」と出すのは無内容。
         // 真で、かつ手を変える事実＝「4個以上のまとめ消しで倒すと隣へ伝播する」を出す
@@ -1964,7 +2017,7 @@ async function boot() {
     const noteBg = new Graphics()
     noteBg.roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.28).fill({ color: 0x2a1c10, alpha: 0.9 }).stroke({ width: 2, color: UI.brass })
     noteBtn.addChild(noteBg)
-    const noteLabel = new Text({ text: '野帳', style: { fill: 0xf4e8cf, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' } })
+    const noteLabel = new Text({ text: '採録帖', style: { fill: 0xf4e8cf, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' } })
     noteLabel.anchor.set(0.5)
     noteBtn.addChild(noteLabel)
     noteBtn.position.set(vw * 0.96 - noteBtnW / 2, 0)
@@ -2171,6 +2224,9 @@ async function boot() {
     })
 
     // ---------- 層の決着（floor-clear / run-over。ROGUE.md §5/§6/§8） ----------
+    // 層間の採録帯（[D]§2）が出す2値。ラン通算の upgradeFireCount とは別に、この層ぶんだけを同じイベント列から数える
+    let movesThisFloor = 0
+    const floorFireCount = new Map<string, number>()
     const handleFloorResult = (evs: BoardEvent[]) => {
       const dur = view.play(evs)
       // 飛翔が落ちても数字は必ず board.goalDone に追いつく（演出の取りこぼしを表示に持ち込まない）
@@ -2184,12 +2240,17 @@ async function boot() {
       // 結果画面の主記録用（夜間監査[C]7/[E]3）：1手＝このevs全体で発火した upgrade-fire の件数。board.ts は変更禁止のため
       // main.ts側でイベント列を数えて集計する（board.ts が触らない run.records の追加フィールド）。
       const firesThisMove = evs.reduce((n, e) => n + (e.t === 'upgrade-fire' ? 1 : 0), 0)
-      for (const e of evs) if (e.t === 'upgrade-fire') upgradeFireCount.set(e.id, (upgradeFireCount.get(e.id) ?? 0) + 1)
+      for (const e of evs) {
+        if (e.t !== 'upgrade-fire') continue
+        upgradeFireCount.set(e.id, (upgradeFireCount.get(e.id) ?? 0) + 1)
+        floorFireCount.set(e.id, (floorFireCount.get(e.id) ?? 0) + 1)
+      }
       if (firesThisMove > run.records.maxFiresInOneMove) run.records.maxFiresInOneMove = firesThisMove
       // 酸素を直接奪われた手はゲージ側でも必ず被弾を見せる（軌跡は onOxygenDrained が別に出す）
       for (const e of evs) if (e.t === 'oxygen-drained') oxygenDrainFx(e.amount)
       // 1手ぶんの消費(-1)は数字の脈動だけで示す。音・揺れ・赤フラッシュは出さない（毎手鳴らすとメリハリが死ぬ。JUICE §0-2）
       if (evs.some((e) => e.t === 'oxygen-spent')) {
+        movesThisFloor++ // 1手＝酸素-1。採録帯の「この層 N手」はこの数え方（不成立スワップは含まない）
         const big = run.oxygen <= OXYGEN_CRITICAL
         tw.tween(oxyNumText.scale, { x: big ? 1.25 : 1.12, y: big ? 1.25 : 1.12 }, big ? 130 : 100, {
           onDone: () => {
@@ -2217,41 +2278,117 @@ async function boot() {
         showRunResult(true) // ボス層クリア＝ラン勝利（ROGUE.md §6）
         return
       }
-      showFloorClearBanner()
+      showFloorRecordBand()
     }
 
-    // 層クリア演出（既存テーマバナー流用）→ ドラフト3択（ROGUE.md §8）
-    const showFloorClearBanner = () => {
+    /**
+     * 層クリアの採録帯（codex_strategy_v2 [D]）。通常層は**1.8秒・入力待ちなし**でドラフトの前に挟む。
+     *   0.00〜0.35 盤面が一段暗くなる（最後の収集物が課目へ飛ぶのは、この手のタイムラインが既に担っている）
+     *   0.25〜0.95 細い採録帯が下から出る。`深度N 踏破`
+     *   0.55〜1.45 酸素がゲージへ入り、同時に手数と最多発火知見だけを出す
+     *   1.45〜1.80 採録帯が上へ抜け、採録（ドラフト）へつなぐ
+     * 出すのはこの3つだけ。全知見の発火一覧・総破壊数・星・スコア・評価語は出さない（[D]§3）。
+     */
+    const showFloorRecordBand = () => {
       sfx.fanfare()
       const dim = new Graphics()
       dim.rect(0, 0, vw, vh).fill({ color: 0x000000, alpha: 0 })
+      dim.eventMode = 'static' // 早送りのタップをここで受ける（背面の盤面には触らせない）
       playRoot.addChild(dim)
-      tw.tween(dim, { alpha: 0.4 }, 220)
-      const bt = new Container()
-      const bannerTex = spriteTexture(`ribbon_${theme}`) ?? spriteTexture('ui_ribbon_clear')
-      if (bannerTex) {
-        const rb = new Sprite(bannerTex)
-        rb.anchor.set(0.5)
-        rb.scale.set((vw * 0.72) / bannerTex.width)
-        bt.addChild(rb)
+      tw.tween(dim, { alpha: 0.34 }, 350)
+
+      const padX = Math.max(20, vw * 0.06)
+      const bandH = vh * 0.19
+      const bandTop = vh * 0.46
+      const band = new Container()
+      const bandBg = new Graphics()
+      bandBg.rect(0, 0, vw, bandH).fill({ color: UI.paper, alpha: 0.97 })
+      bandBg.moveTo(0, 1).lineTo(vw, 1).moveTo(0, bandH - 1).lineTo(vw, bandH - 1).stroke({ width: 2, color: UI.brass, alpha: 0.95 })
+      band.addChild(bandBg)
+      band.position.set(0, vh) // 画面外の下から出す
+      playRoot.addChild(band)
+      // 帯の中は羊皮紙なので墨色で書く。字送りは帯の高さから引く（機種で帯が痩せても行が重ならない）
+      const mk = (text: string, size: number, x: number, y: number, ax: number, maxW: number) => {
+        const t = new Text({ text, style: { fill: UI.paperInk, fontSize: size, fontFamily: FONT, fontWeight: 'bold' } })
+        t.anchor.set(ax, 0.5)
+        t.position.set(x, y)
+        if (t.width > maxW) t.scale.set(maxW / t.width)
+        band.addChild(t)
+        return t
       }
-      bt.position.set(vw / 2, vh * 0.45)
-      bt.scale.set(0)
-      playRoot.addChild(bt)
-      tw.tween(bt.scale, { x: 1, y: 1 }, 320, { ease: tw.easeOutBack })
-      // 補給はここで見せる（ゲージ側は補給前の値を描いてあるので、この演出のあと実値へ確定する）
-      tw.delay(360, () => {
-        if (!alive()) return
+      // 最多発火の1件だけ。0回の知見は責めない（同数なら先に発火したほうを採る）
+      let bestId = ''
+      let bestFires = 0
+      for (const [id, c] of floorFireCount) {
+        if (c > bestFires) {
+          bestFires = c
+          bestId = id
+        }
+      }
+      const bestDef = bestFires > 0 ? UPGRADES.find((u) => u.id === bestId) : undefined
+      // 発火が1件も無い層は3行目が消えるので、残る2行を帯の中で取り直す（下に空白帯を残さない）
+      const rowY = bestDef ? [0.27, 0.59, 0.85] : [0.34, 0.68]
+      mk(`深度${floor} 踏破`, bandH * 0.24, padX, bandH * rowY[0], 0, vw * 0.48)
+      // 手数に星評価は付けない（[D]§3）。補給は「量」と「結果」の両方を出す
+      const movesT = mk(`この層 ${movesThisFloor}手`, bandH * 0.17, vw - padX, bandH * rowY[0], 1, vw * 0.32)
+      const oxyT = mk(`酸素 +${OXYGEN_SUPPLY_PER_FLOOR} → 残り${run.oxygen}`, bandH * 0.22, padX, bandH * rowY[1], 0, vw - padX * 2)
+      const bestT = bestDef ? mk(`最も働いた知見：${bestDef.name} ${bestFires}回`, bandH * 0.155, padX, bandH * rowY[2], 0, vw - padX * 2) : null
+      const laterLines: Text[] = bestT ? [movesT, oxyT, bestT] : [movesT, oxyT]
+      for (const t of laterLines) t.alpha = 0
+
+      let refilled = false
+      let exited = false
+      // 補給はゲージ側で見せる（handleFloorResult が補給前の値で描いてあるので、ここで実値へ確定する）
+      const doRefill = () => {
+        if (refilled || !alive()) return
+        refilled = true
         gaugeFull = Math.max(OXYGEN_GAUGE_FULL, run.oxygen) // 分母が変わるのは補給演出の瞬間だけ（層途中でバーが後戻りしない）
         oxygenRefillFx(OXYGEN_SUPPLY_PER_FLOOR)
-      })
-      tw.delay(1100, () => {
-        if (!alive()) return
-        tw.tween(bt.scale, { x: 0, y: 0 }, 280, { ease: tw.easeInCubic, onDone: () => bt.destroy() })
-        tw.tween(dim, { alpha: 0 }, 200, { onDone: () => dim.destroy() })
-        tw.delay(160, () => {
+      }
+      const doExit = () => {
+        if (exited || !alive()) return
+        exited = true
+        doRefill() // 早送りで③を飛ばしても、補給だけは必ず起こす
+        tw.tween(band.position, { y: -bandH }, 350, {
+          ease: tw.easeInCubic,
+          onDone: () => {
+            if (!band.destroyed) band.destroy({ children: true })
+          },
+        })
+        tw.tween(dim, { alpha: 0 }, 300, {
+          onDone: () => {
+            if (!dim.destroyed) dim.destroy()
+          },
+        })
+        tw.delay(350, () => {
           if (alive()) showDraftPanel()
         })
+      }
+      tw.tween(band.position, { y: bandTop }, 300, { delay: 250, ease: tw.easeOutCubic }) // ②
+      tw.delay(550, () => {
+        if (!alive() || exited) return
+        doRefill()
+        tw.tween(movesT, { alpha: 1 }, 260)
+        tw.tween(oxyT, { alpha: 1 }, 300, { delay: 60 })
+        if (bestT) tw.tween(bestT, { alpha: 1 }, 300, { delay: 160 })
+      })
+      tw.delay(1450, doExit) // ④
+
+      // 早送り：0.35秒地点から1.45秒地点へ飛ばす。0秒スキップにはしない（補給が起きた事実は必ず350ms見せる）
+      const t0 = performance.now()
+      let skipPending = false
+      const skipNow = () => {
+        if (exited || !alive()) return
+        tw.snap(band.position) // 出のトゥイーンを終端（bandTop）へ飛ばしてから抜けへ繋ぐ
+        for (const t of laterLines) if (!t.destroyed) t.alpha = 1
+        doExit()
+      }
+      dim.on('pointertap', () => {
+        if (skipPending || exited) return
+        const dt = performance.now() - t0
+        skipPending = true
+        if (dt >= 350) skipNow()
+        else tw.delay(350 - dt, skipNow)
       })
     }
 
@@ -2277,7 +2414,7 @@ async function boot() {
       // ---- 0〜9%：タイトル＋野帳ボタン ----
       const titleY = vh * 0.045
       const title = new Text({
-        text: `深度${floor} 踏破 — 強化を1つ選ぶ`,
+        text: `深度${floor} 踏破 — 知見をひとつ採る`,
         style: { fill: 0xf4e8cf, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
       })
       title.anchor.set(0, 0.5)
@@ -2293,7 +2430,7 @@ async function boot() {
         .fill({ color: 0x2a1c10, alpha: 0.9 })
         .stroke({ width: 2, color: UI.brass })
       draftNoteBtn.addChild(draftNoteBg)
-      const draftNoteLabel = new Text({ text: '野帳', style: { fill: 0xf4e8cf, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+      const draftNoteLabel = new Text({ text: '採録帖', style: { fill: 0xf4e8cf, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
       draftNoteLabel.anchor.set(0.5)
       draftNoteBtn.addChild(draftNoteLabel)
       draftNoteBtn.position.set(vw - padX - noteBtnW / 2, titleY)
@@ -2306,7 +2443,7 @@ async function boot() {
       // ---- 9〜20%：所持強化ストリップ（[D]：40pxアイコン横スクロール、左に所持N、右に一覧、系統内訳） ----
       const stripRowY = vh * 0.135
       const stripIconSize = Math.max(30, Math.min(40, fs(0.1)))
-      const ownedLabel = new Text({ text: `所持 ${owned.length}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
+      const ownedLabel = new Text({ text: `手持ち ${owned.length}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
       ownedLabel.anchor.set(0, 0.5)
       ownedLabel.position.set(padX, stripRowY)
       panel.addChild(ownedLabel)
@@ -2398,7 +2535,6 @@ async function boot() {
       const cardInsetX = Math.max(cardW * 0.06, 12) // 本文はカード内側からさらに6%以上内側（必達）
       const cardIconSize = Math.max(30, Math.min(40, fs(0.1)))
       const bodyFont = fs(0.0265)
-      const labelFont = fs(0.024)
       // カード本文の用語リンク（[C]用語リンクの実装方針）：測定用Textは3枚で使い回し、生成後まとめて片付ける
       const cardMeasurer = new Text({ text: '', style: { fontFamily: FONT, fontSize: bodyFont } })
 
@@ -2435,7 +2571,7 @@ async function boot() {
           const summaryTop = bottomH * 0.06
           if (conn.sentence) {
             // 選択時：因果の一文をカード内より広い幅でフルに見せる（[D]：カードで収まらない分はここで見せる）
-            drawConnectionChip(bottomContainer, padX, summaryTop, vw - padX * 2, `接続 ${conn.count}　${conn.sentence}`, fs(0.024))
+            drawConnectionChip(bottomContainer, padX, summaryTop, vw - padX * 2, `呼応 ${conn.count}　${conn.sentence}`, fs(0.024))
           } else {
             // 相性なしは罰のように見せない：バッジは出さず、選択中の強化名だけ淡く添える（[D]）
             const t = new Text({ text: opt.name, style: { fill: 0x9a8968, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
@@ -2453,7 +2589,7 @@ async function boot() {
         }
         btn.addChild(btnBg)
         const btnLabel = new Text({
-          text: enabled ? 'この強化を取る' : 'カードを選んで比較',
+          text: enabled ? 'この知見を採る' : 'カードを選んで比較',
           style: { fill: enabled ? 0xf4e8cf : 0x8a8270, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
         })
         btnLabel.anchor.set(0.5)
@@ -2527,34 +2663,26 @@ async function boot() {
         icon.position.set(cardInsetX + cardIconSize / 2, headerTop + cardIconSize / 2)
         card.addChild(icon)
 
-        // ② 条件／効果（既存splitDescを流用）。用語には点線下線＋「?」でリンクを張る（[C]用語リンクの実装方針）。
+        // ② 起きること（三段の第二段。PHASE2 §3：「条件／効果」のラベル列＝開発データの露出をやめ、
+        // descをカード幅いっぱいの1段落で流す）。用語には点線下線＋「?」でリンクを張る（[C]用語リンクの実装方針）。
         // カード全体タップは選択トグルのみなので、用語タップは layoutRichText 側の stopPropagation で確実に分離する
-        const { condition, effect } = splitDesc(opt.desc)
-        const labelW = Math.max(fs(0.06), labelFont * 2.4)
-        const contentX = cardInsetX + labelW
-        const contentWrapW = Math.max(20, cardW - contentX - cardInsetX)
         const cardUsedTerms = new Set<string>()
-        let rowY = headerTop + Math.max(cardIconSize, headerBlockH) + cardH * 0.04
-        const addRow = (label: string, content: string) => {
-          const l = new Text({ text: label, style: { fill: 0x8a6a3f, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
-          l.position.set(cardInsetX, rowY)
-          card.addChild(l)
-          const bottom = layoutRichText(card, cardMeasurer, tokenizeRich(content, cardUsedTerms), contentX, rowY, contentWrapW, bodyFont, UI.paperInk, 0x7a5a1e, openGlossaryTerm)
-          rowY = Math.max(rowY + l.height, bottom) + cardH * 0.025
-        }
-        if (condition) addRow('条件', condition)
-        addRow('効果', effect)
+        const bodyTop = headerTop + Math.max(cardIconSize, headerBlockH) + cardH * 0.04
+        const bodyWrapW = Math.max(20, cardW - cardInsetX * 2)
+        let rowY =
+          layoutRichText(card, cardMeasurer, tokenizeRich(opt.desc, cardUsedTerms), cardInsetX, bodyTop, bodyWrapW, bodyFont, UI.paperInk, 0x7a5a1e, openGlossaryTerm) +
+          cardH * 0.025
 
-        // ③ 接続バッジ（あれば）：カード内は「接続 N」のみ。因果の一文は選択後に下部の比較欄で見せる（[D]）
+        // ③ 呼応バッジ（あれば）：カード内は「呼応 N」のみ。因果の一文は選択後に下部の比較欄で見せる（[D]）
         const conn = connections[i]
         if (conn.count > 0) {
-          rowY = drawConnectionChip(card, cardInsetX, rowY, cardW - cardInsetX * 2, `接続 ${conn.count}`, Math.max(10, fs(0.022))) + cardH * 0.02
+          rowY = drawConnectionChip(card, cardInsetX, rowY, cardW - cardInsetX * 2, `呼応 ${conn.count}`, Math.max(10, fs(0.022))) + cardH * 0.02
         }
 
-        // ④ 獲得ボーナス（starterDescありのみ）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
+        // ④ 採録時のおまけ（starterDescありのみ。三段の第三段）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
         if (opt.starterDesc) {
           const bandH = cardH * 0.16
-          // 下端固定だと接続バッジと重なることがあるため、本文の積み上げ位置(rowY)より必ず下へ置く
+          // 下端固定だと呼応バッジと重なることがあるため、本文の積み上げ位置(rowY)より必ず下へ置く
           const bandY = Math.max(cardH - bandH - cardH * 0.04, rowY + cardH * 0.01)
           const bandX = cardInsetX * 0.7
           const bandW = cardW - bandX * 2
@@ -2572,7 +2700,7 @@ async function boot() {
           const bonusText = opt.starterDesc.replace(/^おまけ[:：]\s*/, '')
           const bonusFont = Math.max(fs(0.019), bandH * 0.34)
           const bonusT = new Text({
-            text: `獲得ボーナス　${bonusText}`,
+            text: `採録時のおまけ　${bonusText}`,
             style: { fill: 0x6b5238, fontSize: bonusFont, fontFamily: FONT, wordWrap: true, wordWrapWidth: bandW - giftSize * 1.9, breakWords: true },
           })
           bonusT.anchor.set(0, 0.5)
@@ -2644,7 +2772,7 @@ async function boot() {
         }
       } else {
         const t0 = new Text({
-          text: 'ここまでの記録',
+          text: `野帳　深度${reached} まで`,
           style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
         })
         t0.anchor.set(0.5)
@@ -2662,11 +2790,13 @@ async function boot() {
       panel.addChild(nameT)
 
       // 3) 主記録：最大同時発火数を昇格
+      // 表記は「帰還した探窟家が後続者へ残す実地記録」の文体に統一する（PHASE2.md §3 の register）。
+      // 旧「とうたつ深度／さいだい連鎖」は仮名と漢字が混ざり、記録体と衝突していたため漢字へ寄せた。
       const records = [
-        `とうたつ深度　${reached}層`,
+        `到達深度　${reached}`,
         `1手の最大発火数　${run.records.maxFiresInOneMove}`,
-        `さいだい連鎖　${run.records.maxChain}`,
-        `1手さいだい破壊　${run.records.maxDestroyed}`,
+        `最大連鎖　${run.records.maxChain}`,
+        `1手の最大破壊　${run.records.maxDestroyed}`,
       ]
       const recordsTop = py0 + ph * 0.28
       const recordLineH = fs(0.048)
@@ -2690,7 +2820,7 @@ async function boot() {
       const owned = run.upgrades.map((id) => UPGRADES.find((u) => u.id === id)).filter((u): u is UpgradeDef => !!u)
       if (owned.length > 0) {
         const graphLabel = new Text({
-          text: 'ビルドの因果',
+          text: '知見の呼応',
           // 羊皮紙の上で薄すぎたため墨色に（見出しとして読めること優先）
           style: { fill: UI.paperInk, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' },
         })
@@ -2725,7 +2855,7 @@ async function boot() {
             }
           }
           const heroDef = owned.find((u) => u.id === bestId) ?? owned[0]
-          const capLine = bestFires > 0 ? 'いちばん働いた強化' : 'この探索の起点'
+          const capLine = bestFires > 0 ? '最も働いた知見' : 'この探窟の起点'
           const fitText = (t: Text, maxW: number) => {
             if (t.width > maxW) t.scale.set(maxW / t.width)
           }
@@ -2817,7 +2947,7 @@ async function boot() {
       }
 
       // 5) もういちど
-      const btn = makeCoveredButton('もういちど', `next_${theme}`, pw * 0.6)
+      const btn = makeCoveredButton('もう一度潜る', `next_${theme}`, pw * 0.6)
       btn.position.set(vw / 2, buttonY)
       btn.eventMode = 'static'
       btn.cursor = 'pointer'
