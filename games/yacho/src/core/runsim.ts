@@ -17,6 +17,7 @@ import { FLOORS, type FloorDef } from './floors'
 import { UPGRADES, type UpgradeDef } from './upgrades'
 import { makeRng, randInt, type Rng } from './rng'
 import { connectedOwned, pickDraftOptions } from './draft'
+import { applyDeepen, applyFusion, deepenOptions, fusionOptions } from './fusion'
 import { systemOf, type System } from './hooks'
 import type { BoardEvent, Color, GoalType, LevelDef, XY } from './types'
 
@@ -127,6 +128,14 @@ export interface MoveSample {
 export interface DraftSample {
   floor: number // 採録が起きた層（この層をクリアした直後）
   discardedId: string | null // 枠が埋まっていて捨てた知見。捨てずに済んだなら null
+  /** その回に選んだ行為（PHASE2 §2.8）。take=採る／fuse=合成／deepen=深化 */
+  action: 'take' | 'fuse' | 'deepen'
+}
+
+/** 合成・深化を入れるかどうか（PHASE2 §2.8 は未承認の設計なので、入れない場合と必ず比べられるようにする） */
+export interface SimOptions {
+  fusion?: boolean
+  deepen?: boolean
 }
 
 export interface SeedResult {
@@ -146,7 +155,7 @@ export interface SeedResult {
 }
 
 /** 1シードぶん、FLOORS の全層（30層＋終幕）を通しで自動プレイする */
-export function simulateSeed(seed: number): SeedResult {
+export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
   const run = createRunState(undefined, makeRng(seed))
   // 祝福はラン開始時に1つ、深度10/20の幕主のあとに各1つ（PHASE2.md §3）。main.ts と同じ規則をここでも通す
   // ＝祝福を計測に入れないと、補給・課目・盤面形状が実プレイと違う値のまま較正することになる
@@ -213,18 +222,37 @@ export function simulateSeed(seed: number): SeedResult {
     endOxygenByFloor.set(floor, run.oxygen) // 資源はHPから酸素へ一本化（PLAN_LOOP.md §1.4）。補給を含んだ値
     if (isBlessingFloor(floor)) takeOneBlessing(floor) // 幕主のあとに祝福を1つ（深度10/20）
     if (floor < FLOORS.length) {
-      const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
-      const options = pickDraftOptions(run.upgrades, makeRng((seed + floor * 104729 + 17) | 0), floor)
-      const choice = pickDraftChoice(owned, options, moveRng)
-      // 枠が埋まっていれば「取る＝捨てる」（PHASE2.md §2）
-      let discardedId: string | null = null
-      if (run.upgrades.length >= run.slots) {
-        discardedId = pickDiscard(run, firesById)
-        discardUpgrade(run, discardedId)
-        firesById.delete(discardedId) // 採り直したときに新品として扱う（discardUpgrade と同じ扱い）
+      // 採録の3つの行為（PHASE2.md §2.8）。ソルバーの規則は「枠が埋まるまでは採るのが一番強い」を前提に、
+      //   枠が埋まっている & 合成できる → 合成（捨てずに済み、枠も1つ空く）
+      //   枠が埋まっている & 深化できる → 半々で深化（残りは入れ替えて採る）
+      //   それ以外                     → 採る
+      // としている。合成・深化を切れば従来（採るだけ）の較正と直接比べられる。
+      const full = run.upgrades.length >= run.slots
+      const fuses = opts.fusion === false ? [] : fusionOptions(run.upgrades)
+      const deeps = opts.deepen === false ? [] : deepenOptions(run)
+      if (full && fuses.length > 0) {
+        const f = fuses[randInt(moveRng, fuses.length)]
+        firesById.delete(f.a.id)
+        firesById.delete(f.b.id)
+        applyFusion(run, f)
+        drafts.push({ floor, discardedId: null, action: 'fuse' })
+      } else if (full && deeps.length > 0 && moveRng() < 0.5) {
+        applyDeepen(run, deeps[randInt(moveRng, deeps.length)].id)
+        drafts.push({ floor, discardedId: null, action: 'deepen' })
+      } else {
+        const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
+        const options = pickDraftOptions(run.upgrades, makeRng((seed + floor * 104729 + 17) | 0), floor)
+        const choice = pickDraftChoice(owned, options, moveRng)
+        // 枠が埋まっていれば「取る＝捨てる」（PHASE2.md §2）
+        let discardedId: string | null = null
+        if (full) {
+          discardedId = pickDiscard(run, firesById)
+          discardUpgrade(run, discardedId)
+          firesById.delete(discardedId) // 採り直したときに新品として扱う（discardUpgrade と同じ扱い）
+        }
+        drafts.push({ floor, discardedId, action: 'take' })
+        run.upgrades.push(choice.id)
       }
-      drafts.push({ floor, discardedId })
-      run.upgrades.push(choice.id)
     }
   }
   const won = clearedFloors.includes(FLOORS.length)
@@ -400,10 +428,21 @@ export function verdictLines(results: SeedResult[]): string[] {
   const ratio = midFires > 0 ? deepFires / midFires : 0
   out.push(`(h) 発火/手が深層で頭打ち   : ${mark(ratio <= 1.2)}  深度11-15平均 ${midFires.toFixed(2)} → 深度21-25平均 ${deepFires.toFixed(2)}（比 ${ratio.toFixed(2)}）`)
 
+  // (i) は「採る」を選んだ回だけを分母にする（合成・深化は捨てる行為ではないので、混ぜると割合の意味が消える）
   const lateDrafts = results.flatMap((r) => r.drafts).filter((d) => d.floor >= 10)
-  const swapped = lateDrafts.filter((d) => d.discardedId !== null).length
-  const swapPct = lateDrafts.length ? (swapped / lateDrafts.length) * 100 : 0
-  out.push(`(i) 後半の採録が入れ替えに  : ${mark(swapPct >= 50)}  深度10以降の採録 ${swapped}/${lateDrafts.length}=${swapPct.toFixed(1)}%`)
+  const lateTakes = lateDrafts.filter((d) => d.action === 'take')
+  const swapped = lateTakes.filter((d) => d.discardedId !== null).length
+  const swapPct = lateTakes.length ? (swapped / lateTakes.length) * 100 : 0
+  out.push(`(i) 後半の「採る」が入れ替え: ${mark(swapPct >= 50)}  深度10以降に採った ${swapped}/${lateTakes.length}=${swapPct.toFixed(1)}%`)
+
+  // PHASE2 §2.8：終盤の採録が「3つの異なる行為」になっているか。1つに偏っていたら設計が効いていない
+  const actPct = (n: number) => (lateDrafts.length ? ((n / lateDrafts.length) * 100).toFixed(1) : '0.0')
+  const nFuse = lateDrafts.filter((d) => d.action === 'fuse').length
+  const nDeep = lateDrafts.filter((d) => d.action === 'deepen').length
+  out.push(
+    `(j) 後半の採録の行為の内訳  : 　 深度10以降${lateDrafts.length}回中 ` +
+      `採る ${actPct(lateTakes.length)}% / 合成 ${actPct(nFuse)}% / 深化 ${actPct(nDeep)}%`,
+  )
 
   // 到達率は合否ではなく参考値（PHASE2 §1「深度30への到達は難しくてよい」）
   const deepClear = (results.filter((r) => r.clearedFloors.includes(30)).length / results.length) * 100
@@ -503,9 +542,12 @@ export function formatReport(results: SeedResult[]): string {
 
 function main() {
   const seeds = Number(process.argv[2]) || 120
+  // 第2引数で PHASE2 §2.8 の入り切りを変える（同じシードで比べるため）: on(既定) / off / fuse(合成だけ) / deep(深化だけ)
+  const mode = process.argv[3] ?? 'on'
+  const opts: SimOptions = { fusion: mode === 'on' || mode === 'fuse', deepen: mode === 'on' || mode === 'deep' }
   const results: SeedResult[] = []
-  for (let i = 0; i < seeds; i++) results.push(simulateSeed(1000 + i * 7919))
-  process.stdout.write(formatReport(results) + '\n')
+  for (let i = 0; i < seeds; i++) results.push(simulateSeed(1000 + i * 7919, opts))
+  process.stdout.write(`合成・深化（PHASE2 §2.8）: 合成${opts.fusion ? '有' : '無'}・深化${opts.deepen ? '有' : '無'}\n` + formatReport(results) + '\n')
 }
 
 // node runsim.mjs として直接実行された場合のみ走る（importされただけでは何もしない）

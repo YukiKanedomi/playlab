@@ -119,7 +119,8 @@ function reasonFor(owned: UpgradeDef[], cand: UpgradeDef): MissingReason | null 
 export function missingLinks(ownedIds: string[], n = 2): MissingLink[] {
   const owned = UPGRADES.filter((u) => ownedIds.includes(u.id))
   if (!owned.length) return []
-  const scored = UPGRADES.filter((u) => !ownedIds.includes(u.id))
+  // 合成の知見（PHASE2 §2.8）は採録に出ない＝「採れたはずの一つ」ではないので候補から外す
+  const scored = UPGRADES.filter((u) => !ownedIds.includes(u.id) && !u.fusion)
     .map((c) => ({ c, closes: closesLoop(owned, c), links: connectedOwned(owned, c).length }))
     .filter((s) => s.links > 0)
   scored.sort((a, b) => Number(b.closes) - Number(a.closes) || b.links - a.links)

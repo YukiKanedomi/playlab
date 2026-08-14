@@ -32,6 +32,13 @@ export const UPGRADE_CATEGORY: Record<string, UpgradeCategory> = {
   'spore-bullet': 'synergy',
   'mechanical-garden': 'synergy',
   'relic-root': 'synergy',
+  // 合成の知見（PHASE2.md §2.8）。2系統をまたいで1つになったものなので、どれも異種シナジー扱い
+  'ring-of-spores': 'synergy',
+  'blasting-vein': 'synergy',
+  'perpetual-engine': 'synergy',
+  'clockwork-chain': 'synergy',
+  'mossy-drift': 'synergy',
+  'ring-of-resonance': 'synergy',
 }
 
 /** 代表強化の修飾語（名前の頭を飾る）。20種すべてに1語を割当てる */
@@ -56,6 +63,12 @@ const MODIFIER: Record<string, string> = {
   'spore-bullet': '胞弾',
   'mechanical-garden': '循環',
   'relic-root': '根源',
+  'ring-of-spores': '環胞',
+  'blasting-vein': '鉱脈',
+  'perpetual-engine': '永動',
+  'clockwork-chain': '絡繰',
+  'mossy-drift': '苔生',
+  'ring-of-resonance': '環鳴',
 }
 
 /** 主系統名詞（最も多く取った系統） */

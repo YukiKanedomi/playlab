@@ -78,6 +78,9 @@ export interface RunState {
   /** 知見の枠数（PHASE2.md §2）。upgrades.length がこれに達したら、採録には1つ捨てることが要る。
    *  呪いが減らせるように定数ではなくラン状態として持つ */
   slots: number
+  /** 深化ずみの知見のID（PHASE2.md §2.8）。枠は消費しない＝upgrades と重複して持つ。
+   *  Board は構築時に、ここに入っている知見のフックだけを UpgradeDef.deepen.apply へ通す */
+  deepened: string[]
   /** 受けた祝福のID（blessings.ts の BlessingDef.id）。ラン開始1つ＋深度10/20の幕主後に各1つで最大3つ。
    *  呪いは別の入れ物を作らず祝福と同じ1枚に書いてあるので、この配列だけで利点と代償の両方が決まる */
   blessings: string[]
@@ -110,6 +113,7 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
   return {
     upgrades: initialUpgrades,
     slots: UPGRADE_SLOTS_DEFAULT,
+    deepened: [],
     blessings: [],
     lastLightUsed: false,
     gearCharge: 0,
@@ -132,6 +136,8 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
 export function discardUpgrade(run: RunState, id: string) {
   run.upgrades = run.upgrades.filter((u) => u !== id)
   run.startersApplied = run.startersApplied.filter((u) => u !== id)
+  // 深化（PHASE2.md §2.8）も一緒に落とす＝採り直したら条件も元に戻る（深化だけが残ると幽霊になる）
+  run.deepened = run.deepened.filter((u) => u !== id)
   delete run.progress[id]
   // 遺物共鳴だけは効果の待機状態を progress ではなく relicBoostNext に持つ。board.ts は所持を見ずにこれを消費するので、
   // 落とさないと「手放したのに次の遺物マッチが一度だけ2倍になる」＝捨てた知見が効いてしまう（Codexレビュー 2026-08-15）

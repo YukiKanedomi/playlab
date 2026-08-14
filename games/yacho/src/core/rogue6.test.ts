@@ -174,7 +174,8 @@ describe('採掘慣れの説明文（夜間監査[C]6：実装と一致させる
 
 describe('因果グラフのデータ化（夜間監査[B][C]5）', () => {
   it('全20種にconsumes/producesが定義されており、語彙はRESOURCESの範囲に収まっている', () => {
-    expect(UPGRADES.length).toBe(20)
+    // 採録で出る知見は20種のまま。合成でしか手に入らない知見（PHASE2 §2.8）は別に数える
+    expect(UPGRADES.filter((u) => !u.fusion).length).toBe(20)
     for (const u of UPGRADES) {
       expect(u.consumes).toBeDefined()
       expect(u.produces).toBeDefined()

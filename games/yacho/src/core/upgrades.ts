@@ -1,6 +1,6 @@
 // 強化20種（ROGUE.md §4）。強化＝フックの束。数値ではなく盤面の因果（生成・変換・起動）で表現する。
-import type { Piece } from './types'
-import type { Hook, HookCtx } from './hooks'
+import type { Piece, XY } from './types'
+import type { Hook, HookCtx, MatchGroup } from './hooks'
 
 /**
  * 因果グラフの資源語彙（夜間監査[B][C]5）。各強化の consumes/produces はこの語彙だけを使う。
@@ -41,6 +41,18 @@ export interface UpgradeDef {
   consumes?: Resource[]
   produces?: Resource[]
   /**
+   * 深化（PHASE2.md §2.8）：**発動条件を1段ゆるめる**。数値は足さない（ROGUE2 原則3）。
+   * apply はフックを1つ受け取り、条件だけを緩めたフックを返す（効果の本体は書き換えない）。
+   * board.ts が Board 構築時に、RunState.deepened に入っている知見のフックだけをこれに通す。
+   * 条件を持たない知見（層開始・爆発半径など board.ts が直接処理する組）には深化が無い＝この欄も無い。
+   */
+  deepen?: { desc: string; apply: (h: Hook) => Hook }
+  /**
+   * 合成の知見（PHASE2.md §2.8）であることの印＝どの資源の環を閉じたものか。
+   * この印がある知見は**採録の抽選に出さない**（core/draft.ts）。合成でしか手に入らない。
+   */
+  fusion?: Resource
+  /**
    * スターター効果（ROGUE2.md §1 原則2）：強化を取得した瞬間に盤面へ即座に作用させる処理。
    * board.ts が Board 構築（＝次の層開始）のたび、まだ発火していない取得済み強化についてこれを1回だけ呼ぶ
    * （RunState.startersApplied で管理）。
@@ -79,6 +91,14 @@ export const MECHANICAL_GARDEN_ID = 'mechanical-garden'
 export const RELIC_RESONANCE_ID = 'relic-resonance'
 export const GEAR_TRIGGER_THRESHOLD = 2 // 旧3回→2回（通常プレイで頻繁に発火させるため）
 
+/**
+ * 深化「2回ごと → 毎回」（PHASE2.md §2.8）。ギア起動系の本体は count % GEAR_TRIGGER_THRESHOLD で
+ * 発火を間引いているので、しきい値の倍数にした count を本体へ渡して**間引きの判定を必ず通す**。
+ * 効果そのもの（何が生まれるか）は書き換えない＝数値強化にしない（ROGUE2 原則3）。
+ */
+const everyGearTrigger = (h: Hook): Hook =>
+  h.on === 'gearTrigger' ? { ...h, act: (at: XY, count: number, ctx: HookCtx) => h.act(at, count * GEAR_TRIGGER_THRESHOLD, ctx) } : h
+
 export const UPGRADES: UpgradeDef[] = [
   // ---- 植物（4）----
   {
@@ -98,6 +118,10 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['plant'],
     produces: ['spore'],
+    deepen: {
+      desc: '植物でなくても、3つ以上そろえれば胞子が2つ生まれる',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
   },
   {
     id: 'fungal-awakening',
@@ -118,6 +142,10 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['plant'],
     produces: ['plant'],
+    deepen: {
+      desc: 'どの系統をそろえて消しても、跡地の近くに植物が生える',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
   },
   {
     id: 'toxic-spore',
@@ -127,6 +155,11 @@ export const UPGRADES: UpgradeDef[] = [
     hooks: [{ on: 'sporeTouch', act: (_spore, neighbor, ctx) => ctx.damageEnemy(neighbor, 3) }],
     consumes: ['spore'],
     produces: ['enemy-damage'],
+    deepen: {
+      // 「原生種のとなり」という位置の条件を外す（ダメージ量は3のまま）
+      desc: '胞子が消えると、となりに居なくても最寄りの原生種に3ダメージ',
+      apply: (h) => (h.on === 'sporeTouch' ? { ...h, act: (_spore: XY, _neighbor: XY, ctx: HookCtx) => ctx.damageEnemy('nearest', 3) } : h),
+    },
     // スターター配置（夜間監査[C]10）：ランダムな空きマスではなく、本体がすぐ試せる「敵のとなり」を狙う。
     // 敵隣接マスが見つからない（層に敵が居ない等）場合のみ、従来どおりランダムな空きマスへ後退する。
     starter: (ctx) => {
@@ -154,6 +187,11 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['plant'],
     produces: ['plant'],
+    deepen: {
+      // 「キノコ」限定を「植物なら何でも」へ1段ゆるめる
+      desc: '葉でもキノコでも、消せば跡地の近くの1つが植物に変わる',
+      apply: (h) => (h.on === 'match' ? { ...h, color: undefined, system: 'plant' } : h),
+    },
   },
   // ---- 鉱物（4）----
   {
@@ -175,6 +213,20 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['spore'],
     produces: ['volatile-ore'],
+    deepen: {
+      // 「胞子のとなりに鉱物がある」という位置の条件を外す（変わる鉱物は1つのまま）
+      desc: '胞子が消えると、となりに無くても盤上の鉱物1つが爆発鉱石になる',
+      apply: (h) =>
+        h.on === 'sporeTouch'
+          ? {
+              ...h,
+              act: (_spore: XY, _neighbor: XY, ctx: HookCtx) => {
+                const ore = ctx.randomCell((c) => c.piece?.kind === 'normal' && c.piece.color === 2 && !c.piece.volatile)
+                if (ore) ctx.transform(ore, { kind: 'normal', color: 2, volatile: true })
+              },
+            }
+          : h,
+    },
     // スターター配置（夜間監査[C]10）：ランダムな空きマスではなく、本体がすぐ試せる「鉱物のとなり」を狙う。
     // 隣接可能な鉱物が無い場合のみ、従来どおりランダムな空きマスへ後退する。
     starter: (ctx) => {
@@ -213,6 +265,10 @@ export const UPGRADES: UpgradeDef[] = [
     hooks: [{ on: 'match', system: 'mineral', act: (_g, ctx) => ctx.damageEnemy('nearest', 2) }],
     consumes: [],
     produces: ['enemy-damage'],
+    deepen: {
+      desc: 'どの系統をそろえて消しても、最寄りの原生種に2ダメージ',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
   },
   {
     id: 'crystal-bud',
@@ -235,6 +291,10 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: [],
     produces: ['volatile-ore'],
+    deepen: {
+      desc: '鉱物を3つ以上消すと、爆発鉱石が1つ降ってくる',
+      apply: (h) => (h.on === 'match' ? { ...h, minSize: 3 } : h),
+    },
   },
   // ---- ギア（4）----
   {
@@ -275,6 +335,7 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['gear-trigger'],
     produces: ['special'],
+    deepen: { desc: 'ギアが起動するたび、特殊駒が1つ生まれる', apply: everyGearTrigger },
   },
   {
     id: 'overrev',
@@ -287,6 +348,10 @@ export const UPGRADES: UpgradeDef[] = [
     hooks: [{ on: 'match', system: 'gear', act: (g, ctx) => ctx.triggerFarGear(g.cells[0]) }],
     consumes: [],
     produces: ['gear-trigger'],
+    deepen: {
+      desc: 'どの系統をそろえて消しても、最も遠いギア1つを起動する',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
   },
   {
     id: PREHEAT_ID,
@@ -318,6 +383,11 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['gear-trigger'],
     produces: ['relic-match'],
+    deepen: {
+      // 「となりに遺物がある」という位置の条件を外す（2倍という効果はそのまま）
+      desc: 'ギアが起動すると、となりに遺物が無くても次の遺物マッチが2倍になる',
+      apply: (h) => (h.on === 'gearTrigger' ? { ...h, act: (_at: XY, _count: number, ctx: HookCtx) => ctx.boostNextRelic() } : h),
+    },
     starter: (ctx) => ctx.boostNextRelic(),
   },
   {
@@ -328,6 +398,10 @@ export const UPGRADES: UpgradeDef[] = [
     hooks: [{ on: 'match', system: 'relic', minSize: 3, act: (_g, ctx) => ctx.replayLast() }],
     consumes: ['relic-match'],
     produces: [],
+    deepen: {
+      desc: '遺物でなくても、3つ以上そろえれば直前の効果がもう一度おきる',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
     // スターター配置：磁気採掘と同じ理由（fillInitial()直後は空きマスが存在せず旧実装は無発火だった）で、
     // 既存の通常駒1つを遺物へ変換する方式に直す。
     starter: (ctx) => {
@@ -357,6 +431,10 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['relic-match'],
     produces: [],
+    deepen: {
+      desc: 'どの系統をそろえて消しても、跡地の近くの1つが最も多い色に変わる',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
   },
   {
     id: 'gamblers-pot',
@@ -379,6 +457,20 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['relic-match'],
     produces: ['special'],
+    deepen: {
+      // 「半々」という賭けの条件を外す（生まれる数は1つのまま）
+      desc: '遺物マッチのたび、かならず特殊駒が生まれる（邪魔ピースは出ない）',
+      apply: (h) =>
+        h.on === 'match'
+          ? {
+              ...h,
+              act: (g: MatchGroup, ctx: HookCtx) => {
+                const spot = ctx.randomCell((c) => c.piece?.kind === 'normal') ?? g.cells[0]
+                ctx.convertSpecial(spot, randomSpecial(ctx.rng()))
+              },
+            }
+          : h,
+    },
   },
   // ---- 異種シナジー（4）----
   {
@@ -426,6 +518,7 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['gear-trigger'],
     produces: ['plant'],
+    deepen: { desc: 'ギアが起動するたび、植物が2つ生まれる', apply: everyGearTrigger },
   },
   {
     id: 'relic-root',
@@ -443,5 +536,117 @@ export const UPGRADES: UpgradeDef[] = [
     ],
     consumes: ['relic-match'],
     produces: ['spore'],
+    deepen: {
+      desc: 'どの系統をそろえて消しても、胞子が2つ生まれる',
+      apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
+    },
+  },
+  // ---- 合成の知見（6。PHASE2.md §2.8）----
+  // 呼応する2つ（資源Rを**生む**知見＋Rを**使う**知見）を1つにまとめたもの。2枠が1枠になる＝枠が空く。
+  // ペアごとに書くと50組を超えて破綻するので、**資源ごとに1種類**だけ用意する（合成後の名前は資源で決まる）。
+  // 資源は7つあるが「原生種へのダメージ」を**使う**知見が1つも無い（＝環が閉じない）ため、その1種だけ存在しない。
+  {
+    id: 'ring-of-spores',
+    name: '胞子の環',
+    fusion: 'spore',
+    desc: '胞子が消えると、そのマスととなり4マスが葉に変わる',
+    hooks: [
+      {
+        on: 'sporeTouch',
+        act: (spore, _neighbor, ctx) => {
+          for (const p of [spore, ...ctx.neighborsOf(spore)]) {
+            if (ctx.at(p.x, p.y)?.piece?.kind === 'normal') ctx.transform(p, { kind: 'normal', color: 1 })
+          }
+        },
+      },
+    ],
+    consumes: ['spore'],
+    produces: ['plant'],
+  },
+  {
+    id: 'blasting-vein',
+    name: '爆ぜる鉱脈',
+    fusion: 'volatile-ore',
+    desc: '爆発鉱石が爆発すると、盤上の鉱物1つが新しい爆発鉱石になる',
+    hooks: [
+      {
+        // 破壊フックは爆発（explodeAt）より先に走るので、爆ぜようとしている当の鉱石だけを見て1回だけ発火する
+        on: 'destroy',
+        act: (_at, _cause, piece, ctx) => {
+          if (!(piece.kind === 'normal' && piece.volatile)) return
+          const ore = ctx.randomCell((c) => c.piece?.kind === 'normal' && c.piece.color === 2 && !c.piece.volatile)
+          if (ore) ctx.transform(ore, { kind: 'normal', color: 2, volatile: true })
+        },
+      },
+    ],
+    consumes: ['volatile-ore'],
+    produces: ['volatile-ore'],
+  },
+  {
+    id: 'perpetual-engine',
+    name: '回り続ける機関',
+    fusion: 'gear-trigger',
+    desc: 'ギアが起動すると、となりの駒1つがギアに変わる',
+    hooks: [
+      {
+        on: 'gearTrigger',
+        act: (at, _count, ctx) => {
+          const spot = ctx.neighborsOf(at).find((n) => {
+            const p = ctx.at(n.x, n.y)?.piece
+            return p?.kind === 'normal' && p.color !== 0
+          })
+          if (spot) ctx.transform(spot, { kind: 'normal', color: 0 })
+        },
+      },
+    ],
+    consumes: ['gear-trigger'],
+    produces: ['gear-trigger'],
+  },
+  {
+    id: 'clockwork-chain',
+    name: '絡繰の連なり',
+    fusion: 'special',
+    desc: '4つ以上そろえて消すと、盤上のどこかに特殊駒が1つ生まれる',
+    hooks: [
+      {
+        on: 'match',
+        minSize: 4,
+        act: (g, ctx) => {
+          const spot = ctx.randomCell((c) => c.piece?.kind === 'normal') ?? g.cells[0]
+          ctx.convertSpecial(spot, randomSpecial(ctx.rng()))
+        },
+      },
+    ],
+    consumes: [],
+    produces: ['special'],
+  },
+  {
+    id: 'mossy-drift',
+    name: '苔むす坑道',
+    fusion: 'plant',
+    desc: '植物をそろえて消すと、跡地の近くに植物が生え、そこに胞子がつく',
+    hooks: [
+      {
+        on: 'match',
+        system: 'plant',
+        act: (g, ctx) => {
+          const spot = ctx.growthSpot(g.cells, g.color)
+          if (!spot) return
+          ctx.spawnPiece(spot, g.color)
+          ctx.spawnToken(spot, 'spore')
+        },
+      },
+    ],
+    consumes: ['plant'],
+    produces: ['plant', 'spore'],
+  },
+  {
+    id: 'ring-of-resonance',
+    name: '共鳴の環',
+    fusion: 'relic-match',
+    desc: '遺物をそろえて消すと、次の遺物マッチの効果が2倍になる',
+    hooks: [{ on: 'match', system: 'relic', act: (_g, ctx) => ctx.boostNextRelic() }],
+    consumes: ['relic-match'],
+    produces: ['relic-match'],
   },
 ]

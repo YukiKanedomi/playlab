@@ -42,7 +42,8 @@ function hasClosedLoop(owned: UpgradeDef[]): boolean {
  */
 export function pickDraftOptions(ownedIds: string[], rng: Rng, floor = 1): UpgradeDef[] {
   const owned = UPGRADES.filter((u) => ownedIds.includes(u.id))
-  let remaining = UPGRADES.filter((u) => !ownedIds.includes(u.id))
+  // 合成の知見（PHASE2.md §2.8）は採録の抽選に出さない＝合成でしか手に入らない
+  let remaining = UPGRADES.filter((u) => !ownedIds.includes(u.id) && !u.fusion)
   const take = (pred: (u: UpgradeDef) => boolean): UpgradeDef | null => {
     const cands = remaining.filter(pred)
     if (!cands.length) return null

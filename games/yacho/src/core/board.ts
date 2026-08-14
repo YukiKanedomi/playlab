@@ -99,7 +99,12 @@ export class Board {
     this.goals = def.goals
     this.goalDone = def.goals.map(() => 0)
     this.subiCharge = def.subiCharge ?? 4
-    if (run) this.hooks = UPGRADES.filter((u) => run.upgrades.includes(u.id)).flatMap((u) => u.hooks.map((hook) => ({ upgradeId: u.id, hook })))
+    if (run)
+      this.hooks = UPGRADES.filter((u) => run.upgrades.includes(u.id)).flatMap((u) => {
+        // 深化（PHASE2.md §2.8）：知見は入れ替わらず、発動条件だけがゆるんだフックに差し替わる
+        const deepen = u.deepen && run.deepened.includes(u.id) ? u.deepen.apply : null
+        return u.hooks.map((hook) => ({ upgradeId: u.id, hook: deepen ? deepen(hook) : hook }))
+      })
     if (run) this.freeFirstMove = hasFreeFirstMove(run.blessings)
     this.initProgress()
     this.loadLayout(def.layout)
@@ -1177,7 +1182,9 @@ export class Board {
     if (!this.run) return
     const cur = ((count - 1) % GEAR_TRIGGER_THRESHOLD) + 1
     for (const id of [AUTONOMOUS_MECHANISM_ID, MECHANICAL_GARDEN_ID]) {
-      if (this.run.upgrades.includes(id)) this.run.progress[id] = { cur, max: GEAR_TRIGGER_THRESHOLD }
+      if (!this.run.upgrades.includes(id)) continue
+      // 深化ずみ（PHASE2.md §2.8「2回ごと→毎回」）は間引きが無いので、進捗表示も 1/1 にする（1/2 のままだと嘘になる）
+      this.run.progress[id] = this.run.deepened.includes(id) ? { cur: 1, max: 1 } : { cur, max: GEAR_TRIGGER_THRESHOLD }
     }
   }
 
