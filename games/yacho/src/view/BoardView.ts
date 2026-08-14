@@ -1499,13 +1499,14 @@ export class BoardView {
 
   // ---- 可視化第一波：小さな浮遊ラベル（因果の実況・強化発動アピール共通） ----
 
+  /** まだ消えていない浮遊ラベル（重なり避けの当たり判定に使う。各自 destroy で自然に抜ける） */
+  private liveFloatLabels: Text[] = []
+
   /**
    * 小さな浮遊ラベル（明朝・小・上昇して消える）。token-spawn/gear-trigger/爆発鉱石変換/upgrade-fire で共用。
    * 出所が違うラベルが同じマスに同時に出ると重なって両方読めなくなる（実測：深度22の層頭で「＋胞子」と「毒胞子」）。
    * 発火数は深層で増える一方なので、生きているラベルと重なる位置なら1行ぶんずつ上へ積む。
    */
-  private liveFloatLabels: Text[] = []
-
   private floatLabelFx(p: XY, text: string, color: number, t: number, yOffset = -0.15) {
     delay(t, () => {
       const txt = new Text({
