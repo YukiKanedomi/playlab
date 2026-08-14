@@ -1,0 +1,1036 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>yacho モックアップ v4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Shippori+Mincho:wght@500;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F1E4C6;          /* 紙・主数値 */
+  --parch:#E4D6B6;
+  --parch-hi:#EFE4CC;
+  --label:#DCCFBC;          /* ラベル（古紙色） */
+  --paper-txt:#3A2E20;      /* 紙の上の文字 */
+  --dark:#4A3A26;           /* 暗地の札 */
+  --dark-in:#2E241A;        /* 凹面 */
+  --brass:#9A7B44;
+  --brass-hi:#B99A5E;
+  --verd:#4A6155;
+  --gauge-empty:#3E5450;
+  --gauge-fill:#B98A3E;
+  --ink:#2F2922;
+  --shade:rgba(26,20,16,.35);
+  --verm:#C4553E;           /* 朱＝酸素喪失のみ */
+  --rule:rgba(138,116,84,.60);
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#171512}
+body{
+  font-family:'Zen Kaku Gothic New',sans-serif;font-weight:500;color:var(--label);
+  padding:34px 30px 44px;-webkit-font-smoothing:antialiased;
+}
+.head{margin:0 4px 26px;display:flex;align-items:baseline;gap:18px;flex-wrap:wrap}
+.head h1{font-family:'Shippori Mincho',serif;font-weight:600;font-size:25px;color:var(--paper);letter-spacing:.06em}
+.head .sub{font-size:13px;color:#8d7f6c;letter-spacing:.04em}
+.head .rule{flex:1;height:1px;background:linear-gradient(90deg,rgba(185,154,94,.45),rgba(185,154,94,0))}
+
+.sheet{display:flex;gap:30px;align-items:flex-start}
+.col{width:390px;flex:0 0 390px}
+.cap{margin-bottom:11px;padding-left:2px}
+.cap .n{font-family:'Archivo',sans-serif;font-weight:600;font-size:12px;color:var(--brass);letter-spacing:.14em}
+.cap .t{font-family:'Shippori Mincho',serif;font-weight:600;font-size:17px;color:var(--paper);margin-top:1px}
+.cap .d{font-size:11.5px;color:#8d7f6c;margin-top:3px;line-height:1.5}
+
+.phone{width:390px;height:844px;position:relative;overflow:hidden;border-radius:9px;
+  box-shadow:0 0 0 1px rgba(58,44,30,.9),0 0 0 2px rgba(185,154,94,.5),0 16px 40px rgba(0,0,0,.55)}
+.screen{position:absolute;left:0;top:0;width:780px;height:1688px;transform:scale(.5);transform-origin:0 0;
+  overflow:hidden;background:#242019}
+
+/* ---- 基本ユーティリティ ---- */
+.p{position:absolute}
+.mi{font-family:'Shippori Mincho',serif;font-weight:600}
+.go b{font-family:'Archivo',sans-serif;font-weight:600;font-variant-numeric:tabular-nums lining-nums}
+.go{font-family:'Zen Kaku Gothic New',sans-serif;font-weight:500}
+.num{font-family:'Archivo',sans-serif;font-weight:600;font-variant-numeric:tabular-nums lining-nums;
+  font-feature-settings:'tnum' 1,'lnum' 1;letter-spacing:.005em}
+.ivory{color:var(--paper)} .lab{color:var(--label)} .br{color:var(--brass)}
+.dktxt{color:var(--paper-txt)} .verm{color:var(--verm)}
+.nw{white-space:nowrap}
+
+/* 紙目（UI パネル内部にも同じ密度で残す）※position は指定しない（.p を上書きしてしまうため） */
+.grain>.gr{position:absolute;inset:0;background-image:var(--grain);background-size:140px 140px;
+  mix-blend-mode:multiply;opacity:.17;pointer-events:none;border-radius:inherit}
+.parch2>.gr{opacity:.30}
+
+/* 線は必ず2本（内 #3A2C1E 60% / 外 #B99A5E 80% / 1px オフセット） */
+.dline{box-shadow:inset 0 0 0 1px rgba(58,44,30,.60),0 0 0 1px rgba(185,154,94,.80)}
+
+/* 羊皮紙の札（9スライス） */
+.parch{border-style:solid;border-width:17px;
+  border-image:url(../../assets/ui/parchment.png) 44 fill / 17px stretch;
+  filter:saturate(.50) brightness(1.11)}
+/* 大判の羊皮紙（縁だけ素材・地は紙色。伸ばすと木目に見えるため） */
+.parch2{border-style:solid;border-width:17px;
+  border-image:url(../../assets/ui/parchment.png) 44 / 17px stretch;
+  filter:saturate(.72) brightness(1.04);
+  background:
+    radial-gradient(ellipse 120px 70px at 78% 24%,rgba(150,120,74,.10),rgba(150,120,74,0) 70%),
+    radial-gradient(ellipse 90px 60px at 22% 68%,rgba(150,120,74,.09),rgba(150,120,74,0) 70%),
+    linear-gradient(176deg,#F2E9D6 0%,#ECE1CA 38%,#E5DAC0 74%,#DED3B4 100%)}
+/* 暗地の札 */
+.dark{background:linear-gradient(180deg,#54422c,#3f3021);border-radius:4px;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6),0 0 0 1px rgba(185,154,94,.8),inset 0 10px 20px rgba(20,15,10,.30)}
+/* 凹面（数字が載る地） */
+.concave{background:radial-gradient(ellipse at 50% 34%,#33281d 0%,#2E241A 52%,#221a12 100%);
+  box-shadow:inset 0 3px 7px rgba(16,11,8,.75),inset 0 -2px 0 rgba(185,154,94,.16)}
+/* 彫り文字 */
+.eng{text-shadow:0 -1px 0 rgba(18,13,9,.72),0 1px 0 rgba(235,220,186,.20)}
+.eng-d{text-shadow:0 1px 0 rgba(240,228,200,.30),0 -1px 0 rgba(30,22,15,.45)}
+/* 木＋真鍮の板 */
+.wood{background:linear-gradient(180deg,#5b452c 0%,#4A3A26 46%,#3a2c1d 100%);border-radius:5px;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6),0 0 0 1px rgba(185,154,94,.8),
+             inset 0 2px 0 rgba(235,220,186,.14),0 3px 0 rgba(26,20,16,.30)}
+/* 緑石＋真鍮枠のプラーク */
+.greenstone{background:linear-gradient(180deg,#59705f 0%,#4A6155 48%,#3a4f45 100%);border-radius:5px;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.6),0 0 0 1px rgba(185,154,94,.85),
+             inset 0 2px 0 rgba(235,220,186,.18),0 4px 0 rgba(26,20,16,.32)}
+/* 真鍮のメダル */
+.brassmedal{background:radial-gradient(ellipse at 38% 30%,#b3924f 0%,#9A7B44 55%,#6f5730 100%);border-radius:50%;
+  box-shadow:inset 0 0 0 1px rgba(58,44,30,.55),0 0 0 1px rgba(185,154,94,.75),inset 0 -3px 6px rgba(30,22,14,.45)}
+/* 彫り込んだ空のロンデル座 */
+.emptyseat{border-radius:50%;background:radial-gradient(ellipse at 50% 38%,#2b2318 0%,#332a1e 70%,#43351f 100%);
+  box-shadow:inset 0 4px 8px rgba(14,10,7,.8),inset 0 -2px 0 rgba(185,154,94,.28),0 0 0 1px rgba(185,154,94,.42)}
+.imgfit{display:block;width:100%;height:100%;object-fit:contain}
+
+/* 接地影 */
+.gshadow{background:radial-gradient(ellipse at 50% 34%,rgba(26,20,16,.35) 0%,rgba(26,20,16,.22) 46%,rgba(26,20,16,0) 74%)}
+
+/* 盤 */
+.boardframe{border-style:solid;border-width:30px;
+  border-image:url(../../assets/board/board_frame.png) 128 fill / 30px stretch}
+.cellpanel{position:absolute;border-radius:6px;
+  box-shadow:inset 2px 2px 0 rgba(246,235,218,.11),inset -1px -1px 0 rgba(14,10,7,.30)}
+.piece{position:absolute;width:72px;height:72px}
+.pshadow{position:absolute;width:40px;height:8px;border-radius:50%;background:rgba(26,20,16,.25);filter:blur(1px)}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <h1>yacho ── モックアップ v4</h1>
+  <div class="sub">「そろえて、しるす。」／ 第2フェーズ決定事項の目標像・6画面 ／ 実寸 390×844（描画 780×1688）</div>
+  <div class="rule"></div>
+</div>
+
+<div class="sheet">
+
+<!-- ============================================================ 1. プレイ画面 -->
+<div class="col">
+  <div class="cap">
+    <div class="n">01</div>
+    <div class="t">プレイ画面（第一幕・深度5）</div>
+    <div class="d">環境帯44% ／ HUDは板を持たず風景の上に浮く ／ 盤は「棚」＝受光辺と接地影 ／ 原生種は横2マス</div>
+  </div>
+  <div class="phone"><div class="screen" id="s1">
+
+    <!-- 背景（0〜743 まで一切途切れない） -->
+    <div class="p" style="left:0;top:0;width:780px;height:743px;overflow:hidden">
+      <img src="bg_act1.png" style="position:absolute;left:0;top:-820px;width:780px;height:3900px">
+    </div>
+
+    <!-- HUD：深度メダリオン -->
+    <div class="p concave grain" style="left:30px;top:46px;width:84px;height:84px;border-radius:50%;
+         box-shadow:inset 0 3px 7px rgba(16,11,8,.75),0 0 0 3px #8a6e3d,0 0 0 4px rgba(46,36,26,.9),0 2px 6px rgba(20,15,10,.5)"><i class="gr"></i></div>
+    <div class="p go br" style="left:30px;top:58px;width:84px;text-align:center;font-size:16px;letter-spacing:.06em">深度</div>
+    <div class="p num ivory" style="left:30px;top:78px;width:84px;text-align:center;font-size:26px;line-height:36px">5</div>
+    <!-- 幕名は暗地の札に載せる（Δluma 120 を満たす。06 の幕名札と同じ部品） -->
+    <div class="p dark grain" style="left:14px;top:134px;width:116px;height:36px"><i class="gr"></i></div>
+    <div class="p mi" style="left:14px;top:139px;width:116px;text-align:center;font-size:22px;line-height:26px;color:#F1E4C6">第一幕</div>
+
+    <!-- HUD：酸素メダリオン（主数値 62px） -->
+    <div class="p concave grain" style="left:326px;top:44px;width:128px;height:128px;border-radius:50%;
+         box-shadow:inset 0 4px 10px rgba(16,11,8,.8),0 0 0 4px #8a6e3d,0 0 0 5px rgba(46,36,26,.9),0 3px 9px rgba(20,15,10,.5)"><i class="gr"></i></div>
+    <div class="p go lab" style="left:326px;top:60px;width:128px;text-align:center;font-size:20px;letter-spacing:.10em">残酸素</div>
+    <div class="p num ivory" style="left:326px;top:82px;width:128px;text-align:center;font-size:62px;line-height:74px">66</div>
+
+    <!-- HUD：酸素ゲージ（高さ20px・0〜24を安全域として満タン塗り） -->
+    <div class="p grain" style="left:250px;top:190px;width:280px;height:20px;border-radius:10px;background:#3E5450;
+         box-shadow:inset 0 2px 4px rgba(14,10,7,.7),0 0 0 1px rgba(58,44,30,.6),0 0 0 2px rgba(185,154,94,.55)"><i class="gr"></i></div>
+    <div class="p" style="left:253px;top:193px;width:274px;height:14px;border-radius:7px;
+         background:linear-gradient(180deg,#cb9c4b,#B98A3E 55%,#9c7231);box-shadow:inset 0 1px 0 rgba(246,235,218,.28)"></div>
+    <!-- 予備（24超過分を分離）。数字は自分の札の上に載せる -->
+    <div class="p dark grain" style="left:532px;top:181px;width:146px;height:38px"><i class="gr"></i></div>
+    <div class="p" style="left:541px;top:193px;width:14px;height:14px;border-radius:50%;
+         background:radial-gradient(circle at 36% 32%,#e2b463,#B98A3E 60%,#8a6530);box-shadow:0 0 0 1px rgba(58,44,30,.5)"></div>
+    <div class="p go lab" style="left:562px;top:189px;font-size:20px;line-height:22px">予備</div>
+    <div class="p num ivory" style="left:610px;top:185px;font-size:24px;line-height:26px">+42</div>
+
+    <!-- HUD：メニュー -->
+    <div class="p" style="left:684px;top:56px;width:64px;height:64px"><img src="../../assets/ui/hud_menu.png" class="imgfit"></div>
+
+    <!-- 相棒（右）／ 探窟家（左1/3） -->
+    <img class="p" src="../../assets/ui/mascot_moff.png" style="left:598px;top:516px;width:126px;z-index:6;filter:saturate(.86)">
+    <img class="p" src="../../assets/ui/bust2_forest.png" style="left:32px;top:480px;width:260px;height:324px;z-index:7;filter:saturate(.78)">
+
+    <!-- 下帯：地面 -->
+    <div class="p" style="left:0;top:1451px;width:780px;height:237px;overflow:hidden;z-index:8">
+      <img src="bg_act1.png" style="position:absolute;left:0;top:-548px;width:780px;height:785px">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(44,33,21,.62),rgba(44,33,21,.40))"></div>
+    </div>
+
+    <!-- 盤の接地影 -->
+    <div class="p gshadow" style="left:76px;top:1451px;width:628px;height:52px;z-index:9"></div>
+
+    <!-- 盤（棚） -->
+    <div class="p boardframe grain" style="left:36px;top:743px;width:708px;height:708px;z-index:10;background:#282419">
+      <i class="gr"></i>
+      <div id="board1" style="position:absolute;left:-66px;top:-773px;width:780px;height:1688px;filter:saturate(.76)"></div>
+    </div>
+    <!-- 受光面（枠の上辺 8px を luma +30） -->
+    <div class="p" style="left:36px;top:743px;width:708px;height:8px;z-index:11;
+         background:linear-gradient(180deg,rgba(246,235,218,.42),rgba(246,235,218,.06))"></div>
+
+    <!-- 課目（羊皮紙1枚・残数表示。下端19pxが盤の受光辺に食い込む） -->
+    <div class="p parch grain" style="left:232px;top:676px;width:516px;height:86px;z-index:12"><i class="gr"></i></div>
+    <img class="p" src="../../assets/sprites3/p1_leaf.png" style="left:308px;top:699px;width:40px;height:40px;z-index:13">
+    <img class="p" src="../../assets/sprites3/p4_mushroom.png" style="left:332px;top:699px;width:40px;height:40px;z-index:13">
+    <div class="p go dktxt" style="left:380px;top:686px;font-size:24px;line-height:26px;z-index:13">植物標本</div>
+    <div class="p go" style="left:380px;top:726px;font-size:20px;line-height:24px;color:#6d573d;z-index:13">あと</div>
+    <div class="p num dktxt" style="left:428px;top:714px;font-size:35px;line-height:38px;z-index:13">41</div>
+    <div class="p" style="left:504px;top:690px;width:1px;height:60px;background:rgba(58,44,30,.6);z-index:13"></div>
+    <div class="p" style="left:518px;top:706px;width:46px;height:26px;z-index:13;overflow:hidden">
+      <img src="k2_idle.png" style="width:46px;filter:sepia(.55) saturate(.45) brightness(.42) contrast(1.15)">
+    </div>
+    <div class="p go dktxt" style="left:580px;top:686px;font-size:24px;line-height:26px;z-index:13">原生種</div>
+    <div class="p go" style="left:580px;top:726px;font-size:20px;line-height:24px;color:#6d573d;z-index:13">あと</div>
+    <div class="p num dktxt" style="left:628px;top:714px;font-size:35px;line-height:38px;z-index:13">1</div>
+
+    <!-- 原生種「崩れ穿ち」＝横2マスにまたがる（セル(3,4)-(4,4)） -->
+    <div class="p" id="omen1" style="left:0;top:0;width:780px;height:1688px;z-index:14;pointer-events:none"></div>
+    <img class="p" src="k2_omen.png" style="left:299px;top:1097px;width:182px;height:91px;z-index:15;
+         filter:drop-shadow(0 3px 3px rgba(26,20,16,.45))">
+    <!-- 兆候バッジ＝動作名＋残り手（敵の右上）。朱は使わない -->
+    <div class="p dark grain" style="left:438px;top:1058px;width:118px;height:40px;z-index:16"><i class="gr"></i></div>
+    <div class="p go lab" style="left:452px;top:1067px;font-size:24px;line-height:26px;z-index:17">崩落</div>
+    <div class="p num ivory" style="left:516px;top:1062px;font-size:30px;line-height:32px;z-index:17">2</div>
+
+    <!-- 枠を破る前景要素（蔦・鎖・垂れ根） -->
+    <div class="p" id="fg1" style="left:0;top:0;width:780px;height:1688px;z-index:18;pointer-events:none"></div>
+
+    <!-- 下帯：知見列＋採録帖 -->
+    <div class="p" id="lore1" style="left:0;top:0;width:780px;height:1688px;z-index:19"></div>
+    <div class="p wood grain" style="left:624px;top:1524px;width:132px;height:72px;z-index:19"><i class="gr"></i></div>
+    <div class="p" style="left:636px;top:1538px;width:44px;height:44px;z-index:20;border-radius:2px 4px 4px 2px;
+         background:linear-gradient(100deg,#5d4522 0%,#6d5228 16%,#7c5f2f 22%,#5a4522 26%,#6a5029 100%);
+         box-shadow:inset 0 0 0 1px rgba(40,30,18,.85),0 0 0 1px rgba(185,154,94,.7),
+                    inset -9px 0 0 rgba(226,214,186,.55),inset -11px 0 0 rgba(120,100,66,.6)"></div>
+    <div class="p go eng" style="left:686px;top:1547px;font-size:24px;line-height:26px;color:#e0cfae;z-index:20">採録</div>
+
+  </div></div>
+</div>
+
+<!-- ============================================================ 2. 採録 -->
+<div class="col">
+  <div class="cap">
+    <div class="n">02</div>
+    <div class="t">採録（知見を3択）</div>
+    <div class="d">黒スクリム廃止・テーマ背景を残す ／ 耳付き紙＋微回転 ／ 初期8枠と空き枠を絵で見せる ／ 三段構成</div>
+  </div>
+  <div class="phone"><div class="screen" id="s2">
+
+    <div class="p" style="left:0;top:0;width:780px;height:1688px;overflow:hidden">
+      <img src="bg_act1.png" style="position:absolute;left:0;top:-1500px;width:780px;height:3900px">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(36,28,20,.10),rgba(36,28,20,.30))"></div>
+    </div>
+
+    <!-- 見出し -->
+    <div class="p parch grain" style="left:36px;top:52px;width:520px;height:72px"><i class="gr"></i></div>
+    <div class="p mi dktxt" style="left:58px;top:70px;font-size:30px;line-height:38px">深度5 踏破 ── 知見をひとつ採る</div>
+    <div class="p wood grain" style="left:592px;top:56px;width:152px;height:64px"><i class="gr"></i></div>
+    <div class="p go eng" style="left:592px;top:74px;width:152px;text-align:center;font-size:26px;line-height:28px;color:#e0cfae">採録帖</div>
+
+    <!-- 手持ちと空き枠（分数を使わない） -->
+    <div class="p dark grain" style="left:36px;top:182px;width:134px;height:60px"><i class="gr"></i></div>
+    <div class="p go lab" style="left:50px;top:200px;font-size:22px;line-height:24px">手持ち</div>
+    <div class="p num ivory" style="left:126px;top:196px;font-size:30px;line-height:32px">5</div>
+    <div class="p dark grain" style="left:176px;top:182px;width:110px;height:60px"><i class="gr"></i></div>
+    <div class="p go lab" style="left:190px;top:200px;font-size:22px;line-height:24px">空き</div>
+    <div class="p num ivory" style="left:244px;top:196px;font-size:30px;line-height:32px">3</div>
+    <div class="p" id="held2" style="left:0;top:0;width:780px;height:1688px"></div>
+
+    <!-- 3択カード -->
+    <div class="p" id="cards2" style="left:0;top:0;width:780px;height:1688px"></div>
+
+    <!-- 比較（灰の角丸ピルを廃止） -->
+    <div class="p wood grain" style="left:220px;top:1434px;width:340px;height:72px"><i class="gr"></i></div>
+    <div class="p go eng" style="left:220px;top:1454px;width:340px;text-align:center;font-size:28px;line-height:32px;color:#e2d2b1">くらべる</div>
+
+  </div></div>
+</div>
+
+<!-- ============================================================ 3. 祝福と呪い -->
+<div class="col">
+  <div class="cap">
+    <div class="n">03</div>
+    <div class="t">祝福と呪い（ボス後の選択）</div>
+    <div class="d">利点と代償を同じ大きさで見せる ／ 隠しデメリット禁止 ／ 上下2段が完全に同じ組版 ／ 朱は1画素も置かない</div>
+  </div>
+  <div class="phone"><div class="screen" id="s3">
+
+    <div class="p" style="left:0;top:0;width:780px;height:1688px;overflow:hidden;background:#3d4438">
+      <div class="p" style="left:0;top:975px;width:780px;height:713px;overflow:hidden">
+        <img src="bg_act1.png" style="position:absolute;left:0;top:-3190px;width:780px;height:3900px">
+      </div>
+      <img src="keyart_a.png" style="position:absolute;left:0;top:0;width:780px;height:975px">
+      <div style="position:absolute;left:0;top:820px;width:780px;height:400px;
+           background:linear-gradient(180deg,rgba(60,62,50,0),rgba(52,50,40,.55) 42%,rgba(46,42,33,.30))"></div>
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(40,34,24,.06),rgba(40,34,24,.26))"></div>
+    </div>
+
+    <!-- 見出し（左寄せ・上重心） -->
+    <div class="p parch grain" style="left:48px;top:64px;width:640px;height:88px"><i class="gr"></i></div>
+    <div class="p mi dktxt" style="left:72px;top:86px;font-size:32px;line-height:42px">深度10 踏破 ── 祝福をひとつ受ける</div>
+    <div class="p go lab" style="left:48px;top:164px;font-size:24px;line-height:28px;text-shadow:0 1px 4px rgba(20,15,10,.8)">祝福には必ず呪いが伴う</div>
+
+    <div class="p" id="pairs3" style="left:0;top:0;width:780px;height:1688px"></div>
+
+    <!-- 決定ボタン -->
+    <div class="p greenstone grain" style="left:180px;top:1540px;width:420px;height:80px"><i class="gr"></i></div>
+    <div class="p go eng" style="left:180px;top:1563px;width:420px;text-align:center;font-size:30px;line-height:34px;color:#EFE4CC">この祝福を受ける</div>
+
+  </div></div>
+</div>
+
+<!-- ============================================================ 4. 層間の採録帯 -->
+<div class="col">
+  <div class="cap">
+    <div class="n">04</div>
+    <div class="t">層間の採録帯（t＝1.10秒）</div>
+    <div class="d">専用の全画面を出さない ／ 盤の上に薄いオーバーレイ ／ ★3・スコア・ランク・評価語は一切なし</div>
+  </div>
+  <div class="phone"><div class="screen" id="s4">
+
+    <div class="p" style="left:0;top:0;width:780px;height:743px;overflow:hidden">
+      <img src="bg_act1.png" style="position:absolute;left:0;top:-820px;width:780px;height:3900px">
+    </div>
+
+    <div class="p concave grain" style="left:30px;top:46px;width:84px;height:84px;border-radius:50%;
+         box-shadow:inset 0 3px 7px rgba(16,11,8,.75),0 0 0 3px #8a6e3d,0 0 0 4px rgba(46,36,26,.9),0 2px 6px rgba(20,15,10,.5)"><i class="gr"></i></div>
+    <div class="p go br" style="left:30px;top:58px;width:84px;text-align:center;font-size:16px;letter-spacing:.06em">深度</div>
+    <div class="p num ivory" style="left:30px;top:78px;width:84px;text-align:center;font-size:26px;line-height:36px">5</div>
+    <div class="p dark grain" style="left:14px;top:134px;width:116px;height:36px"><i class="gr"></i></div>
+    <div class="p mi" style="left:14px;top:139px;width:116px;text-align:center;font-size:22px;line-height:26px;color:#F1E4C6">第一幕</div>
+
+    <div class="p concave grain" style="left:326px;top:44px;width:128px;height:128px;border-radius:50%;
+         box-shadow:inset 0 4px 10px rgba(16,11,8,.8),0 0 0 4px #8a6e3d,0 0 0 5px rgba(46,36,26,.9),0 3px 9px rgba(20,15,10,.5)"><i class="gr"></i></div>
+    <div class="p go lab" style="left:326px;top:60px;width:128px;text-align:center;font-size:20px;letter-spacing:.10em">残酸素</div>
+    <!-- この瞬間だけ 1.06倍に跳ねる -->
+    <div class="p num ivory" style="left:326px;top:78px;width:128px;text-align:center;font-size:66px;line-height:78px">73</div>
+    <!-- 飛翔の終点（数字は札の上に。琥珀の粒が着地する小札） -->
+    <div class="p dark grain" style="left:464px;top:44px;width:92px;height:52px"><i class="gr"></i></div>
+    <div class="p num ivory" style="left:464px;top:52px;width:92px;text-align:center;font-size:35px;line-height:38px">+7</div>
+
+    <div class="p grain" style="left:250px;top:190px;width:280px;height:20px;border-radius:10px;background:#3E5450;
+         box-shadow:inset 0 2px 4px rgba(14,10,7,.7),0 0 0 1px rgba(58,44,30,.6),0 0 0 2px rgba(185,154,94,.55)"><i class="gr"></i></div>
+    <div class="p" style="left:253px;top:193px;width:274px;height:14px;border-radius:7px;
+         background:linear-gradient(180deg,#cb9c4b,#B98A3E 55%,#9c7231);box-shadow:inset 0 1px 0 rgba(246,235,218,.28)"></div>
+    <div class="p dark grain" style="left:532px;top:181px;width:146px;height:38px"><i class="gr"></i></div>
+    <div class="p" style="left:541px;top:193px;width:14px;height:14px;border-radius:50%;
+         background:radial-gradient(circle at 36% 32%,#e2b463,#B98A3E 60%,#8a6530);box-shadow:0 0 0 1px rgba(58,44,30,.5)"></div>
+    <div class="p go lab" style="left:562px;top:189px;font-size:20px;line-height:22px">予備</div>
+    <div class="p num ivory" style="left:610px;top:185px;font-size:24px;line-height:26px">+49</div>
+
+    <div class="p" style="left:684px;top:56px;width:64px;height:64px"><img src="../../assets/ui/hud_menu.png" class="imgfit"></div>
+
+    <img class="p" src="../../assets/ui/mascot_moff.png" style="left:598px;top:516px;width:126px;z-index:6;filter:saturate(.86)">
+    <img class="p" src="../../assets/ui/bust2_forest.png" style="left:32px;top:480px;width:260px;height:324px;z-index:7;filter:saturate(.78)">
+
+    <div class="p" style="left:0;top:1451px;width:780px;height:237px;overflow:hidden;z-index:8">
+      <img src="bg_act1.png" style="position:absolute;left:0;top:-548px;width:780px;height:785px">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(44,33,21,.62),rgba(44,33,21,.40))"></div>
+    </div>
+    <div class="p gshadow" style="left:76px;top:1451px;width:628px;height:52px;z-index:9"></div>
+
+    <div class="p boardframe grain" style="left:36px;top:743px;width:708px;height:708px;z-index:10;background:#282419">
+      <i class="gr"></i>
+      <div id="board4" style="position:absolute;left:-66px;top:-773px;width:780px;height:1688px;filter:saturate(.76)"></div>
+    </div>
+    <div class="p" style="left:36px;top:743px;width:708px;height:8px;z-index:11;
+         background:linear-gradient(180deg,rgba(246,235,218,.42),rgba(246,235,218,.06))"></div>
+    <img class="p" src="k2_omen.png" style="left:299px;top:1097px;width:182px;height:91px;z-index:12;
+         filter:drop-shadow(0 3px 3px rgba(26,20,16,.45))">
+    <!-- 盤だけ一段暗く（駒は残す） -->
+    <div class="p" style="left:66px;top:773px;width:648px;height:648px;z-index:13;background:rgba(26,20,16,.28)"></div>
+
+    <!-- 課目：残数を0にせず金の採録印へ -->
+    <div class="p parch grain" style="left:232px;top:676px;width:516px;height:86px;z-index:14"><i class="gr"></i></div>
+    <img class="p" src="../../assets/sprites3/p1_leaf.png" style="left:308px;top:699px;width:40px;height:40px;z-index:15">
+    <img class="p" src="../../assets/sprites3/p4_mushroom.png" style="left:332px;top:699px;width:40px;height:40px;z-index:15">
+    <div class="p go dktxt" style="left:380px;top:686px;font-size:24px;line-height:26px;z-index:15">植物標本</div>
+    <div class="p" style="left:504px;top:690px;width:1px;height:60px;background:rgba(58,44,30,.6);z-index:15"></div>
+    <div class="p" style="left:518px;top:706px;width:46px;height:26px;z-index:15;overflow:hidden">
+      <img src="k2_idle.png" style="width:46px;filter:sepia(.55) saturate(.45) brightness(.42) contrast(1.15)">
+    </div>
+    <div class="p go dktxt" style="left:580px;top:686px;font-size:24px;line-height:26px;z-index:15">原生種</div>
+    <div class="p" id="seals4" style="left:0;top:0;width:780px;height:1688px;z-index:16"></div>
+
+    <!-- 琥珀の粒（帯→ゲージの飛翔） -->
+    <div class="p" style="left:294px;top:894px;width:12px;height:12px;border-radius:50%;z-index:17;
+         background:radial-gradient(circle at 36% 32%,#f0d191,#B98A3E);opacity:.90"></div>
+    <div class="p" style="left:346px;top:516px;width:10px;height:10px;border-radius:50%;z-index:17;
+         background:radial-gradient(circle at 36% 32%,#f0d191,#B98A3E);opacity:.60"></div>
+    <div class="p" style="left:397px;top:237px;width:8px;height:8px;border-radius:50%;z-index:17;
+         background:radial-gradient(circle at 36% 32%,#f0d191,#B98A3E);opacity:.35"></div>
+
+    <!-- 採録帯（羊皮紙の細い帯 1枚・盤の下1/5に重なる） -->
+    <div class="p parch2 grain" style="left:36px;top:1180px;width:708px;height:132px;z-index:18;
+         filter:saturate(.72) brightness(1.04) drop-shadow(0 -3px 8px rgba(20,15,10,.45))"><i class="gr"></i></div>
+    <div class="p mi dktxt" style="left:72px;top:1188px;font-size:32px;line-height:38px;z-index:19">深度5 踏破</div>
+    <div class="p go nw" style="left:428px;top:1190px;width:280px;text-align:right;font-size:22px;line-height:44px;color:#6d573d;z-index:19">この層　<span class="num dktxt" style="font-size:35px">9</span> 手</div>
+    <div class="p" style="left:72px;top:1244px;width:636px;height:1px;background:var(--rule);z-index:19"></div>
+    <div class="p brassmedal" style="left:76px;top:1264px;width:40px;height:40px;z-index:19"></div>
+    <img class="p" src="../../assets/ui/upg/mechanical-garden.png" style="left:80px;top:1268px;width:32px;height:32px;z-index:20">
+    <div class="p go dktxt" style="left:128px;top:1272px;font-size:24px;line-height:26px;z-index:19">最も働いた知見　機械庭園 4回</div>
+    <div class="p go nw" style="left:508px;top:1273px;width:200px;text-align:right;font-size:22px;line-height:24px;color:#7d6134;z-index:19">採録帖に追記</div>
+
+    <div class="p" id="lore4" style="left:0;top:0;width:780px;height:1688px;z-index:19"></div>
+    <div class="p wood grain" style="left:624px;top:1524px;width:132px;height:72px;z-index:19"><i class="gr"></i></div>
+    <div class="p" style="left:636px;top:1538px;width:44px;height:44px;z-index:20;border-radius:2px 4px 4px 2px;
+         background:linear-gradient(100deg,#5d4522 0%,#6d5228 16%,#7c5f2f 22%,#5a4522 26%,#6a5029 100%);
+         box-shadow:inset 0 0 0 1px rgba(40,30,18,.85),0 0 0 1px rgba(185,154,94,.7),
+                    inset -9px 0 0 rgba(226,214,186,.55),inset -11px 0 0 rgba(120,100,66,.6)"></div>
+    <div class="p go eng" style="left:686px;top:1547px;font-size:24px;line-height:26px;color:#e0cfae;z-index:20">採録</div>
+
+    <div class="p go" style="left:240px;top:1638px;width:300px;text-align:center;font-size:20px;line-height:24px;color:#F1E4C6;text-shadow:0 1px 3px rgba(20,15,10,.9);z-index:21">タップで早送り</div>
+
+  </div></div>
+</div>
+
+<!-- ============================================================ 5. 結果画面 -->
+<div class="col">
+  <div class="cap">
+    <div class="n">05</div>
+    <div class="t">結果画面（遭難）</div>
+    <div class="d">「なぜ細ったか」と「あと一つ」を主役に ／ 紫・黒スクリム廃止 ／ 三つ星なし ／ 1タップで次の探窟</div>
+  </div>
+  <div class="phone"><div class="screen" id="s5">
+
+    <div class="p" style="left:0;top:0;width:780px;height:1688px;overflow:hidden">
+      <img src="bg_act1.png" style="position:absolute;left:0;top:-2212px;width:780px;height:3900px;filter:contrast(.80) brightness(1.06)">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(38,32,24,.22),rgba(38,32,24,.06))"></div>
+    </div>
+
+    <!-- 不透明な羊皮紙プラーク -->
+    <div class="p parch2 grain" style="left:48px;top:140px;width:684px;height:1330px;
+         filter:saturate(.72) brightness(1.04) drop-shadow(0 8px 22px rgba(18,13,9,.55))"><i class="gr"></i></div>
+
+    <!-- リボンが板の上辺に食い込む -->
+    <img class="p" src="../../assets/ui/ribbon.png" style="left:180px;top:88px;width:420px;height:104px;z-index:4;
+         filter:sepia(.55) saturate(1.35) hue-rotate(-8deg) brightness(.86) contrast(1.05) drop-shadow(0 4px 6px rgba(20,15,10,.45))">
+    <div class="p mi ivory" style="left:180px;top:108px;width:420px;text-align:center;font-size:34px;line-height:44px;z-index:5;
+         text-shadow:0 1px 3px rgba(20,15,10,.8)">遭難</div>
+
+    <!-- ① 野帳 深度17 まで -->
+    <div class="p mi dktxt" style="left:96px;top:226px;font-size:36px;line-height:46px;z-index:5">野帳</div>
+    <div class="p go" style="left:194px;top:242px;font-size:24px;line-height:28px;color:#6d573d;z-index:5">深度</div>
+    <div class="p num dktxt" style="left:250px;top:206px;font-size:62px;line-height:74px;z-index:5">17</div>
+    <div class="p go" style="left:330px;top:242px;font-size:24px;line-height:28px;color:#6d573d;z-index:5">まで</div>
+    <div class="p" style="left:96px;top:292px;width:540px;height:1px;background:var(--rule);z-index:5"></div>
+
+    <!-- ③ なぜ細ったか -->
+    <div class="p mi dktxt" style="left:96px;top:314px;font-size:26px;line-height:32px;z-index:5">なぜ細ったか</div>
+    <div class="p" id="graph5" style="left:96px;top:372px;width:564px;height:194px;z-index:5"></div>
+    <div class="p go dktxt" style="left:96px;top:596px;font-size:28px;line-height:34px;z-index:5">深度12から酸素が細り始めた</div>
+    <div class="p go dktxt nw" style="left:96px;top:636px;font-size:26px;line-height:32px;z-index:5">深度15　息喰みに3度触れた（<span class="num verm">−9</span>）</div>
+    <div class="p" style="left:96px;top:688px;width:540px;height:1px;background:var(--rule);z-index:5"></div>
+
+    <!-- ⑧ あと一つ -->
+    <div class="p mi dktxt" style="left:96px;top:710px;font-size:26px;line-height:32px;z-index:5">あと一つ</div>
+    <div class="p go" style="left:96px;top:748px;font-size:24px;line-height:28px;color:#6d573d;z-index:5">この構成は次の知見で輪が閉じていた</div>
+
+    <div class="p emptyseat" style="left:124px;top:820px;width:88px;height:88px;z-index:5"></div>
+    <img class="p" src="../../assets/ui/upg/spore-bloom.png" style="left:140px;top:836px;width:56px;height:56px;z-index:6">
+    <div class="p go dktxt" style="left:232px;top:832px;font-size:28px;line-height:32px;z-index:5">胞子開花</div>
+    <div class="p go" style="left:232px;top:868px;font-size:22px;line-height:26px;color:#6d573d;z-index:5">胞子を生む知見が3つあった</div>
+
+    <div class="p emptyseat" style="left:124px;top:924px;width:88px;height:88px;z-index:5"></div>
+    <img class="p" src="../../assets/ui/upg/resonant-shatter.png" style="left:140px;top:940px;width:56px;height:56px;z-index:6">
+    <div class="p go dktxt" style="left:232px;top:936px;font-size:28px;line-height:32px;z-index:5">共振破砕</div>
+    <div class="p go" style="left:232px;top:972px;font-size:22px;line-height:26px;color:#6d573d;z-index:5">爆発鉱石が毎層生まれていた</div>
+
+    <div class="p" style="left:96px;top:1114px;width:540px;height:1px;background:var(--rule);z-index:5"></div>
+
+    <!-- ⑬ 今回の採録 -->
+    <div class="p go" style="left:96px;top:1126px;font-size:22px;line-height:26px;color:#6d573d;z-index:5">今回の採録</div>
+    <div class="p num dktxt" style="left:220px;top:1116px;font-size:30px;line-height:34px;z-index:5">8</div>
+    <div class="p" id="lore5" style="left:0;top:0;width:780px;height:1688px;z-index:5"></div>
+
+    <div class="p" style="left:96px;top:1268px;width:540px;height:1px;background:var(--rule);z-index:5"></div>
+    <div class="p go nw" style="left:96px;top:1280px;font-size:24px;line-height:30px;color:#7d6134;z-index:5">手数 <span class="num">148</span>　最大連鎖 <span class="num">5</span></div>
+
+    <!-- ⑰ もういちど潜る -->
+    <div class="p greenstone grain" style="left:180px;top:1406px;width:420px;height:88px;z-index:9"><i class="gr"></i></div>
+    <div class="p go eng" style="left:180px;top:1432px;width:420px;text-align:center;font-size:32px;line-height:36px;color:#EFE4CC;z-index:10">もういちど潜る</div>
+    <div class="p dark grain" style="left:512px;top:1534px;width:196px;height:50px;z-index:9"><i class="gr"></i></div>
+    <div class="p go eng" style="left:512px;top:1546px;width:196px;text-align:center;font-size:22px;line-height:26px;color:#F1E4C6;z-index:10">深度図へ</div>
+
+    <!-- 板の外：探窟家のうつむいたシルエット -->
+    <img class="p" src="../../assets/ui/bust2_forest.png" style="left:44px;top:1420px;width:210px;height:262px;z-index:8;
+         filter:brightness(.44) saturate(.40) contrast(.76)">
+
+  </div></div>
+</div>
+
+<!-- ============================================================ 6. 深度図 -->
+<div class="col">
+  <div class="cap">
+    <div class="n">06</div>
+    <div class="t">深度図（通し30層の縦坑）</div>
+    <div class="d">スクロールせず「30層ある」が読める ／ 測深線は5刻みのみ ／ 現在地は真鍮の測鉛と糸 ／ 深さを暗さで描かない</div>
+  </div>
+  <div class="phone"><div class="screen" id="s6">
+
+    <!-- 左右の岩壁（断面図の地。深さを暗さで描かないので明度は保つ） -->
+    <div class="p" style="left:0;top:0;width:780px;height:1688px;overflow:hidden;background:#3a352c">
+      <img src="bg_act1.png" style="position:absolute;left:-520px;top:-2180px;width:1560px;height:7800px;
+           filter:saturate(.62) brightness(.86) contrast(.95)">
+      <div style="position:absolute;inset:0;background:
+        linear-gradient(90deg,rgba(44,36,24,.14) 0%,rgba(44,36,24,.44) 26%,rgba(44,36,24,.54) 50%,rgba(44,36,24,.44) 74%,rgba(44,36,24,.14) 100%)"></div>
+      <div style="position:absolute;inset:0;background:
+        linear-gradient(180deg,rgba(28,24,17,.42) 0%,rgba(28,24,17,.10) 22%,rgba(28,24,17,.10) 78%,rgba(28,24,17,.46) 100%)"></div>
+    </div>
+
+    <div class="p" id="map6" style="left:0;top:0;width:780px;height:1688px"></div>
+
+    <!-- 上部HUD（すべて自分の札の上に） -->
+    <div class="p dark grain" style="left:36px;top:44px;width:180px;height:60px;z-index:8"><i class="gr"></i></div>
+    <div class="p mi ivory" style="left:36px;top:57px;width:180px;text-align:center;font-size:34px;line-height:38px;z-index:9">深度図</div>
+
+    <div class="p concave grain" style="left:342px;top:26px;width:96px;height:96px;border-radius:50%;z-index:8;
+         box-shadow:inset 0 4px 9px rgba(16,11,8,.8),0 0 0 3px #8a6e3d,0 0 0 4px rgba(46,36,26,.9),0 3px 8px rgba(20,15,10,.5)"><i class="gr"></i></div>
+    <div class="p go lab" style="left:342px;top:36px;width:96px;text-align:center;font-size:18px;line-height:20px;z-index:9">残酸素</div>
+    <div class="p num ivory" style="left:342px;top:50px;width:96px;text-align:center;font-size:62px;line-height:70px;z-index:9">66</div>
+
+    <div class="p dark grain" style="left:520px;top:44px;width:224px;height:60px;z-index:8"><i class="gr"></i></div>
+    <div class="p go lab" style="left:536px;top:62px;font-size:22px;line-height:24px;z-index:9">最高到達</div>
+    <div class="p go lab" style="left:632px;top:62px;font-size:22px;line-height:24px;z-index:9">深度</div>
+    <div class="p num ivory" style="left:696px;top:58px;font-size:30px;line-height:32px;z-index:9">23</div>
+
+    <!-- 下帯 -->
+    <div class="p wood grain" style="left:44px;top:1594px;width:132px;height:64px;z-index:9"><i class="gr"></i></div>
+    <div class="p go eng" style="left:44px;top:1611px;width:132px;text-align:center;font-size:24px;line-height:28px;color:#e0cfae;z-index:10">採録帖</div>
+    <div class="p greenstone grain" style="left:220px;top:1586px;width:340px;height:80px;z-index:9"><i class="gr"></i></div>
+    <div class="p go eng" style="left:220px;top:1609px;width:340px;text-align:center;font-size:30px;line-height:34px;color:#EFE4CC;z-index:10">深度17へ潜る</div>
+
+  </div></div>
+</div>
+
+</div><!-- /sheet -->
+
+<script>
+/* ============================================================ 共通 */
+const NS='http://www.w3.org/2000/svg';
+const SP3 = '../../assets/sprites3/';
+const UPG = '../../assets/ui/upg/';
+function el(tag, css, html){const d=document.createElement(tag); if(css) d.setAttribute('style',css); if(html!=null) d.innerHTML=html; return d;}
+function mul(s){let h=1779033703^s.length;for(let i=0;i<s.length;i++){h=Math.imul(h^s.charCodeAt(i),3432918353);h=h<<13|h>>>19}
+  return function(){h=Math.imul(h^h>>>16,2246822507);h=Math.imul(h^h>>>13,3266489909);return((h^=h>>>16)>>>0)/4294967296}}
+
+/* ============================================================ 盤（8×8・81px／セルの分節） */
+const PIECES=['p0_gear','p0_ore','p1_leaf','p2_crystal','p3_flower','p4_mushroom'];
+const BLANK=[[3,4],[4,4]];                     /* 崩れ穿ちが載る2マス */
+const OMEN=[[0,1],[1,1],[0,2],[1,2]];          /* 予告2×2＝自分から最も遠い左上 */
+const RIVETS=[[1,0],[3,1],[6,2],[2,4],[5,5],[7,6],[4,7]];  /* 等間隔にしない */
+
+function buildBoard(host){
+  const rnd=mul('yacho-v4'); const g=[];
+  const isBlank=(c,r)=>BLANK.some(b=>b[0]===c&&b[1]===r);
+  for(let r=0;r<8;r++){g[r]=[];for(let c=0;c<8;c++){
+    if(isBlank(c,r)){g[r][c]=null;continue}
+    let p,guard=0;
+    do{ p=PIECES[(rnd()*6)|0]; guard++; }
+    while(guard<40 && ((c>1&&g[r][c-1]===p&&g[r][c-2]===p)||(r>1&&g[r-1][c]===p&&g[r-2][c]===p)));
+    g[r][c]=p;
+  }}
+  const X0=66,Y0=773,S=81;                       /* 盤の内側プレイフィールド */
+  for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+    const j=Math.round((rnd()*2-1)*13);           /* セルごと ±13 luma のムラ */
+    const col=`rgb(${52+j},${48+j},${40+j})`;
+    host.appendChild(el('div',`left:${X0+c*S+2}px;top:${Y0+r*S+2}px;width:${S-4}px;height:${S-4}px;background:${col}`,'')).className='cellpanel';
+  }
+  for(const [c,r] of RIVETS){
+    host.appendChild(el('div',`position:absolute;left:${X0+c*S-3}px;top:${Y0+r*S-3}px;width:6px;height:6px;border-radius:50%;
+      background:radial-gradient(circle at 34% 30%,#a98a52,#6d5730);box-shadow:0 1px 0 rgba(14,10,7,.6)`));
+  }
+  for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+    const p=g[r][c]; if(!p) continue;
+    const cx=X0+c*S+S/2, cy=Y0+r*S+S/2;
+    host.appendChild(el('div',`position:absolute;left:${cx-20}px;top:${cy+26}px;width:40px;height:8px;border-radius:50%;background:rgba(26,20,16,.25)`));
+    const im=el('img',`position:absolute;left:${cx-36}px;top:${cy-38}px;width:72px;height:72px`);
+    im.src=SP3+p+'.png'; host.appendChild(im);
+  }
+  return {X0,Y0,S};
+}
+buildBoard(document.getElementById('board1'));
+buildBoard(document.getElementById('board4'));
+
+/* --- 予告の描き方：矢印・効果線・赤枠を使わない --- */
+(function(){
+  const X0=66,Y0=773,S=81;
+  const ns='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('width','780'); svg.setAttribute('height','1688');
+  svg.setAttribute('style','position:absolute;left:0;top:0');
+  /* ① 亀裂のハッチング2本（駒の上）。割れた新しい岩＝淡い岩粉色＋インクの影で読ませる */
+  for(const [c,r] of OMEN){
+    const x=X0+c*S, y=Y0+r*S;
+    const paths=[
+      `M${x+8},${y+60} L${x+29},${y+35} L${x+45},${y+45} L${x+72},${y+15}`,
+      `M${x+15},${y+18} L${x+33},${y+41} L${x+53},${y+35} L${x+68},${y+66}`
+    ];
+    for(const d of paths){
+      const sh=document.createElementNS(ns,'path');
+      sh.setAttribute('d',d); sh.setAttribute('fill','none');
+      sh.setAttribute('stroke','#2F2922'); sh.setAttribute('stroke-width','5');
+      sh.setAttribute('stroke-linecap','round'); sh.setAttribute('opacity','.72');
+      svg.appendChild(sh);
+      const p=document.createElementNS(ns,'path');
+      p.setAttribute('d',d); p.setAttribute('fill','none');
+      p.setAttribute('stroke','#CBBFA6'); p.setAttribute('stroke-width','2.2');
+      p.setAttribute('stroke-linecap','round'); p.setAttribute('opacity','.92');
+      svg.appendChild(p);
+    }
+  }
+  /* ② 四隅の岩粉の扇 */
+  const corners=[[X0,Y0+S],[X0+2*S,Y0+S],[X0,Y0+3*S],[X0+2*S,Y0+3*S]];
+  for(const [cx,cy] of corners){
+    const g=document.createElementNS(ns,'circle');
+    g.setAttribute('cx',cx); g.setAttribute('cy',cy); g.setAttribute('r','30');
+    g.setAttribute('fill','#9A8E7C'); g.setAttribute('opacity','.55');
+    g.setAttribute('filter','url(#soft)');
+    svg.appendChild(g);
+  }
+  /* 予告域の地面が一段沈む（枠線・矢印は使わない） */
+  const rr=document.createElementNS(ns,'rect');
+  rr.setAttribute('x',X0); rr.setAttribute('y',Y0+S); rr.setAttribute('width',2*S);
+  rr.setAttribute('height',2*S); rr.setAttribute('rx','8');
+  rr.setAttribute('fill','#1A1410'); rr.setAttribute('opacity','.22');
+  svg.insertBefore(rr,svg.firstChild.nextSibling);
+  const defs=document.createElementNS(ns,'defs');
+  defs.innerHTML='<filter id="soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="9"/></filter>';
+  svg.insertBefore(defs,svg.firstChild);
+  document.getElementById('omen1').appendChild(svg);
+})();
+
+/* --- 枠を破る前景要素 4本（蔦・鎖・垂れ根） --- */
+(function(){
+  const ns='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('width','780'); svg.setAttribute('height','1688');
+  svg.setAttribute('style','position:absolute;left:0;top:0;opacity:.85');
+  function stroke(d,w,col){const p=document.createElementNS(ns,'path');p.setAttribute('d',d);
+    p.setAttribute('fill','none');p.setAttribute('stroke',col);p.setAttribute('stroke-width',w);
+    p.setAttribute('stroke-linecap','round');svg.appendChild(p);return p}
+  function leaf(x,y,rot){const p=document.createElementNS(ns,'ellipse');p.setAttribute('cx',x);p.setAttribute('cy',y);
+    p.setAttribute('rx','9');p.setAttribute('ry','4.5');p.setAttribute('fill','#5d7048');
+    p.setAttribute('transform',`rotate(${rot} ${x} ${y})`);svg.appendChild(p)}
+  /* 左上＝蔦 */
+  stroke('M18,700 C40,742 26,780 52,806 C74,828 60,856 84,872',5,'#4a5c3c');
+  leaf(36,748,-30); leaf(38,796,20); leaf(70,842,-14); leaf(84,872,35);
+  /* 右上＝鎖 */
+  for(let i=0;i<9;i++){const y=690+i*15,x=756-i*2.2;
+    const e=document.createElementNS(ns,'ellipse');e.setAttribute('cx',x);e.setAttribute('cy',y);
+    e.setAttribute('rx',i%2?4:6.5);e.setAttribute('ry',9);e.setAttribute('fill','none');
+    e.setAttribute('stroke','#6f5b3a');e.setAttribute('stroke-width','3.2');svg.appendChild(e)}
+  /* 左下＝垂れ根 */
+  stroke('M30,1398 C56,1424 44,1452 68,1476 C86,1494 78,1512 96,1522',4.5,'#5a4830');
+  stroke('M44,1416 C60,1440 52,1462 70,1480',3,'#6b5738');
+  /* 右下＝蔦 */
+  stroke('M760,1392 C736,1418 750,1444 726,1468 C708,1486 716,1506 700,1518',5,'#4a5c3c');
+  leaf(742,1424,28); leaf(722,1470,-24); leaf(702,1516,18);
+  document.getElementById('fg1').appendChild(svg);
+})();
+
+/* --- 下帯：知見列（最大6個＋畳み） --- */
+const LORE=['mechanical-garden','spore-bullet','deep-breath','magnetic-mining','crystal-bud','vine-rocket'];
+function buildLore(host){
+  const xs=[84,172,260,348,436,524];
+  xs.forEach((x,i)=>{
+    const lift = i===0 ? 8 : 0;                       /* 直近発火した知見だけ 8px 浮かせる */
+    const y=1560-36-lift;
+    host.appendChild(el('div',`position:absolute;left:${x-36}px;top:${y}px;width:72px;height:72px;border-radius:50%;
+      background:radial-gradient(ellipse at 40% 32%,#4b4034 0%,#39301f 60%,#2a2317 100%);
+      box-shadow:inset 0 2px 5px rgba(14,10,7,.7),0 0 0 2px #7e6335,0 0 0 3px rgba(46,36,26,.85),0 3px 6px rgba(20,15,10,.45)`));
+    const im=el('img',`position:absolute;left:${x-25}px;top:${y+11}px;width:50px;height:50px`);
+    im.src=UPG+LORE[i]+'.png'; host.appendChild(im);
+    if(lift){ /* 途切れた温白ハイライト */
+      host.appendChild(el('div',`position:absolute;left:${x-38}px;top:${y-2}px;width:76px;height:76px;border-radius:50%;
+        background:conic-gradient(from 200deg,rgba(246,235,218,.62) 0deg,rgba(246,235,218,0) 46deg,rgba(246,235,218,0) 150deg,rgba(246,235,218,.34) 190deg,rgba(246,235,218,0) 232deg);
+        -webkit-mask:radial-gradient(circle,transparent 62%,#000 64%);mask:radial-gradient(circle,transparent 62%,#000 64%)`));
+    }
+  });
+  host.appendChild(el('div',`position:absolute;left:564px;top:1534px;width:52px;height:52px;border-radius:50%;
+    background:radial-gradient(ellipse at 40% 32%,#4b4034,#2a2317);
+    box-shadow:inset 0 2px 4px rgba(14,10,7,.7),0 0 0 2px #7e6335,0 0 0 3px rgba(46,36,26,.85)`));
+  const t=el('div',`position:absolute;left:564px;top:1548px;width:52px;text-align:center;font-size:24px;line-height:26px;color:#F1E4C6`,'＋2');
+  t.className='num'; host.appendChild(t);
+}
+buildLore(document.getElementById('lore1'));
+buildLore(document.getElementById('lore4'));
+
+/* --- 04：課目の完了＝金の採録印 φ48 --- */
+(function(){
+  const host=document.getElementById('seals4');
+  [[430,732],[628,732]].forEach(([cx,cy])=>{
+    host.appendChild(el('div',`position:absolute;left:${cx-24}px;top:${cy-24}px;width:48px;height:48px;border-radius:50%;
+      background:radial-gradient(ellipse at 38% 30%,#dcb668 0%,#B98A3E 55%,#8a6530 100%);
+      box-shadow:inset 0 0 0 1px rgba(58,44,30,.5),0 0 0 2px rgba(185,154,94,.85),0 2px 4px rgba(20,15,10,.4)`));
+    const ns='http://www.w3.org/2000/svg';
+    const s=document.createElementNS(ns,'svg');
+    s.setAttribute('width','48');s.setAttribute('height','48');
+    s.setAttribute('style',`position:absolute;left:${cx-24}px;top:${cy-24}px`);
+    const p=document.createElementNS(ns,'path');
+    p.setAttribute('d','M14,25 L21,32 L35,16'); p.setAttribute('fill','none');
+    p.setAttribute('stroke','#F1E4C6'); p.setAttribute('stroke-width','4');
+    p.setAttribute('stroke-linecap','round'); p.setAttribute('stroke-linejoin','round');
+    p.setAttribute('opacity','.92'); s.appendChild(p); host.appendChild(s);
+  });
+})();
+
+/* ============================================================ 02 採録 */
+(function(){
+  const host=document.getElementById('held2');
+  /* 所持知見メダル φ56 */
+  [320,376,432,488,544].forEach((x,i)=>{
+    host.appendChild(el('div',`position:absolute;left:${x-28}px;top:184px;width:56px;height:56px;border-radius:50%;
+      background:radial-gradient(ellipse at 40% 32%,#4b4034,#2a2317);
+      box-shadow:inset 0 2px 4px rgba(14,10,7,.7),0 0 0 2px #7e6335,0 0 0 3px rgba(46,36,26,.85)`));
+    const im=el('img',`position:absolute;left:${x-19}px;top:193px;width:38px;height:38px`);
+    im.src=UPG+LORE[i]+'.png'; host.appendChild(im);
+  });
+  /* 空き枠 3つ＝彫り込んだ空のロンデル座（破線は使わない） */
+  [616,672,728].forEach(x=>{
+    const d=el('div',`position:absolute;left:${x-28}px;top:184px;width:56px;height:56px`);
+    d.className='emptyseat'; host.appendChild(d);
+    host.appendChild(el('div',`position:absolute;left:${x-16}px;top:196px;width:32px;height:32px;border-radius:50%;
+      box-shadow:inset 0 2px 3px rgba(12,8,5,.85),0 1px 0 rgba(185,154,94,.22)`));
+  });
+})();
+
+const CARDS=[
+  {kind:'異種', name:'胞子弾',     icon:'spore-bullet',
+   what:['爆発のあとに','胞子','が1つ残る'], bonus:null, res:1, y:272, rot:-1.2},
+  {kind:'鉱物', name:'共振破砕',   icon:'resonant-shatter',
+   what:['爆発鉱石','の爆発が十字から3×3に広がる'], bonus:'採録時のおまけ　爆発鉱石を1つ作る', res:2, y:636, rot:0.8, kw:0},
+  {kind:'遺物', name:'賭博師の壺', icon:'gamblers-pot',
+   what:['遺物マッチ','のたび、半々で特殊駒か邪魔ピースが生まれる'], bonus:null, res:0, y:1000, rot:-0.5, kw:0}
+];
+(function(){
+  const host=document.getElementById('cards2');
+  const brush=`<svg width="100%" height="7" viewBox="0 0 56 7" preserveAspectRatio="none" style="position:absolute;left:0;bottom:-7px">
+      <path d="M1,4.4 C10,2.2 18,5.6 27,3.6 C36,1.8 45,5.2 55,2.8" fill="none" stroke="#8a5a34" stroke-width="3.4" stroke-linecap="round" opacity=".85"/></svg>`;
+  CARDS.forEach(c=>{
+    const wrap=el('div',`position:absolute;left:54px;top:${c.y}px;width:672px;height:340px;transform:rotate(${c.rot}deg)`);
+    const card=el('div',`position:absolute;inset:0`); card.className='parch grain';
+    card.style.filter='saturate(.50) brightness(1.11) drop-shadow(0 5px 12px rgba(18,13,9,.45))';
+    card.appendChild(el('i','')).className='gr';
+    wrap.appendChild(card);
+
+    /* 押印ロンデル（カード左縁からはみ出す） */
+    wrap.appendChild(el('div',`position:absolute;left:-12px;top:22px;width:112px;height:112px;border-radius:50%;
+      background:radial-gradient(ellipse at 38% 30%,#5b4c33 0%,#40331f 58%,#2c2315 100%);
+      box-shadow:inset 0 3px 7px rgba(14,10,7,.7),0 0 0 3px #8a6e3d,0 0 0 4px rgba(46,36,26,.9),0 3px 7px rgba(20,15,10,.45)`));
+    const ic=el('img',`position:absolute;left:11px;top:45px;width:66px;height:66px`); ic.src=UPG+c.icon+'.png'; wrap.appendChild(ic);
+
+    wrap.appendChild(el('div',`position:absolute;left:150px;top:32px;font-size:20px;line-height:24px;color:#9A7B44;letter-spacing:.10em`,c.kind)).className='go';
+    wrap.appendChild(el('div',`position:absolute;left:150px;top:66px;font-size:40px;line-height:52px;color:#3A2E20`,c.name)).className='mi';
+    wrap.appendChild(el('div',`position:absolute;left:150px;top:132px;width:470px;height:1px;background:rgba(138,116,84,.6)`));
+
+    /* 起きること（キーワードの下に手描きの筆線） */
+    let html='';
+    c.what.forEach((seg,i)=>{
+      const isKw = (c.kw===undefined ? i===1 : i===c.kw);
+      html += isKw ? `<span style="position:relative;display:inline-block">${seg}${brush}</span>` : seg;
+    });
+    wrap.appendChild(el('div',`position:absolute;left:44px;top:154px;width:606px;font-size:28px;line-height:38px;color:#3A2E20`,html)).className='go';
+
+    /* 採録時のおまけ（灰色の帯パネルは廃止） */
+    if(c.bonus){
+      wrap.appendChild(el('div',`position:absolute;left:44px;top:230px;width:26px;height:26px;border-radius:50%;
+        background:radial-gradient(ellipse at 38% 30%,#c19a52,#8a6e3d);box-shadow:0 0 0 1px rgba(58,44,30,.5)`));
+      wrap.appendChild(el('div',`position:absolute;left:82px;top:230px;width:460px;font-size:24px;line-height:30px;color:#5d4a32`,c.bonus)).className='go';
+    }
+    /* 呼応バッジ */
+    wrap.appendChild(el('div',`position:absolute;left:586px;top:242px;width:52px;height:52px`)).className='brassmedal';
+    const rn=el('div',`position:absolute;left:586px;top:254px;width:52px;text-align:center;font-size:26px;line-height:28px;color:#F1E4C6`,String(c.res));
+    rn.className='num'; wrap.appendChild(rn);
+    wrap.appendChild(el('div',`position:absolute;left:512px;top:258px;font-size:20px;line-height:22px;color:#5d4a32`,'呼応')).className='go';
+
+    host.appendChild(wrap);
+  });
+})();
+
+/* ============================================================ 03 祝福と呪い */
+const PAIRS=[
+  {y:216,rot:-0.8, b:['遠見の薄膜','深度図の未知を一段先まで読める'], c:['薄い肺','各幕の最初の補給が <b>+7</b> から <b>+5</b> になる']},
+  {y:648,rot: 0.6, b:['菌環の肺','各層で最初に胞子を消したとき酸素 <b>+1</b>'], c:['重い荷','課目クリアの補給が常に <b>−1</b>']},
+  {y:1080,rot:-0.4,b:['空洞の反響','各層で最初の特殊駒効果が二度起きる'], c:['石の記憶','知見の枠が <b>8</b> から <b>7</b> になる']}
+];
+(function(){
+  const host=document.getElementById('pairs3');
+  PAIRS.forEach(p=>{
+    const wrap=el('div',`position:absolute;left:42px;top:${p.y}px;width:696px;height:400px;transform:rotate(${p.rot}deg)`);
+    const card=el('div','position:absolute;inset:0'); card.className='parch grain';
+    card.style.filter='saturate(.50) brightness(1.11) drop-shadow(0 5px 14px rgba(18,13,9,.48))';
+    card.appendChild(el('i','')).className='gr';
+    wrap.appendChild(card);
+    /* 呪い側の紙だけ −6 luma の褐色＋緑青のシミ1つ */
+    wrap.appendChild(el('div',`position:absolute;left:6px;top:196px;width:684px;height:198px;background:rgba(58,44,26,.13)`));
+    wrap.appendChild(el('div',`position:absolute;left:470px;top:300px;width:104px;height:62px;border-radius:50%;
+      background:radial-gradient(ellipse at 42% 38%,rgba(74,97,85,.30),rgba(74,97,85,0) 72%)`));
+
+    /* 祝福：押印ロンデル（温白ハイライト） */
+    wrap.appendChild(el('div',`position:absolute;left:12px;top:36px;width:96px;height:96px;border-radius:50%;
+      background:radial-gradient(ellipse at 36% 28%,#6a5a3c 0%,#4a3d26 58%,#332918 100%);
+      box-shadow:inset 0 3px 6px rgba(14,10,7,.6),0 0 0 3px #9c7d45,0 0 0 4px rgba(46,36,26,.9)`));
+    wrap.appendChild(el('div',`position:absolute;left:10px;top:34px;width:100px;height:100px;border-radius:50%;
+      background:conic-gradient(from 195deg,rgba(246,235,218,.55) 0deg,rgba(246,235,218,0) 52deg,rgba(246,235,218,0) 300deg,rgba(246,235,218,.28) 342deg,rgba(246,235,218,0) 360deg);
+      -webkit-mask:radial-gradient(circle,transparent 60%,#000 63%);mask:radial-gradient(circle,transparent 60%,#000 63%)`));
+    /* 祝福の押印＝開いた輪から放射する測線 */
+    const sb=document.createElementNS(NS,'svg'); sb.setAttribute('width','96');sb.setAttribute('height','96');
+    sb.setAttribute('viewBox','0 0 96 96'); sb.setAttribute('style','position:absolute;left:12px;top:36px');
+    sb.innerHTML='<g fill="none" stroke="#C6A96A" stroke-width="2.2" stroke-linecap="round" opacity=".92">'
+      +'<circle cx="48" cy="48" r="15"/><circle cx="48" cy="48" r="6.5" stroke-width="1.6"/>'
+      +'<path d="M48,22 L48,14 M48,74 L48,82 M22,48 L14,48 M74,48 L82,48"/>'
+      +'<path d="M30,30 L24,24 M66,66 L72,72 M66,30 L72,24 M30,66 L24,72" stroke-width="1.6" opacity=".7"/></g>';
+    wrap.appendChild(sb);
+    wrap.appendChild(el('div',`position:absolute;left:132px;top:28px;font-size:20px;line-height:24px;color:#9A7B44;letter-spacing:.12em`,'祝福')).className='go';
+    wrap.appendChild(el('div',`position:absolute;left:132px;top:58px;font-size:36px;line-height:48px;color:#3A2E20`,p.b[0])).className='mi';
+    wrap.appendChild(el('div',`position:absolute;left:132px;top:120px;width:526px;font-size:28px;line-height:36px;color:#3A2E20`,p.b[1])).className='go';
+
+    /* 対の罫＋天秤の押印 */
+    wrap.appendChild(el('div',`position:absolute;left:36px;top:195px;width:624px;height:1px;background:rgba(138,116,84,.6)`));
+    const ns='http://www.w3.org/2000/svg';
+    const sv=document.createElementNS(ns,'svg'); sv.setAttribute('width','28');sv.setAttribute('height','28');
+    sv.setAttribute('viewBox','0 0 28 28'); sv.setAttribute('style','position:absolute;left:14px;top:181px');
+    sv.innerHTML='<g fill="none" stroke="#8a7454" stroke-width="1.6" stroke-linecap="round">'
+      +'<path d="M14,6 L14,20"/><path d="M5,10 L23,10"/><path d="M5,10 L2,16 M5,10 L8,16 M2,16 A3,3 0 0 0 8,16"/>'
+      +'<path d="M23,10 L20,16 M23,10 L26,16 M20,16 A3,3 0 0 0 26,16"/><path d="M9,21 L19,21"/></g>';
+    wrap.appendChild(sv);
+
+    /* 呪い：欠けた環・緑青が溜まる。文字サイズ・書体・字送りは完全に同一 */
+    wrap.appendChild(el('div',`position:absolute;left:12px;top:248px;width:96px;height:96px;border-radius:50%;
+      background:radial-gradient(ellipse at 36% 28%,#4e4832 0%,#3a3423 58%,#282216 100%);
+      box-shadow:inset 0 3px 6px rgba(14,10,7,.65),0 0 0 3px #6f6a44,0 0 0 4px rgba(46,36,26,.9)`));
+    wrap.appendChild(el('div',`position:absolute;left:10px;top:246px;width:100px;height:100px;border-radius:50%;
+      background:conic-gradient(from 20deg,rgba(74,97,85,.75) 0deg,rgba(74,97,85,.75) 74deg,rgba(74,97,85,0) 80deg,rgba(74,97,85,0) 210deg,rgba(74,97,85,.55) 236deg,rgba(74,97,85,0) 268deg);
+      -webkit-mask:radial-gradient(circle,transparent 60%,#000 63%);mask:radial-gradient(circle,transparent 60%,#000 63%)`));
+    const sc=document.createElementNS(NS,'svg'); sc.setAttribute('width','96');sc.setAttribute('height','96');
+    sc.setAttribute('viewBox','0 0 96 96'); sc.setAttribute('style','position:absolute;left:12px;top:248px');
+    sc.innerHTML='<g fill="none" stroke="#7E9187" stroke-width="2.4" stroke-linecap="round" opacity=".95">'
+      +'<path d="M63,26 A25,25 0 1 1 33,26"/><path d="M40,20 L56,32" stroke-width="1.8" opacity=".8"/>'
+      +'<path d="M48,48 L48,66" stroke-width="1.8"/><path d="M40,60 L48,66 L56,60" stroke-width="1.8"/></g>';
+    wrap.appendChild(sc);
+    wrap.appendChild(el('div',`position:absolute;left:132px;top:236px;font-size:20px;line-height:24px;color:#9A7B44;letter-spacing:.12em`,'呪い')).className='go';
+    wrap.appendChild(el('div',`position:absolute;left:132px;top:266px;font-size:36px;line-height:48px;color:#3A2E20`,p.c[0])).className='mi';
+    wrap.appendChild(el('div',`position:absolute;left:132px;top:328px;width:526px;font-size:28px;line-height:36px;color:#3A2E20`,p.c[1])).className='go';
+
+    host.appendChild(wrap);
+  });
+})();
+
+/* ============================================================ 05 折れ線グラフ */
+(function(){
+  const V=[19,21,20,22,21,20,22,21,20,21,22,20,17,15,12,7,3];
+  const W=564,H=194,ns='http://www.w3.org/2000/svg';
+  const sx=i=>i*(W-4)/16+2, sy=v=>H-6-(v/24)*(H-14);
+  const svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('width',W); svg.setAttribute('height',H);
+  /* 0 ライン＝朱1px 実線（酸素喪失なので朱を許可） */
+  svg.innerHTML=
+    `<line x1="0" y1="${sy(0)}" x2="${W}" y2="${sy(0)}" stroke="#C4553E" stroke-width="1"/>`
+   +`<line x1="0" y1="${sy(24)}" x2="${W}" y2="${sy(24)}" stroke="#8a7454" stroke-width="1" opacity=".38" stroke-dasharray="1 5"/>`
+   +`<polyline fill="none" stroke="#7C6A4A" stroke-width="2" stroke-linejoin="round"
+       points="${V.map((v,i)=>sx(i)+','+sy(v)).join(' ')}"/>`
+   +V.map((v,i)=>`<circle cx="${sx(i)}" cy="${sy(v)}" r="2.5" fill="#5f5138"/>`).join('')
+   /* 深度12の点から細い引き出し罫1本 */
+   +`<path d="M${sx(11)},${sy(20)+8} L${sx(11)},${H-2}" fill="none" stroke="#8a7454" stroke-width="1" opacity=".75"/>`
+   +`<circle cx="${sx(11)}" cy="${sy(20)}" r="5" fill="none" stroke="#7C6A4A" stroke-width="1.6"/>`;
+  svg.setAttribute('style','overflow:visible');
+  document.getElementById('graph5').appendChild(svg);
+  /* 軸の目盛（深度・残酸素） */
+  const host=document.getElementById('graph5');
+  const lab=(x,y,t)=>{const d=el('div',`position:absolute;left:${x}px;top:${y}px;font-size:17px;line-height:18px;color:#8a7454`,t);d.className='num';host.appendChild(d)};
+  lab(-30,sy(24)-9,'24'); lab(-24,sy(0)-9,'0');
+  lab(sx(11)-9,H+4,'12'); lab(sx(16)-9,H+4,'17');
+})();
+
+/* --- 05 今回の採録 メダル×8 --- */
+(function(){
+  const host=document.getElementById('lore5');
+  const ICONS=['mechanical-garden','spore-bullet','deep-breath','magnetic-mining','crystal-bud','vine-rocket','relic-root','preheat'];
+  const xs=[124,190,256,322,388,454,520,586];
+  xs.forEach((x,i)=>{
+    host.appendChild(el('div',`position:absolute;left:${x-28}px;top:1182px;width:56px;height:56px;border-radius:50%;
+      background:radial-gradient(ellipse at 40% 32%,#4b4034,#2a2317);
+      box-shadow:inset 0 2px 4px rgba(14,10,7,.7),0 0 0 2px #7e6335,0 0 0 3px rgba(46,36,26,.85)`));
+    const im=el('img',`position:absolute;left:${x-19}px;top:1191px;width:38px;height:38px`);
+    im.src=UPG+ICONS[i]+'.png'; host.appendChild(im);
+    if(i===0){
+      host.appendChild(el('div',`position:absolute;left:${x-30}px;top:1180px;width:60px;height:60px;border-radius:50%;
+        background:conic-gradient(from 198deg,rgba(246,235,218,.72) 0deg,rgba(246,235,218,0) 50deg,rgba(246,235,218,0) 300deg,rgba(246,235,218,.4) 340deg,rgba(246,235,218,0) 360deg);
+        -webkit-mask:radial-gradient(circle,transparent 60%,#000 63%);mask:radial-gradient(circle,transparent 60%,#000 63%)`));
+      const t=el('div',`position:absolute;left:96px;top:1246px;width:400px;text-align:left;font-size:20px;line-height:22px;color:#6d573d`,'最も働いた知見　機械庭園 <span style="font-family:Archivo;font-weight:600">27</span>回');
+      t.className='go'; host.appendChild(t);
+    }
+  });
+})();
+
+/* ============================================================ 06 深度図 */
+(function(){
+  const host=document.getElementById('map6'), ns='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('width','780'); svg.setAttribute('height','1688');
+  svg.setAttribute('style','position:absolute;left:0;top:0');
+  const defs=document.createElementNS(ns,'defs');
+  defs.innerHTML=
+     '<pattern id="hatch" width="7" height="7" patternTransform="rotate(38)" patternUnits="userSpaceOnUse">'
+    +'<line x1="0" y1="0" x2="0" y2="7" stroke="#b6b0a2" stroke-width="1.3" opacity=".85"/></pattern>'
+    +'<linearGradient id="fall" x1="0" y1="0" x2="0" y2="1">'
+    +'<stop offset="0" stop-color="#cfd8cf" stop-opacity=".55"/><stop offset=".62" stop-color="#b9c4bd" stop-opacity=".30"/>'
+    +'<stop offset="1" stop-color="#b9c4bd" stop-opacity="0"/></linearGradient>'
+    +'<linearGradient id="chain" x1="0" y1="0" x2="0" y2="1">'
+    +'<stop offset="0" stop-color="#8a7248" stop-opacity=".70"/><stop offset=".70" stop-color="#8a7248" stop-opacity=".30"/>'
+    +'<stop offset="1" stop-color="#8a7248" stop-opacity="0"/></linearGradient>';
+  svg.appendChild(defs);
+  const add=(t,a)=>{const e=document.createElementNS(ns,t);for(const k in a)e.setAttribute(k,a[k]);svg.appendChild(e);return e};
+
+  /* 幕ごとの帯（深さを暗さで描かない。色相で描く） */
+  const BANDS=[
+    {y0:130, y1:606, fill:'#5c6141', op:.72},   /* 第一幕 空明かり：暖褐＋苔緑 */
+    {y0:606, y1:1066,fill:'#5a5343', op:.72},   /* 第二幕 炉あかり：真鍮灰 */
+    {y0:1066,y1:1560,fill:'#3a3a3e', op:.76}    /* 第三幕 岩あかり：無彩スレート */
+  ];
+  BANDS.forEach(b=>{
+    add('rect',{x:220,y:b.y0,width:340,height:b.y1-b.y0,fill:b.fill,opacity:b.op});
+    add('rect',{x:220,y:b.y0,width:52,height:b.y1-b.y0,fill:'#1c1811',opacity:.30});
+    add('rect',{x:508,y:b.y0,width:52,height:b.y1-b.y0,fill:'#1c1811',opacity:.30});
+  });
+  /* 坑の縦の層理（描く線の本数で奥行きを作る） */
+  for(let i=0;i<26;i++){const x=232+i*13+(i%3)*2;
+    add('line',{x1:x,y1:132,x2:x-4,y2:1558,stroke:'#1c1811','stroke-width':i%4?0.8:1.6,opacity:i%4?.12:.18});}
+  add('rect',{x:220,y:130,width:340,height:1430,fill:'none',stroke:'#8a7454','stroke-width':1,opacity:.45});
+  /* 第三幕の結晶の発光点だけ紫 */
+  [[262,1132],[520,1198],[300,1330],[490,1414],[248,1470]].forEach(([x,y])=>
+    add('circle',{cx:x,cy:y,r:3.2,fill:'#8f7fa8',opacity:.85}));
+
+  /* 落下するリボン（着地させない） */
+  add('path',{d:'M188,132 C196,420 180,760 192,1120 C198,1330 186,1450 190,1540',fill:'none',stroke:'url(#fall)','stroke-width':7});
+  for(let i=0;i<48;i++){const y=140+i*29,x=690+Math.sin(i*.5)*3;
+    add('ellipse',{cx:x,cy:y,rx:i%2?4:6.5,ry:9,fill:'none',stroke:'url(#chain)','stroke-width':2.6});}
+
+  /* 測深線は5刻みのみ */
+  [5,10,15,20,25,30].forEach(d=>{const y=170+(d-1)*46;
+    add('line',{x1:220,y1:y,x2:560,y2:y,stroke:'#B99A5E','stroke-width':1,opacity:.55});});
+
+  /* ノード */
+  const NX=d=>390+92*Math.sin(d*1.1), NY=d=>170+(d-1)*46;
+  const EDGE=d=>d<=10?'#6F7A52':(d<=20?'#9A7B44':'#6B6B74');
+  /* 経路 */
+  let path='M'+NX(1)+','+NY(1);
+  for(let d=2;d<=30;d++) path+=' L'+NX(d)+','+NY(d);
+  path+=' L390,1560';
+  add('path',{d:path,fill:'none',stroke:'#B99A5E','stroke-width':1.4,opacity:.42,'stroke-dasharray':'5 5'});
+  add('path',{d:(()=>{let p='M'+NX(1)+','+NY(1);for(let d=2;d<=17;d++)p+=' L'+NX(d)+','+NY(d);return p})(),
+    fill:'none',stroke:'#B99A5E','stroke-width':2.2,opacity:.8});
+
+  for(let d=1;d<=30;d++){
+    const x=NX(d), y=NY(d), boss=(d%10===0), r=boss?28:17, done=d<=16;
+    if(boss){
+      add('circle',{cx:x,cy:y,r:r,fill:'#241d14',stroke:'#8a6e3d','stroke-width':3});
+      add('circle',{cx:x,cy:y,r:r-8,fill:'none',stroke:'#B99A5E','stroke-width':1.6,opacity:.9});
+    }else if(done){
+      add('circle',{cx:x,cy:y,r:r,fill:d<=10?'#6a7a52':'#8a7248',stroke:'#2F2922','stroke-width':1.4,opacity:.92});
+      add('circle',{cx:x-4,cy:y-4,r:r*.45,fill:'#EFE4CC',opacity:.22});
+    }else{
+      add('circle',{cx:x,cy:y,r:r,fill:'#2a2822',opacity:.55});
+      add('circle',{cx:x,cy:y,r:r,fill:'url(#hatch)',stroke:EDGE(d),'stroke-width':2,opacity:1});
+    }
+  }
+  /* 特殊ラスボス＝二重環印 */
+  add('circle',{cx:390,cy:1560,r:36,fill:'#1f1a13',stroke:'#8a6e3d','stroke-width':3.2});
+  add('circle',{cx:390,cy:1560,r:27,fill:'none',stroke:'#B99A5E','stroke-width':1.8,opacity:.9});
+  add('circle',{cx:390,cy:1560,r:18,fill:'none',stroke:'#8a6e3d','stroke-width':2.4,opacity:.8});
+
+  /* 現在地（深度17）＝真鍮の測鉛と糸 */
+  const cx=NX(17), cy=NY(17);
+  add('line',{x1:cx+18,y1:0,x2:cx+18,y2:cy,stroke:'#B99A5E','stroke-width':1,opacity:.7});
+  add('path',{d:`M${cx+18},${cy-11} l9,13 l-9,15 l-9,-15 z`,fill:'#B98A3E',stroke:'#2F2922','stroke-width':1.2});
+  add('circle',{cx:cx,cy:cy,r:21,fill:'none',stroke:'#EFE4CC','stroke-width':1.6,opacity:.65});
+
+  /* 原生種の記録（踏破済みノードの脇。危険度は色ではなく点の数で示す） */
+  function rec(d,dots,col,mirror){
+    const x=NX(d),y=NY(d), sx=mirror?x+30:x-30-30;   /* 記録印 φ30 */
+    for(let i=0;i<dots;i++){const c=document.createElementNS(ns,'circle');
+      c.setAttribute('cx',sx+7+i*8); c.setAttribute('cy',y+22);
+      c.setAttribute('r',3); c.setAttribute('fill',col);
+      c.setAttribute('stroke','#2F2922'); c.setAttribute('stroke-width','.8'); svg.appendChild(c);}
+    return {x:sx,y:y-15};
+  }
+  const r5=rec(5,2,'#B98A3E',false);
+  const r15=rec(15,3,'#C4553E',true);
+  host.appendChild(svg);
+
+  /* 原生種シルエット φ30（採録帖に載った種だけ姿が出る） */
+  function silh(pos,inner){
+    const d=el('div',`position:absolute;left:${pos.x}px;top:${pos.y}px;width:30px;height:30px;border-radius:50%;
+      background:radial-gradient(ellipse at 42% 34%,#5a5347 0%,#3d382e 62%,#2a261f 100%);
+      box-shadow:inset 0 2px 3px rgba(12,8,5,.7),0 0 0 1.5px rgba(185,154,94,.65);overflow:hidden`);
+    d.innerHTML=inner; host.appendChild(d);
+  }
+  silh(r5,`<img src="k2_idle.png" style="position:absolute;left:1px;top:9px;width:28px;
+    filter:grayscale(1) brightness(1.7) contrast(.7) opacity(.85)">`);
+  silh(r15,`<svg width="30" height="30"><g fill="none" stroke="#cfc7b8" stroke-width="1.6" opacity=".9">
+    <circle cx="15" cy="15" r="8"/><circle cx="15" cy="15" r="3.4"/>
+    <path d="M15,4 L15,7 M15,23 L15,26 M4,15 L7,15 M23,15 L26,15"/></g></svg>`);
+
+  /* 未踏部は食痕の記号だけ（削り跡） */
+  [22,25,28].forEach(d=>{
+    const x=NX(d),y=NY(d);
+    const m=el('div',`position:absolute;left:${x+24}px;top:${y-8}px;width:18px;height:16px`);
+    m.innerHTML='<svg width="18" height="16"><g stroke="#9c968a" stroke-width="1.3" stroke-linecap="round" opacity=".8">'
+      +'<path d="M2,3 L9,7"/><path d="M2,8 L8,11"/><path d="M3,13 L10,13"/></g></svg>';
+    host.appendChild(m);
+  });
+
+  /* 幕名札 */
+  const acts=[['第一幕　空明かり',150],['第二幕　炉あかり',610],['第三幕　岩あかり',1070]];
+  acts.forEach(([t,y])=>{
+    const d=el('div',`position:absolute;left:36px;top:${y}px;width:264px;height:40px`);
+    d.className='dark grain'; d.appendChild(el('i','')).className='gr'; host.appendChild(d);
+    const s=el('div',`position:absolute;left:36px;top:${y+8}px;width:264px;text-align:center;font-size:24px;line-height:26px;color:#F1E4C6`,t);
+    s.className='mi'; host.appendChild(s);
+  });
+
+  /* 測深線の数字（右端・26px）。数字は必ず自分の札の上に載せる＝壁に打った測深タグ */
+  [5,10,15,20,25,30].forEach(d=>{
+    const y=170+(d-1)*46;
+    const pl=el('div',`position:absolute;left:566px;top:${y-19}px;width:56px;height:38px`);
+    pl.className='dark grain'; pl.appendChild(el('i','')).className='gr'; host.appendChild(pl);
+    const s=el('div',`position:absolute;left:566px;top:${y-15}px;width:56px;text-align:center;
+      font-size:26px;line-height:30px;color:#F1E4C6`,String(d));
+    s.className='num'; host.appendChild(s);
+  });
+
+  /* ボスと底のラベル */
+  const bl=el('div',`position:absolute;left:88px;top:556px;font-size:22px;line-height:26px;color:#F1E4C6;
+    text-shadow:0 1px 4px rgba(20,15,10,.9)`,'主の縄張り'); bl.className='go'; host.appendChild(bl);
+  const fl=el('div',`position:absolute;left:214px;top:1546px;font-size:24px;line-height:28px;color:#F1E4C6;
+    text-shadow:0 1px 4px rgba(20,15,10,.9)`,'底の外'); fl.className='mi'; host.appendChild(fl);
+})();
+</script>
+</body>
+</html>

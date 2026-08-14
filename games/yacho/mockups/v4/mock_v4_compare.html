@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>yacho プレイ画面 現状とモック v4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600&family=Shippori+Mincho:wght@500;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#171512}
+body{font-family:'Zen Kaku Gothic New',sans-serif;font-weight:500;color:#DCCFBC;padding:34px 30px 40px}
+h1{font-family:'Shippori Mincho',serif;font-weight:600;font-size:25px;color:#F1E4C6;letter-spacing:.06em;
+  flex:0 0 auto;white-space:nowrap}
+.head{display:flex;align-items:baseline;gap:18px;margin:0 2px 24px}
+.head .sub{font-size:13px;color:#8d7f6c;flex:1 1 auto;line-height:1.6}
+.head .rule{flex:1;height:1px;background:linear-gradient(90deg,rgba(185,154,94,.45),rgba(185,154,94,0))}
+
+.pair{display:flex;gap:34px;align-items:flex-start}
+.col{width:390px;flex:0 0 390px}
+.cap{margin-bottom:10px}
+.cap .k{font-family:'Archivo',sans-serif;font-weight:600;font-size:11px;letter-spacing:.16em;color:#9A7B44}
+.cap .t{font-family:'Shippori Mincho',serif;font-weight:600;font-size:18px;color:#F1E4C6;margin-top:2px}
+.cap .d{font-size:11.5px;color:#8d7f6c;margin-top:3px;line-height:1.5}
+.shot{width:390px;height:844px;overflow:hidden;border-radius:9px;
+  box-shadow:0 0 0 1px rgba(58,44,30,.9),0 0 0 2px rgba(185,154,94,.5),0 16px 40px rgba(0,0,0,.55)}
+.shot img{display:block;width:390px;height:844px}
+.old{filter:none}
+
+.tbl{width:814px;margin-top:30px;border-collapse:collapse;font-size:13px}
+.tbl th,.tbl td{padding:9px 12px;vertical-align:top;text-align:left;border-bottom:1px solid rgba(138,116,84,.28)}
+.tbl thead th{font-family:'Shippori Mincho',serif;font-weight:600;font-size:13px;color:#C9A968;
+  border-bottom:1px solid rgba(185,154,94,.55)}
+.tbl td.k{width:168px;color:#C3A76E}
+.tbl td.a{width:300px;color:#a3907a}
+.tbl td.b{color:#EFE4CC}
+.n{font-family:'Archivo',sans-serif;font-weight:600;font-variant-numeric:tabular-nums lining-nums}
+.foot{margin-top:16px;font-size:11.5px;color:#8d7f6c;line-height:1.7;width:814px}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <h1>プレイ画面 ── 現状とモック v4</h1>
+  <div class="sub">左 = 現在の実機（深度5）／ 右 = v4 モックの目標像。数値はいずれも同条件（S-画面・780×1688）で実測</div>
+  <div class="rule"></div>
+</div>
+
+<div class="pair">
+  <div class="col">
+    <div class="cap">
+      <div class="k">NOW</div>
+      <div class="t">現状（実機・r1_floor5）</div>
+      <div class="d">環境帯 35.2% ／ 課目は分数 ／ 原生種は丸に目2つ ／ 上端を橙のゲージ板が占有</div>
+    </div>
+    <div class="shot"><img class="old" src="../../assets_src/r1_floor5.png"></div>
+  </div>
+  <div class="col">
+    <div class="cap">
+      <div class="k">TARGET</div>
+      <div class="t">モック v4（目標像）</div>
+      <div class="d">環境帯 44.0% ／ 課目は残数 ／ 原生種は横2マスの崩れ穿ち ／ HUD は札で風景の上に浮く</div>
+    </div>
+    <div class="shot"><img src="mock_v4_play.png"></div>
+  </div>
+</div>
+
+<table class="tbl">
+  <thead><tr><th>項目</th><th>現状</th><th>モック v4</th></tr></thead>
+  <tbody>
+    <tr><td class="k">縦の配分</td>
+        <td class="a">環境帯 <span class="n">35.2</span>%／盤 <span class="n">45.3</span>%</td>
+        <td class="b">環境帯 <span class="n">44.0</span>%／盤 <span class="n">41.9</span>%／下帯 <span class="n">14.0</span>%（一次資料A案と一致）</td></tr>
+    <tr><td class="k">課目の表記</td>
+        <td class="a">植物標本 <span class="n">9 / 50</span>（分数）・掃討 <span class="n">0 / 1</span></td>
+        <td class="b">植物標本 あと <span class="n">41</span>／原生種 あと <span class="n">1</span>（残数・羊皮紙1枚に同居）</td></tr>
+    <tr><td class="k">原生種</td>
+        <td class="a">黒い丸＋正面2眼＋赤い体力バー。1マス</td>
+        <td class="b">崩れ穿ち＝横<span class="n">2</span>マス。眼は無く、測定髭が予告地点へ揃う</td></tr>
+    <tr><td class="k">兆候</td>
+        <td class="a">盤の外の別札に「あと2手 掘削」</td>
+        <td class="b">体の脇に「崩落 <span class="n">2</span>」。予告は矢印でなく亀裂のハッチングと岩粉</td></tr>
+    <tr><td class="k">酸素</td>
+        <td class="a">高さ <span class="n">60</span>px の橙バー（S <span class="n">78</span>%）の上に数字を直置き</td>
+        <td class="b">数字は円形メダリオンへ。ゲージは高さ <span class="n">20</span>px・空トラフは緑青</td></tr>
+    <tr><td class="k">HUD の地</td>
+        <td class="a">上端を横断する板が風景を分断</td>
+        <td class="b">板を持たず、札とメダリオンが風景の上に浮く（背景は上端まで連続）</td></tr>
+    <tr><td class="k">盤</td>
+        <td class="a">セルの分節・受光辺・接地影がいずれも無い</td>
+        <td class="b">受光辺 <span class="n">8</span>px／接地影 <span class="n">52</span>px／セルごと ±<span class="n">13</span> luma のムラ／リベット<span class="n">7</span>点は不揃い</td></tr>
+    <tr><td class="k">キャラ</td>
+        <td class="a">中央に単体。下端はアルファでフェード</td>
+        <td class="b">左 <span class="n">1/3</span> に探窟家＋右に相棒の2体1組。盤の上辺でハード遮蔽</td></tr>
+    <tr><td class="k">語彙</td>
+        <td class="a">裂坑掘り／野帳／掃討</td>
+        <td class="b">崩れ穿ち／採録帖／原生種（第2フェーズ確定語）</td></tr>
+    <tr><td class="k">数字</td>
+        <td class="a">明朝 ExtraBold＋黒縁。プロポーショナル</td>
+        <td class="b">Archivo 600 等幅ライニング。stroke 全廃、地との Δluma <span class="n">152</span>〜<span class="n">192</span></td></tr>
+    <tr><td class="k">S≧45% 画素の面積</td>
+        <td class="a"><span class="n">26.7</span>%（基準 ≤<span class="n">14</span>%）</td>
+        <td class="b"><span class="n">12.7</span>%</td></tr>
+    <tr><td class="k">明部（V≧85%）の彩度</td>
+        <td class="a"><span class="n">40.0</span>%（基準 ≤<span class="n">22</span>%）</td>
+        <td class="b"><span class="n">18.7</span>%</td></tr>
+    <tr><td class="k">画面全体の平均彩度</td>
+        <td class="a"><span class="n">36.0</span>%（基準 ≤<span class="n">32</span>%）</td>
+        <td class="b"><span class="n">27.2</span>%</td></tr>
+  </tbody>
+</table>
+
+<div class="foot">
+  実測は両画像とも 780×1688 の合成画面（S-画面）に対して同じスクリプトで行った。luma は 0.299R+0.587G+0.114B、彩度は HSV の S。<br>
+  モック側の駒・探窟家・相棒は既存アセットに CSS で彩度補正を掛けて目標値に合わせている（素材そのものは未修正）。実装時はアセット側の描き直しが要る。
+</div>
+
+</body>
+</html>
