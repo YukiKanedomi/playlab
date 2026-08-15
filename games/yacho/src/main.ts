@@ -2439,6 +2439,7 @@ async function boot() {
     // 静止中は壊せる演出が存在しない＝reconcile は定義上安全なので、静止2秒ごとに必ず回して自己修復を保証する。
     // 根本の設計見直し（即時解決エンジン×予約再生の構造）は別途 Codex と進行中
     let idleHealMs = 0
+    let floorDecided = false // 層の決着処理（クリア/遭難）が起動済みか。命綱の二重発火防止
     const idleHintTick = (t: { deltaMS: number }) => {
       if (!alive()) {
         app.ticker.remove(idleHintTick)
@@ -2449,6 +2450,15 @@ async function boot() {
         if (idleHealMs >= 2000) {
           idleHealMs = 0
           view.reconcile()
+          // クリアの命綱（2026-08-15 オーナー報告「自己修復されたがクリア判定がなくなり進めなくなった」）：
+          // 課目がすべて達成済みなのに決着処理が走っていなければ、ここで回収する（floor-clear イベントの
+          // 取りこぼしがどの経路で起きても、静止2秒後に必ず前へ進める）。根本解決はC案移行で
+          if (!floorDecided && board.goals.every((g, gi) => board.goalDone[gi] >= g.count)) {
+            console.debug('[yacho] idle-heal: missed floor-clear recovered')
+            floorDecided = true
+            inputLocked = true
+            onFloorClear()
+          }
         }
       } else idleHealMs = 0
       // inputLocked中・盤面演出中はアイドル判定を進めない（演出が終わった瞬間から4秒を数え直す）
@@ -2651,9 +2661,11 @@ async function boot() {
         tw.delay(firstWait, poll)
       }
       if (cleared) {
+        floorDecided = true
         inputLocked = true
         whenBoardQuiet(onFloorClear)
       } else if (over) {
+        floorDecided = true
         inputLocked = true
         // 灯が尽きた層も推移の最後の点として残す（負の値は「尽きた」と同じ事実なので0に丸める）
         lightSeries.push({ floor, light: Math.max(0, run.oxygen) })
