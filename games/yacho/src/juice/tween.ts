@@ -41,6 +41,15 @@ interface Tween {
 
 const tweens: Tween[] = []
 
+/** tween内部時計（update()に渡されたdtMsの累積）。修正2：BoardViewが壁時計(performance.now)で
+ *  タイムライン終端を計算すると、フレーム落ちでこの時計が遅れたときに+200msバッファを食い潰し、
+ *  前の手の演出中にreconcileが早発する（複数駒の一斉スナップの主因候補）。tween側の遅れ（maxElapsedMS
+ *  クランプ・タブ非表示での停止）と歩調を揃えるため、終端計算は必ずこの時計を基準にする */
+let clock = 0
+export function now(): number {
+  return clock
+}
+
 export function tween(
   obj: unknown,
   to: Record<string, number>,
@@ -76,6 +85,52 @@ export function snap(obj: unknown): void {
       tw.dead = true
       tw.onDone?.()
     }
+  }
+}
+
+/**
+ * 対象オブジェクトの進行中トゥイーンを「即時snap」ではなく短いキャッチアップtweenに置き換える（修正4）。
+ * 補充駒は y=-0.8S・alpha=0 の盤外待機中はtweenが delay 予約のまま未開始（from未確定）のため、
+ * そのままsnapすると盤外→最終セルへ0フレームでワープして見える（テレポート知覚の主因の一つ）。
+ * 現在値をfromに取り直し、ms掛けてtoへ追いつくtweenに差し替える。onDoneは新tweenへそのまま引き継ぐ。
+ */
+export function snapSoft(obj: unknown, ms = 70): void {
+  const list = tweens.slice() // 新tweenをその場でtweensへpushするため、スナップショットを回す（無限ループ防止）
+  for (const tw of list) {
+    if (tw.obj === obj && !tw.dead) {
+      const from: Record<string, number> = {}
+      try {
+        for (const k of Object.keys(tw.to)) from[k] = tw.obj[k]
+      } catch {
+        continue // 破棄済みオブジェクトは無視
+      }
+      tw.dead = true
+      tweens.push({
+        obj: tw.obj,
+        from,
+        to: tw.to,
+        dur: ms,
+        delay: 0,
+        t: 0,
+        ease: easeOutCubic,
+        onDone: tw.onDone,
+        dead: false,
+        channel: tw.channel,
+      })
+    }
+  }
+}
+
+/** 対象オブジェクトに生きたトゥイーンがあるか（修正5：移動中の駒を古い座標へピン留めしないための判定用） */
+export function hasTween(obj: unknown): boolean {
+  return tweens.some((tw) => tw.obj === obj && !tw.dead)
+}
+
+/** 対象オブジェクトのトゥイーンを onDone を呼ばずに打ち切る（修正8：FXパーティクルプール回収用。
+ *  snap/completeAll と違い終端値を書き込まない＝再利用する側が次のacquireGで値を設定し直す前提） */
+export function cancel(obj: unknown): void {
+  for (const tw of tweens) {
+    if (tw.obj === obj && !tw.dead) tw.dead = true
   }
 }
 
@@ -120,12 +175,17 @@ export function activeCount(): number {
 }
 
 export function update(dtMs: number): void {
+  clock += dtMs // 修正2：内部時計を歩かせる（BoardViewの終端計算がこれを基準にする）
   for (const tw of tweens) {
     if (tw.dead) continue
+    // 修正1：食い込んだdelay分はこのtween専用のローカル変数(eff)に閉じ込め、ループ共有のdtMsは
+    // 絶対に書き換えない。以前はdtMs自体を書き換えていたため、同一フレームに複数のdelayed tweenが
+    // 開始すると後続tween全部のdtが縮み、負になると逆再生される（駒のガタつき/瞬間移動の主因）。
+    let eff = dtMs
     if (tw.delay > 0) {
       tw.delay -= dtMs
       if (tw.delay > 0) continue
-      dtMs += tw.delay // 食い込んだ分
+      eff = dtMs + tw.delay // 食い込んだ分（tw.delayは負値）をこのtweenの実効dtとする
     }
     if (tw.t < 0) {
       tw.t = 0
@@ -136,7 +196,7 @@ export function update(dtMs: number): void {
         continue
       }
     }
-    tw.t += dtMs
+    tw.t += eff
     const p = tw.dur <= 0 ? 1 : Math.min(1, tw.t / tw.dur)
     const e = tw.ease(p)
     try {

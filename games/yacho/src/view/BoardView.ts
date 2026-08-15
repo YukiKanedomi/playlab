@@ -7,7 +7,21 @@ import type { BoardEvent, EnemyKind, GoalType, Piece, XY } from '../core/types'
 import { BOSS_SHELL_COUNT, enemyIntent, type EnemyInstance, type EnemyIntent, type IntentKind } from '../core/enemies'
 import { UPGRADES } from '../core/upgrades'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
-import { completeChannel, delay, easeInCubic, easeInQuad, easeOutBack, easeOutBackSoft, easeOutCubic, snap, tween } from '../juice/tween'
+import {
+  cancel,
+  completeChannel,
+  delay,
+  easeInCubic,
+  easeInQuad,
+  easeOutBack,
+  easeOutBackSoft,
+  easeOutCubic,
+  hasTween,
+  now,
+  snap,
+  snapSoft,
+  tween,
+} from '../juice/tween'
 import { sfx } from '../juice/sound'
 import { buzz, resetMoveBudget } from '../juice/haptics'
 
@@ -102,6 +116,11 @@ export class BoardView {
   /** 盤面フレーム素材がタイル格子より外へ張り出す量(px)。HUD側が盤の実占有域を知るために公開する（枠無しなら0） */
   framePad = 0
   sprites = new Map<string, Sprite>() // "x,y" -> 駒スプライト
+  // 修正3：popPieceAtはsprites.deleteを即時に行うが、消滅演出(縮小/alpha)はdelay予約でdestroyは
+  // その onDone（連鎖後半だと数秒先）。snapPieceForMoveはspritesマップ経由でしか駒を辿れないため、
+  // 割込で「snapで定位置に出た新駒」と「ポップ待ちの旧駒」が同一セルに二重表示される穴があった。
+  // destroy待ちの駒をセル単位で台帳に残し、そのセルに再び触れるタイミングでsnapして畳み切る。
+  private doomedByCell = new Map<string, Sprite[]>()
   blockG = new Map<string, Container>()
   groundG = new Map<string, Container>()
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
@@ -110,7 +129,7 @@ export class BoardView {
   // ---- 並行続行（rm_tempo.md §8 P3 Step2）：手の世代と選択的snapの帳簿 ----
   private moveSeq = 0 // 手の世代。前の手が予約した終端処理（reconcile等）は最新の手のものだけが生きる
   private moveTouched = new WeakSet<object>() // この手でsnap済みの駒（1手内の二重snap＝自分のトゥイーン破壊を防ぐ）
-  private timelineEndAbs = 0 // 並走中の全タイムラインの終端（performance.now基準）。終端reconcileは最長の尻尾に合わせる
+  private timelineEndAbs = 0 // 並走中の全タイムラインの終端（tween内部時計 now() 基準。修正2）。終端reconcileは最長の尻尾に合わせる
 
   // ---- ローグライク拡張（ROGUE.md §5）：敵・環境オーバーレイの帳簿 ----
   private armorG = new Map<string, Graphics>() // "x,y" -> 甲殻オーバーレイ
@@ -205,9 +224,14 @@ export class BoardView {
     if (g.destroyed) return
     const idx = this.liveFx.findIndex((f) => f.g === g)
     if (idx >= 0) this.liveFx.splice(idx, 1)
+    // 修正8：acquireGが上限到達時に最古粒子をここへ強制回収し、直後に同じGraphicsを再利用することがある。
+    // 旧tweenが生きたままだと新粒子が旧軌道で動く/途中で消えるため、onDoneを呼ばずdead化してから返却する
+    cancel(g)
+    cancel(g.position)
+    cancel(g.scale)
     g.clear()
     if (g.parent) g.parent.removeChild(g)
-    this.fxPool.push(g)
+    if (!this.fxPool.includes(g)) this.fxPool.push(g) // 強制回収経路と通常releaseの重複呼びで二重pushしない
   }
 
   key(x: number, y: number) {
@@ -1193,7 +1217,9 @@ export class BoardView {
 
   /** 誕生イベント 0-70ms：周囲4-8駒を中心へ2-3px吸引＋局所減光（codex_consult [D]-1） */
   private birthPullFx(at: XY, t: number) {
+    const mv = this.moveSeq // 修正5：予約時に世代を閉じる。発火時に手が進んでいたら何もしない
     delay(t, () => {
+      if (mv !== this.moveSeq) return // 次の手が始まっていた＝近傍の座標キャプチャはもう古い
       const S = this.S
       const dim = new Graphics()
       dim.circle(0, 0, S * 0.62).fill({ color: 0x000000, alpha: 0.2 })
@@ -1221,6 +1247,7 @@ export class BoardView {
       for (const n of neighbors) {
         const sp = this.sprites.get(this.key(n.x, n.y))
         if (!sp || sp.destroyed) continue
+        if (hasTween(sp.position)) continue // 修正5：移動中の駒は吸引をスキップ（古い座標への160msピン留め防止）
         const bx = sp.position.x
         const by = sp.position.y
         const ang = Math.atan2(this.px(at.y) - by, this.px(at.x) - bx)
@@ -1674,9 +1701,50 @@ export class BoardView {
   private snapPieceForMove(sp: Sprite) {
     if (this.moveTouched.has(sp)) return
     this.moveTouched.add(sp)
-    snap(sp.position)
-    snap(sp.scale)
-    snap(sp)
+    // 修正4：補充駒はalpha=0のまま盤外(y=-0.8S)で delay 予約中のことがある。その状態でsnapすると
+    // from未確定のtweenが即toへ書き込まれ、盤外→最終セルへ0フレームでワープして見える（テレポート
+    // 知覚の主因の一つ）。alpha=0＝盤外待機中のときだけ、短いキャッチアップtweenに差し替える
+    // 順序の規約：position → scale → sp本体（alpha）の順で畳む。sp本体のsnapはonDone（destroy）を
+    // 発火しうるので必ず最後。snap()はtry/catchなしで書き込むため、破棄後のscale等に触ると落ちる
+    if (sp.alpha === 0) {
+      snapSoft(sp.position)
+      snap(sp.scale)
+      snapSoft(sp)
+    } else {
+      snap(sp.position)
+      snap(sp.scale)
+      snap(sp)
+    }
+  }
+
+  /** destroy待ち（popPieceAt等）の駒をセル台帳へ登録する（修正3） */
+  private addDoomed(k: string, sp: Sprite) {
+    const list = this.doomedByCell.get(k)
+    if (list) list.push(sp)
+    else this.doomedByCell.set(k, [sp])
+  }
+
+  /** destroy直前に台帳から外す（onDoneでsp.destroy()する直前に呼ぶ） */
+  private removeDoomed(k: string, sp: Sprite) {
+    const list = this.doomedByCell.get(k)
+    if (!list) return
+    const idx = list.indexOf(sp)
+    if (idx >= 0) list.splice(idx, 1)
+    if (list.length === 0) this.doomedByCell.delete(k)
+  }
+
+  /** 指定セルのdoomed駒をまとめてsnapし、destroyまで畳み切る（修正3：snap→onDone発火→sp.destroy()）。
+   *  play()がswap/fall/refill/popPieceAtでセルに触れるたびに呼び、旧駒と新駒の二重表示を防ぐ */
+  private snapDoomedAt(k: string) {
+    const list = this.doomedByCell.get(k)
+    if (!list || !list.length) return
+    for (const sp of list.slice()) {
+      // position → scale → sp本体の順（snapPieceForMoveと同じ規約）。sp本体のsnapがonDoneでdestroyを
+      // 発火するため、destroy後にscale/positionへ書き込まない
+      snap(sp.position)
+      snap(sp.scale)
+      snap(sp)
+    }
   }
 
   /** イベント列をアニメ予約。所要合計msを返す */
@@ -1712,6 +1780,8 @@ export class BoardView {
           if (a && b) {
             this.snapPieceForMove(a) // 前の手の落下等が残っていたら、この2駒だけ終端へ（他は並走続行）
             this.snapPieceForMove(b)
+            this.snapDoomedAt(this.key(e.a.x, e.a.y)) // 修正3：両セルのポップ待ち駒があれば先に畳む
+            this.snapDoomedAt(this.key(e.b.x, e.b.y))
             this.sprites.set(this.key(e.a.x, e.a.y), b)
             this.sprites.set(this.key(e.b.x, e.b.y), a)
             const move = (sp: Sprite, to: XY, back: boolean) => {
@@ -1883,6 +1953,7 @@ export class BoardView {
           const sp = this.sprites.get(this.key(e.from.x, e.from.y))
           if (sp) {
             this.snapPieceForMove(sp)
+            this.snapDoomedAt(this.key(e.to.x, e.to.y)) // 修正3：着地セルにポップ待ち駒が残っていたら先に畳む
             this.sprites.delete(this.key(e.from.x, e.from.y))
             this.sprites.set(this.key(e.to.x, e.to.y), sp)
             const dist = Math.abs(e.to.y - e.from.y)
@@ -1907,6 +1978,30 @@ export class BoardView {
           break
         }
         case 'refill': {
+          const k = this.key(e.at.x, e.at.y)
+          const already = this.sprites.get(k)
+          if (already && !already.destroyed) {
+            // 修正6：詰み保険リロール（board.tsのrerollSomePieces）は盤上の駒をその場で色替えするだけで、
+            // 空きセルへの補充ではない。既存スプライトが居るのに上から落とすタイムラインへ流すと
+            // 「盤の中ほどの駒が突然消えて別の色が降ってくる」＝絵柄一斉変化に見えるため、その場で
+            // クロスフェードに差し替える（旧alpha→0／新alpha0→1を各150ms）。通常補充は下の分岐のまま。
+            this.snapPieceForMove(already)
+            this.sprites.delete(k)
+            this.addDoomed(k, already) // 修正3：フェードアウト中も台帳に残し、次にこのセルへ触れたら畳めるように
+            const oldSp = already
+            const newSp = this.makePiece(e.at.x, e.at.y, e.piece)
+            newSp.alpha = 0
+            tween(newSp, { alpha: 1 }, 150, { delay: t })
+            tween(oldSp, { alpha: 0 }, 150, {
+              delay: t,
+              onDone: () => {
+                this.removeDoomed(k, oldSp)
+                if (!oldSp.destroyed) oldSp.destroy()
+              },
+            })
+            break
+          }
+          this.snapDoomedAt(k) // 修正3：通常補充でも、このセルにポップ待ち駒が残っていたら先に畳む
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
           sp.position.y = -this.S * 0.8
           sp.alpha = 0
@@ -2141,11 +2236,21 @@ export class BoardView {
           break
         }
         case 'boss-phase': {
-          // 身体1行ぶんのコンテナと顔をまとめて畳み、reconcile で残り2セルを描き直す
+          // 身体1行ぶんのコンテナと顔をまとめて畳み、freedセル＋顔だけを描き直す（修正7）
           const row = this.bossRowG.get(H - 1)
           if (row && !row.destroyed) tween(row, { alpha: 0 }, 220, { delay: t })
           this.shakeRootDecay(t + 60, 6, 220)
-          delay(t + 240, () => this.reconcile())
+          // 修正7：ここで全域reconcile()を呼ぶと、epoch/moveSeqガードが無いため同じ手の後続演出
+          // （落下・補充）を巻き込んで無動作化し一斉テレポートさせる（ボス相転移時限定の症状）。
+          // ボスの身体（freedセル）と顔だけを直す部分更新に差し替え、ガードも付ける。
+          const ep = this.epoch
+          const mv = this.moveSeq
+          const bossId = e.id
+          const freed = e.freed
+          delay(t + 240, () => {
+            if (ep !== this.epoch || mv !== this.moveSeq) return
+            this.reconcileBossPhase(bossId, freed)
+          })
           t += 300
           break
         }
@@ -2174,7 +2279,10 @@ export class BoardView {
     // タイムライン終端で必ず照合修復：稀な競合で残る位置ズレ/孤児を吸収し、描画=エンジンを保証。
     // 並行続行では前の手の尻尾のほうが長いことがあるため、「並走中の全タイムラインの終端」に合わせ、
     // かつ最新の手の予約だけを生かす（mv判定）＝reconcile が進行中の演出（消えかけの駒等）を途中で刈らない
-    const nowMs = performance.now()
+    // 修正2：壁時計(performance.now)ではなくtween内部時計(now())を基準にする。フレーム落ちで
+    // tween時計が遅れたとき、壁時計基準だと+200msバッファを食い潰して前の手の演出中にreconcileが
+    // 早発し、複数駒の一斉スナップ（絵柄一斉変化・テレポートの主因候補）を招いていた。
+    const nowMs = now()
     this.timelineEndAbs = Math.max(this.timelineEndAbs, nowMs + total)
     delay(this.timelineEndAbs - nowMs + 200, () => {
       if (ep === this.epoch && mv === this.moveSeq) this.reconcile()
@@ -2184,6 +2292,7 @@ export class BoardView {
 
   /** エンジン状態への収束（差分だけ直すので通常は何も起きない） */
   reconcile() {
+    let corrected = 0 // 修正9：実際に直した件数（位置スナップ/差し替え/孤児破棄）。0が正常の指標
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
         const k = this.key(x, y)
@@ -2201,11 +2310,15 @@ export class BoardView {
           if (sp && !sp.destroyed) sp.destroy()
           this.sprites.delete(k)
           this.makePiece(x, y, want)
+          corrected++
         } else {
-          // 位置・透明度・スケールをセル定位置へスナップ
-          sp.position.set(this.px(x), this.px(y))
-          sp.alpha = 1
+          // 位置・透明度・スケールをセル定位置へスナップ（実際にズレていた場合だけ件数に数える）
+          const wantX = this.px(x)
+          const wantY = this.px(y)
           const b = this.bs(sp)
+          if (sp.position.x !== wantX || sp.position.y !== wantY || sp.alpha !== 1 || sp.scale.x !== b || sp.scale.y !== b) corrected++
+          sp.position.set(wantX, wantY)
+          sp.alpha = 1
           sp.scale.set(b)
           if (want.kind !== 'harpoon') sp.rotation = 0
         }
@@ -2213,7 +2326,10 @@ export class BoardView {
     // mapに居ない可視孤児を掃除
     const mapped = new Set(this.sprites.values())
     for (const ch of [...this.pieceLayer.children]) {
-      if (!mapped.has(ch as Sprite) && !ch.destroyed) ch.destroy()
+      if (!mapped.has(ch as Sprite) && !ch.destroyed) {
+        ch.destroy()
+        corrected++
+      }
     }
     // 障害物・蔦苔の帳簿も照合（レベル遷移コールバック等の取りこぼし保険）
     for (let y = 0; y < H; y++)
@@ -2300,7 +2416,16 @@ export class BoardView {
       if (!fg || fg.destroyed) this.makeFissureFrame(en.id, en.telegraph, 0)
     }
     for (const id of [...this.fissureG.keys()]) if (!wantFissure.has(id)) this.clearFissureFrame(id)
-    // ボスの顔（目+HPバー）オーバーレイ：不在なら片付け、居るのに欠けていれば再生成・位置とHPを同期
+    // ボスの顔（目+HPバー）オーバーレイの同期（修正7で単独関数に切り出し。boss-phase専用の部分更新とも共用）
+    this.reconcileBossFace()
+    this.updateIntentBadges() // 可視化第一波①：撃破・生成の取りこぼしをここでも吸収
+    // 修正9：reconcileが実際に何かを直した場合のみ出す。発生ゼロが正常の指標（QA・実機での観測用）
+    if (corrected > 0) console.debug('[yacho] reconcile corrected', corrected)
+  }
+
+  /** ボスの顔（目+HPバー）オーバーレイ：不在なら片付け、居るのに欠けていれば再生成・位置とHPを同期。
+   *  reconcile()全体からと、boss-phase専用の部分更新（reconcileBossPhase）の両方から呼ぶ（修正7） */
+  private reconcileBossFace() {
     const boss = this.board.enemies.find((en) => en.kind === 'boss')
     if (boss) {
       this.enemyMeta.set(boss.id, { kind: 'boss', maxHp: boss.maxHp })
@@ -2325,7 +2450,35 @@ export class BoardView {
       this.bossFaceG.clear()
       this.bossId = null
     }
-    this.updateIntentBadges() // 可視化第一波①：撃破・生成の取りこぼしをここでも吸収
+  }
+
+  /**
+   * ボス相転移（boss-phase）専用の部分更新（修正7）。全域reconcile()は同じ手の後続演出（落下・補充）を
+   * 巻き込んで無動作化し一斉テレポートさせるため、freedセル（身体から開放されたセル）と現在の身体セル、
+   * 顔だけに絞って直す。boss身体は共有Container（1行=1コンテナ）なのでfreedセルのblockGを破棄すると
+   * kept側のblockGも道連れで無効化されるが、その直後にkept側を再生成するので結果的に正しい絵に収束する。
+   */
+  private reconcileBossPhase(bossId: number, freed: XY[]) {
+    for (const p of freed) {
+      const k = this.key(p.x, p.y)
+      const bg = this.blockG.get(k)
+      if (bg) {
+        this.blockG.delete(k)
+        if (!bg.destroyed) bg.destroy()
+      }
+    }
+    const boss = this.board.enemies.find((en) => en.id === bossId)
+    if (boss) {
+      for (const p of boss.cells) {
+        const k = this.key(p.x, p.y)
+        const bg = this.blockG.get(k)
+        if (!bg || bg.destroyed) {
+          if (bg) this.blockG.delete(k)
+          this.makeBlock(p.x, p.y)
+        }
+      }
+    }
+    this.reconcileBossFace()
   }
 
   private popPieceAt(p: XY, t: number, byFire = false, sparkSkipChance = 0) {
@@ -2333,13 +2486,21 @@ export class BoardView {
     const sp = this.sprites.get(k)
     if (!sp) return
     this.snapPieceForMove(sp) // 前の手の移動が残っていても、この駒だけセル定位置へ寄せてから消す
+    this.snapDoomedAt(k) // 修正3：同じセルに前回のポップ待ち駒が残っていたら先に畳み切る
     this.sprites.delete(k)
+    this.addDoomed(k, sp) // 修正3：destroyはonDone任せで先の話になるため、その間もセル台帳に載せておく
     this.clearVolatileOverlay(p, t) // 可視化第一波③：爆発鉱石の常時発光を破壊タイミングで片付ける
     // 膨張62ms→ホールド28ms→弾け88ms の3段（合計178ms ≤ T.pop）。「溜めてから弾ける」を作る
     const b = this.bs(sp)
     tween(sp.scale, { x: b * 1.28, y: b * 1.28 }, 62, { delay: t, ease: easeOutBackSoft })
     tween(sp.scale, { x: 0, y: 0 }, 88, { delay: t + 90, ease: easeInCubic })
-    tween(sp, { alpha: byFire ? 0.35 : 0 }, 84, { delay: t + 90, onDone: () => sp.destroy() })
+    tween(sp, { alpha: byFire ? 0.35 : 0 }, 84, {
+      delay: t + 90,
+      onDone: () => {
+        this.removeDoomed(k, sp)
+        sp.destroy()
+      },
+    })
     this.sparkFx(p, t + 88, sparkSkipChance) // 火花は「弾けた瞬間」に出す
   }
 
