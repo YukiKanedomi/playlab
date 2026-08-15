@@ -37,9 +37,58 @@ interface Tween {
   onDone?: () => void
   dead: boolean
   channel: string
+  tag?: string // 計器（C案移行 Phase1）：発注元の文脈。DIAG時のみ設定される
 }
 
 const tweens: Tween[] = []
+
+// ---- 計器（C案移行 Phase1・codex_arch_review.md §1-2）：tween単一writer不変量 ----
+// 同一オブジェクトの同一プロパティに「時間窓が重なる」writerが2本以上あるのは競合の兆候。
+// 順次予約（連鎖の1段目と2段目の落下など、窓が重ならないもの）は正当なので窓の重なりで判定する。
+let diagOn = false
+let diagCtx = ''
+let diagConflictCb: ((info: { key: string; newTag: string; oldTag: string; channel: string }) => void) | null = null
+
+/** 計器の有効化（?debug 時に diag.ts が呼ぶ）。conflictCb は多重writer検出ごとに呼ばれる */
+export function setTweenDiag(on: boolean, conflictCb?: (info: { key: string; newTag: string; oldTag: string; channel: string }) => void): void {
+  diagOn = on
+  diagConflictCb = conflictCb ?? null
+}
+
+/** 予約の発注文脈タグ（例 "m12/e84/refill"）。DIAG時、以降の tween()/delay() に焼き込まれる */
+export function setTweenCtx(tag: string): void {
+  diagCtx = tag
+}
+
+/** 生存tweenの時間窓 [start, end)（現在からの相対ms）。未開始= [delay, delay+dur]、開始済み= [0, dur-t] */
+function windowOf(tw: Tween): [number, number] {
+  if (tw.t < 0) return [Math.max(0, tw.delay), Math.max(0, tw.delay) + tw.dur]
+  return [0, Math.max(0, tw.dur - tw.t)]
+}
+
+const DIAG_PROPS = ['alpha', 'x', 'y'] // 検査対象（position/scale は x/y、Sprite本体は alpha）
+
+function checkMultiWriter(nu: Tween): void {
+  // 駒スプライト（とその position/scale。makePieceが__pieceを焼き込む）だけを検査する。
+  // FX粒子は既定チャンネル'board'で予約されるものが多く、チャンネルでは絞れない
+  // （実測：初回計測568件の上位はupgrade-fire/goal-progressのfx連鎖同士のノイズだった）
+  if (!(nu.obj as { __piece?: boolean }).__piece) return
+  const keys = Object.keys(nu.to).filter((k) => DIAG_PROPS.includes(k))
+  if (keys.length === 0) return
+  const [ns, ne] = windowOf(nu)
+  for (const tw of tweens) {
+    if (tw === nu || tw.dead || tw.obj !== nu.obj) continue
+    for (const k of keys) {
+      if (!(k in tw.to)) continue
+      const [os, oe] = windowOf(tw)
+      // 8ms未満の重なりは境界の丸め（同フレーム内の連結予約）とみなし無視
+      if (ns < oe - 8 && os < ne - 8) {
+        diagConflictCb?.({ key: k, newTag: nu.tag ?? '?', oldTag: tw.tag ?? '?', channel: nu.channel })
+        return // 1予約につき1報告で十分（大量重複時のログ洪水を防ぐ）
+      }
+    }
+  }
+}
 
 /** tween内部時計（update()に渡されたdtMsの累積）。修正2：BoardViewが壁時計(performance.now)で
  *  タイムライン終端を計算すると、フレーム落ちでこの時計が遅れたときに+200msバッファを食い潰し、
@@ -57,7 +106,7 @@ export function tween(
   opts: { delay?: number; ease?: Ease; onDone?: () => void; channel?: string } = {},
 ): void {
   if (obj == null) return // 破棄済みPixiオブジェクトのgetterがnullを返すケース
-  tweens.push({
+  const tw: Tween = {
     obj: obj as Record<string, number>,
     from: {},
     to,
@@ -68,7 +117,12 @@ export function tween(
     onDone: opts.onDone,
     dead: false,
     channel: opts.channel ?? 'board',
-  })
+  }
+  if (diagOn) {
+    tw.tag = diagCtx
+    checkMultiWriter(tw)
+  }
+  tweens.push(tw)
 }
 
 export function delay(ms: number, fn: () => void, channel?: string): void {
@@ -86,6 +140,7 @@ export function snap(obj: unknown): void {
     if (tw.obj === obj && !tw.dead) {
       for (const k of Object.keys(tw.to)) tw.obj[k] = tw.to[k]
       tw.dead = true
+      if (diagOn) diagCtx = `snap-cb:${tw.tag ?? '?'}`
       tw.onDone?.()
     }
   }
@@ -119,6 +174,7 @@ export function snapSoft(obj: unknown, ms = 70): void {
         onDone: tw.onDone,
         dead: false,
         channel: tw.channel,
+        tag: tw.tag, // 計器：元予約の文脈を引き継ぐ
       })
     }
   }
@@ -252,6 +308,7 @@ export function update(dtMs: number): void {
     }
     if (p >= 1) {
       tw.dead = true
+      if (diagOn) diagCtx = `cb:${tw.tag ?? '?'}`
       tw.onDone?.()
     }
   }

@@ -27,6 +27,8 @@ import {
 } from '../juice/tween'
 import { sfx } from '../juice/sound'
 import { buzz, resetMoveBudget } from '../juice/haptics'
+import { setTweenCtx } from '../juice/tween'
+import { DIAG, counters, dumpSprite, markPiece, opLog, recentOps, report, sidOf } from './diag'
 
 // ローグ拡張（ROGUE.md §5）：ダメージ数字は既存UI（main.ts）と合わせ明朝体
 const FONT = '"Shippori Mincho", serif'
@@ -414,6 +416,10 @@ export class BoardView {
     ;(sp as unknown as { __kind: string }).__kind = pieceKey(p)
     this.pieceLayer.addChild(sp)
     this.sprites.set(this.key(x, y), sp)
+    if (DIAG) {
+      markPiece(sp)
+      opLog('make', this.key(x, y), sp, this.moveSeq)
+    }
     return sp
   }
 
@@ -1783,6 +1789,7 @@ export class BoardView {
     const list = this.doomedByCell.get(k)
     if (list) list.push(entry)
     else this.doomedByCell.set(k, [entry])
+    if (DIAG) opLog('doom+', k, sp, this.moveSeq)
   }
 
   /** destroy直前に台帳から外す（onDoneでsp.destroy()する直前に呼ぶ） */
@@ -1790,7 +1797,10 @@ export class BoardView {
     const list = this.doomedByCell.get(k)
     if (!list) return
     const idx = list.findIndex((e) => e.sp === sp)
-    if (idx >= 0) list.splice(idx, 1)
+    if (idx >= 0) {
+      list.splice(idx, 1)
+      if (DIAG) opLog('doom-', k, sp, this.moveSeq)
+    }
     if (list.length === 0) this.doomedByCell.delete(k)
   }
 
@@ -1826,6 +1836,10 @@ export class BoardView {
     snap(old.scale)
     snap(old) // destroy系のonDoneがあればここで走る
     if (!old.destroyed) old.destroy()
+    if (DIAG) {
+      counters.staleFolded++
+      opLog('fold', k, old, this.moveSeq)
+    }
     console.debug('[yacho] stale sprite folded at', k)
   }
 
@@ -1841,10 +1855,39 @@ export class BoardView {
       const sp = ch as Sprite
       if (sp.destroyed || mapped.has(sp) || doomed.has(sp)) continue
       if (hasTween(sp) || hasTween(sp.position) || hasTween(sp.scale)) continue
+      if (DIAG) report('orphanSwept', 'orphan swept', { sprite: dumpSprite(sp), ops: recentOps(undefined, 8) })
       sp.destroy()
       n++
     }
     if (n > 0) console.debug('[yacho] orphan swept', n)
+  }
+
+  /** 計器（C案移行 Phase1・codex_arch_review.md §1-5）：3帳簿（sprites / doomedByCell / pieceLayer.children）
+   *  の全単射チェック。違反は counters.ledger に計上し、個体ダンプと直近履歴を添えて報告する。
+   *  DIAG時のみ呼ばれる（play()冒頭と reconcile 末尾）。挙動は一切変えない＝観測のみ */
+  private auditLedgers(tag: string) {
+    const seen = new Map<Sprite, string>()
+    for (const [k, sp] of this.sprites) {
+      if (seen.has(sp)) report('ledger', 'sprite mapped by two cells', { tag, k, other: seen.get(sp), sprite: dumpSprite(sp), ops: recentOps(k, 6) })
+      seen.set(sp, k)
+      if (sp.destroyed) report('ledger', 'mapped sprite is destroyed', { tag, k, sprite: dumpSprite(sp), ops: recentOps(k, 6) })
+      else if (sp.parent !== this.pieceLayer) report('ledger', 'mapped sprite has wrong parent', { tag, k, sprite: dumpSprite(sp) })
+    }
+    for (const [k, list] of this.doomedByCell)
+      for (const e of list) {
+        if (seen.has(e.sp)) report('ledger', 'sprite is both mapped and doomed', { tag, k, mappedAt: seen.get(e.sp), sprite: dumpSprite(e.sp), ops: recentOps(k, 6) })
+        // 破棄済みのdoomed残留はreconcileが掃除するまでの過渡状態なので、監査点では違反として報告する
+        if (e.sp.destroyed && tag === 'reconcile-end') report('ledger', 'doomed entry is destroyed', { tag, k, sprite: dumpSprite(e.sp) })
+      }
+    const doomedSet = new Set<Sprite>()
+    for (const list of this.doomedByCell.values()) for (const e of list) doomedSet.add(e.sp)
+    for (const ch of this.pieceLayer.children) {
+      const sp = ch as Sprite
+      if (sp.destroyed || seen.has(sp) || doomedSet.has(sp)) continue
+      // どの帳簿にも属さない可視の駒＝幽霊候補。tweenを持つ間は演出中の可能性があるため alpha と合わせて判定
+      if (sp.alpha > 0.1 && !hasTween(sp) && !hasTween(sp.position) && !hasTween(sp.scale))
+        report('ledger', 'visible sprite in no ledger', { tag, sprite: dumpSprite(sp), sid: sidOf(sp) })
+    }
   }
 
   /** タイムライン予算の保険（C）：連鎖が極端に長くなった場合の最終防衛線。sprites に登録済み・
@@ -1864,6 +1907,8 @@ export class BoardView {
       // Codex検収：kind不一致（エンジン上は別の駒に置き換わっている）の古いスプライトをフェードインしない。
       // その差し替え自体は終端のreconcileが担う
       if ((sp as unknown as { __kind?: string }).__kind !== pieceKey(c.piece)) continue
+      // 計器：個体ID・所有状態・履歴つきの構造化ダンプ（codex_arch_review.md §1-1。従来のログでは個体追跡ができない）
+      if (DIAG) report('repairAlpha', 'repairStrandedAlpha fired', { k, sprite: dumpSprite(sp), ops: recentOps(k, 8) })
       console.debug('[yacho] repairStrandedAlpha: fading in stranded piece at', k, c.piece.kind)
       tween(sp, { alpha: 1 }, 100)
     }
@@ -1963,6 +2008,7 @@ export class BoardView {
     this.moveTouched = new WeakSet()
     this.sweepOrphans() // 幽霊掃除（2026-08-15）。reconcileが走れない連打中の保険
     this.repairStrandedAlpha() // タイムライン予算C：透明のまま取り残された駒の保険（play()冒頭）
+    if (DIAG) this.auditLedgers('play-start') // 計器：3帳簿の全単射チェック（codex_arch_review.md §1-5）
     // 可視化第二波：演出用の決定的乱数を1手ごとに再シード（QA比較の安定のため Math.random() は使わない）
     this.fxSeed = (this.fxSeed * 48271 + 12345) % 0x7fffffff || 1
     this.fxRand = mulberry32(this.fxSeed)
@@ -2003,6 +2049,7 @@ export class BoardView {
     const T_HARD_CAP = 5200
     for (let ei = 0; ei < evs.length; ei++) {
       const e = evs[ei]
+      if (DIAG) setTweenCtx(`m${this.moveSeq}/e${ei}/${e.t}`) // 計器：この予約の発注元をtweenへ焼き込む
       if (t > T_HARD_CAP) t = T_HARD_CAP
       switch (e.t) {
         case 'swap': {
@@ -2578,7 +2625,9 @@ export class BoardView {
     // 同じ時間関数で動くので、密着・追い越し・湧き点のスタックが構造的に起きない。
     // 補充は着地行の並びを保った1マス間隔で盤の上空に整列し、pieceLayer のマスクの奥から降ってくる
     const dropKeys = new Set([...refillTrains.keys(), ...columnFalls.keys()])
+    const mvDrop = this.moveSeq // 計器：着地コールバックの世代（codex_arch_review.md §1-6）
     for (const key of dropKeys) {
+      if (DIAG) setTweenCtx(`m${mvDrop}/drop/${key}`)
       const train = refillTrains.get(key) ?? []
       const falls = columnFalls.get(key) ?? []
       const segT = Number(key.split('|')[0])
@@ -2597,6 +2646,10 @@ export class BoardView {
           delay: startAt,
           ease: easeInQuad,
           onDone: () => {
+            // 計器：旧世代の着地コールバックが、次の手に接収された駒へ子tweenを張る競合の観測
+            // （codex_arch_review.md §1-6「落下着地callbackには世代guardがない」。まず観測のみ・挙動は変えない）
+            if (DIAG && mvDrop !== this.moveSeq && [...this.sprites.values()].includes(f.sp))
+              report('staleCb', 'stale-gen landing bounce on mapped sprite', { sprite: dumpSprite(f.sp), scheduledMv: mvDrop, nowMv: this.moveSeq })
             // 着地：52msだけ潰れて沈み、110msで戻す（潰れと沈みを対で動かすと重さが出る）
             tween(f.sp.scale, { x: b * 1.14, y: b * 0.86 }, 52, {
               onDone: () => tween(f.sp.scale, { x: b, y: b }, 110, { ease: easeOutBackSoft }),
@@ -2612,6 +2665,15 @@ export class BoardView {
         tween(it.sp, { alpha: 1 }, 80, { delay: startAt })
         tween(it.sp.position, { y: this.px(it.row) }, dur, { delay: startAt, ease: easeInQuad })
       }
+      // 計器：補充予約直後のpostcondition（codex_arch_review.md §1-3）。ここで落ちれば予約構築の欠落、
+      // ここを通って次のplay()冒頭の監査で落ちれば割込・snap・callback競合＝原因の切り分けができる
+      if (DIAG)
+        for (const it of train) {
+          if (it.sp.destroyed || (it.sp.alpha < 0.999 && !hasTweenProperty(it.sp, 'alpha')))
+            report('refillPostcond', 'refill lost alpha writer', { key, sprite: dumpSprite(it.sp) })
+          else if (!hasTweenProperty(it.sp.position, 'y'))
+            report('refillPostcond', 'refill lost position writer', { key, sprite: dumpSprite(it.sp) })
+        }
     }
     const total = t + T.pop + T.fall
     // 可視化第一波①：敵の残りターン表示は「エンジン確定後」の値を見せたいのでタイムライン終端で更新
@@ -2789,6 +2851,10 @@ export class BoardView {
     for (const [k, list] of [...this.doomedByCell]) for (const en of list.slice()) if (en.sp.destroyed) this.removeDoomed(k, en.sp)
     // 修正9：reconcileが実際に何かを直した場合のみ出す。発生ゼロが正常の指標（QA・実機での観測用）
     if (corrected > 0) console.debug('[yacho] reconcile corrected', corrected)
+    if (DIAG) {
+      counters.reconcileCorrected += corrected
+      this.auditLedgers('reconcile-end') // 計器：終端修復の直後は3帳簿が完全一致しているはず
+    }
   }
 
   /** ボスの顔（目+HPバー）オーバーレイ：不在なら片付け、居るのに欠けていれば再生成・位置とHPを同期。
@@ -2856,6 +2922,7 @@ export class BoardView {
     this.snapPieceForMove(sp) // 前の手の移動が残っていても、この駒だけセル定位置へ寄せてから消す
     this.snapDoomedAt(k) // 修正3：同じセルに前回のポップ待ち駒が残っていたら先に畳み切る
     this.sprites.delete(k)
+    if (DIAG) opLog('pop', k, sp, this.moveSeq)
     this.addDoomed(k, sp) // 修正3：destroyはonDone任せで先の話になるため、その間もセル台帳に載せておく
     this.clearVolatileOverlay(p, t) // 可視化第一波③：爆発鉱石の常時発光を破壊タイミングで片付ける
     // 膨張62ms→ホールド28ms→弾け88ms の3段（合計178ms ≤ T.pop）。「溜めてから弾ける」を作る
