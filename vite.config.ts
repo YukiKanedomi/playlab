@@ -5,6 +5,10 @@ import { resolve } from 'node:path'
 // データ取得は import.meta.env.BASE_URL 起点（絶対パス '/...' は404になる）。
 export default defineConfig({
   base: '/playlab/',
+  // ビルド刻印（yachoの拠点画面に表示）。「スマホが古いビルドを踏んでいるか」の切り分けを一目にする
+  define: {
+    __BUILD_ID__: JSON.stringify(new Date().toISOString().slice(5, 16).replace('T', ' ')),
+  },
   // GLBモデルをアセット(URL)として扱う（3Dゲーム用）
   assetsInclude: ['**/*.glb'],
   build: {

@@ -958,6 +958,16 @@ async function boot() {
     bestT.anchor.set(0.5)
     bestT.position.set(bestX + bestW / 2, vh * 0.0475)
     header.addChild(bestT)
+    // ビルド刻印（2026-08-15）：不具合報告時に「どのビルドを踏んでいるか」を推測でなく確認するため。
+    // 値は vite.config.ts の define（ビルド時刻 MM-DD hh:mm）
+    const buildT = new Text({
+      text: `build ${__BUILD_ID__}`,
+      style: { fill: 0x8a7c5e, fontSize: fs(0.018), fontFamily: FONT },
+    })
+    buildT.anchor.set(0, 1)
+    buildT.alpha = 0.75
+    buildT.position.set(vw * 0.03, vh * 0.995)
+    mapRoot.addChild(buildT)
     mapRoot.addChild(header)
 
     // 中央「ランかいし」ボタン（拠点の主導線。ROGUE.md §8）
