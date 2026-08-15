@@ -62,8 +62,10 @@ export function tween(
   })
 }
 
-export function delay(ms: number, fn: () => void): void {
-  tween({}, {}, ms, { onDone: fn })
+export function delay(ms: number, fn: () => void, channel?: string): void {
+  // channel 省略時は 'board'（tween側の既定）。装飾FXの生成予約は 'fx' を渡し、
+  // 盤面チャンネルの全断（completeChannel('board')）に巻き込まれないようにする（rm_tempo.md §8 P3 Step1）
+  tween({}, {}, ms, { onDone: fn, channel })
 }
 
 /** 対象オブジェクトの全トゥイーンを終端値まで飛ばす（入力割込のスナップ用） */
