@@ -1792,59 +1792,59 @@ async function boot() {
     depthBadge.position.set(vw * 0.04 + hudIconD / 2, hudCenterY)
     ui.addChild(depthBadge)
 
-    // 灯ゲージ「ガラス管」（PHASE2.md §2.7 の宿題）：真鍮の口金で両端を留めた横向きのガラス管。
-    // 資源は「灯」＝探窟灯が燃やす青く発光する液（オーナー決定：「青は綺麗なので青色に」／モックcのガラス管を参考に）
+    // 酸素ゲージ「探窟灯の油槽」（[B]）：幅優先で素材アスペクトを保ち、HUD行の高さに収まらなければ縮める
+    const oilTex = spriteTexture('ui_oil')
     let gaugeW = Math.min(248, Math.max(190, vw * 0.54))
-    let gaugeH = gaugeW * 0.32
+    let gaugeH = gaugeW * (196 / 640) // 素材の実寸比（切り直し後 640x196）
     const gaugeMaxH = hudRowH * 0.98
     if (gaugeH > gaugeMaxH) {
       gaugeH = gaugeMaxH
-      gaugeW = gaugeH / 0.32
+      gaugeW = gaugeH * (640 / 241)
     }
     const gaugeRoot = new Container()
     const gaugeBaseX = (vw - gaugeW) / 2
     gaugeRoot.position.set(gaugeBaseX, hudCenterY - gaugeH / 2)
     ui.addChild(gaugeRoot)
-    // 口金（真鍮キャップ）の内側＝液が見えるガラス管チャンネル
-    const capW = gaugeH * 0.42
-    const chX0 = capW * 0.72
-    const chX1 = gaugeW - capW * 0.72
-    const chY0 = gaugeH * 0.22
-    const chY1 = gaugeH * 0.78
+    // 内側チャンネル比率：素材ありは実測値、無ければコード描画用に広めの仮想チャンネルを使う
+    const chX0 = gaugeW * (oilTex ? 0.175 : 0.14)
+    const chX1 = gaugeW * (oilTex ? 0.9375 : 0.98)
+    const chY0 = gaugeH * (oilTex ? 0.4949 : 0.26)
+    const chY1 = gaugeH * (oilTex ? 0.8214 : 0.74)
     const chW = chX1 - chX0
     const chH = chY1 - chY0
-    const tubeR = chH / 2 // 管は完全な丸筒（ピル形）
     const backingG = new Graphics()
     gaugeRoot.addChild(backingG)
     const fillG = new Graphics()
     gaugeRoot.addChild(fillG)
     const hatchLayer = new Container()
     gaugeRoot.addChild(hatchLayer)
-    // ガラスの縁（上辺の白いハイライト・下辺のわずかな青緑の反射）は液面と無関係に静止して一度だけ描く
-    const glassG = new Graphics()
-    glassG.roundRect(chX0, chY0, chW, chH, tubeR).stroke({ width: 2, color: 0x1c130a, alpha: 0.85 })
-    glassG
-      .moveTo(chX0 + tubeR * 0.4, chY0 + chH * 0.12)
-      .lineTo(chX1 - tubeR * 0.4, chY0 + chH * 0.12)
-      .stroke({ width: Math.max(1, chH * 0.1), color: 0xffffff, alpha: 0.48 })
-    glassG
-      .moveTo(chX0 + tubeR * 0.4, chY1 - chH * 0.08)
-      .lineTo(chX1 - tubeR * 0.4, chY1 - chH * 0.08)
-      .stroke({ width: Math.max(1, chH * 0.06), color: 0x3ad6c2, alpha: 0.22 })
-    gaugeRoot.addChild(glassG)
-    // 真鍮の口金（両端）：キャップ＋ハイライト帯＋リベット1個ずつ（過剰装飾はしない）
-    const brassG = new Graphics()
-    const drawCap = (x0: number) => {
-      brassG.roundRect(x0, 0, capW, gaugeH, gaugeH * 0.28).fill(UI.brass).stroke({ width: 1.5, color: 0x5f4218, alpha: 0.8 })
-      brassG.roundRect(x0 + capW * 0.16, gaugeH * 0.12, capW * 0.68, gaugeH * 0.22, gaugeH * 0.08).fill({ color: 0xf2d585, alpha: 0.5 })
-      brassG.circle(x0 + capW * 0.5, gaugeH * 0.5, gaugeH * 0.075).fill(0x8a5f22).stroke({ width: 1, color: 0x3a2a10, alpha: 0.5 })
-      brassG
-        .circle(x0 + capW * 0.5 - gaugeH * 0.02, gaugeH * 0.5 - gaugeH * 0.02, gaugeH * 0.022)
-        .fill({ color: 0xffe9b0, alpha: 0.75 })
+    if (oilTex) {
+      const sp = new Sprite(oilTex)
+      sp.width = gaugeW
+      sp.height = gaugeH
+      gaugeRoot.addChild(sp)
+    } else {
+      const frameG = new Graphics()
+      frameG.roundRect(0, 0, gaugeW, gaugeH, gaugeH * 0.3).stroke({ width: 3, color: UI.brass })
+      for (let i = 1; i < 5; i++) {
+        const tx = chX0 + chW * (i / 5)
+        frameG.moveTo(tx, chY0).lineTo(tx, chY1).stroke({ width: 1.5, color: 0x8a6a3f, alpha: 0.7 })
+      }
+      gaugeRoot.addChild(frameG)
     }
-    drawCap(0)
-    drawCap(gaugeW - capW)
-    gaugeRoot.addChild(brassG)
+    // 酸素僅少時のランタン炎ゆらぎ（素材の炎位置＝左端付近への簡易オーバーレイ。周期1.4〜1.8秒でランダムに小さくなる）
+    const flameFlicker = new Graphics()
+    flameFlicker.circle(gaugeW * 0.095, gaugeH * 0.3, gaugeH * 0.3).fill({ color: 0xffb347, alpha: 0.55 })
+    flameFlicker.visible = false
+    gaugeRoot.addChild(flameFlicker)
+    let flameFlickerActive = false
+    const flameFlickerLoop = () => {
+      if (!flameFlickerActive || flameFlicker.destroyed) return
+      const dur = 700 + Math.random() * 200 // 半周期0.7〜0.9秒＝全体1.4〜1.8秒（高速点滅は禁止。[B]警告時の注記）
+      const scale = 0.65 + Math.random() * 0.5
+      tw.tween(flameFlicker.scale, { x: scale, y: scale }, dur, { onDone: flameFlickerLoop })
+      tw.tween(flameFlicker, { alpha: 0.3 + Math.random() * 0.45 }, dur)
+    }
     const oxyNumText = new Text({
       text: '',
       style: { fill: 0xf4e8cf, fontSize: gaugeH * 0.4, fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
@@ -1853,25 +1853,21 @@ async function boot() {
     oxyNumText.position.set(chX1 - gaugeW * 0.015, (chY0 + chY1) / 2)
     gaugeRoot.addChild(oxyNumText)
 
-    /** ゲージの塗り＋強奪予告の斜線オーバーレイを最新化する（灯の実数はrefreshFloorHudが都度渡す） */
+    /** ゲージの塗り＋強奪予告の斜線オーバーレイを最新化する（酸素の実数はrefreshFloorHudが都度渡す） */
     const drawGauge = (oxygen: number, full: number, pendingDrain: number) => {
       const ratio = Math.max(0, Math.min(1, oxygen / full))
       const low = oxygen > 0 && oxygen <= OXYGEN_LOW // 割合ではなく絶対量で警告する（貯金で分母が嘘になるため）
       backingG.clear()
-      backingG.roundRect(chX0, chY0, chW, chH, tubeR).fill(0x241a12) // 空部分＝暗い琥珀ガラス
+      backingG.roundRect(chX0, chY0, chW, chH, chH * 0.22).fill(0x2a1c10)
       fillG.clear()
       hatchLayer.removeChildren().forEach((c) => c.destroy())
       let fillW = 0
       if (oxygen > 0) {
         fillW = ratio * chW
         fillW = Math.max(0, Math.min(chW, fillW))
-        fillW = Math.max(fillW, chH * 0.5) // 残り1でも「まだ残っている」ことが見える最低幅
-        // 液は青系の縦2色（#57B8E8→#2E7DB8）。発光ハロは付けない（ART_GRAMMAR §10：静止物の加算ブルーム禁止）
-        fillG.roundRect(chX0, chY0, fillW, chH, tubeR).fill(0x2e7db8)
-        fillG.roundRect(chX0, chY0, fillW, chH * 0.46, Math.min(tubeR, chH * 0.2)).fill({ color: 0x57b8e8, alpha: 0.82 })
-        // 液面（右端）の小さな明るいメニスカス
-        const meniscusW = Math.min(fillW, Math.max(1.5, chH * 0.12))
-        fillG.roundRect(chX0 + fillW - meniscusW, chY0, meniscusW, chH, meniscusW * 0.5).fill({ color: 0xdff4ff, alpha: 0.75 })
+        fillW = Math.max(fillW, chH * 0.35) // 残り1でも「まだ残っている」ことが見える最低幅
+        fillG.roundRect(chX0, chY0, fillW, chH, chH * 0.22).fill(0xd9922e)
+        fillG.roundRect(chX0, chY0, fillW, chH * 0.42, chH * 0.18).fill({ color: 0xf2c96a, alpha: 0.8 })
         const pendW = Math.min(fillW, (Math.min(oxygen, pendingDrain) / full) * chW)
         if (pendW > 0.5) {
           const px0 = chX0 + fillW - pendW
@@ -1887,12 +1883,21 @@ async function boot() {
       }
       oxyNumText.text = String(Math.max(0, oxygen)) // 分母は出さない（補給の貯金で満タンを超えるため嘘になる）
       oxyNumText.style.fill = low ? 0xff8a70 : 0xf4e8cf
+      if (low !== flameFlickerActive) {
+        flameFlickerActive = low
+        flameFlicker.visible = low
+        if (low) flameFlickerLoop()
+        else {
+          flameFlicker.scale.set(1)
+          flameFlicker.alpha = 1
+        }
+      }
     }
 
     /** 酸素強奪の実況：80msの白い芯→180msの油揺れ（2px横揺れ）→数値わきに「-N」が浮かぶ（[B]被弾時の指示） */
     const oxygenDrainFx = (amount: number) => {
       const flash = new Graphics()
-      flash.roundRect(chX0, chY0, chW, chH, tubeR).fill({ color: 0xffffff, alpha: 0.95 })
+      flash.roundRect(chX0, chY0, chW, chH, chH * 0.22).fill({ color: 0xffffff, alpha: 0.95 })
       gaugeRoot.addChild(flash)
       tw.tween(flash, { alpha: 0 }, 80, { onDone: () => { if (!flash.destroyed) flash.destroy() } })
       tw.delay(70, () => {

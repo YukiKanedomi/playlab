@@ -1758,6 +1758,10 @@ export class BoardView {
     const list = this.doomedByCell.get(k)
     if (!list || !list.length) return
     for (const e of list.slice()) {
+      if (e.sp.destroyed) {
+        this.removeDoomed(k, e.sp) // reconcile等が先に破棄した個体（Codexレビュー3回目：破棄済みへsnapすると落ちる）
+        continue
+      }
       if (e.mv === this.moveSeq) continue // この手の消滅予約は生かす（演出はこれから再生される）
       // position → scale → sp本体の順（snapPieceForMoveと同じ規約）。sp本体のsnapがonDoneでdestroyを
       // 発火するため、destroy後にscale/positionへ書き込まない
@@ -1882,8 +1886,8 @@ export class BoardView {
     // 残っており、割込んだ新しい手の駒が先に到着して消え待ち駒と共存して見える。未開始予約を一様圧縮して
     // 共存の窓を縮める（順序保存＝全演出は再生される。JUICE §0-5 と両立）
     compressChannel('board', 0.45)
-    const nowAbs = now()
-    if (this.timelineEndAbs > nowAbs) this.timelineEndAbs = nowAbs + (this.timelineEndAbs - nowAbs) * 0.45
+    // timelineEndAbs は縮めない（Codexレビュー3回目：開始済みtweenは圧縮対象外なので、終端まで縮めると
+    // 進行中の長い落下の最中に reconcile が発火し一斉スナップを招く。終端は安全側＝過大評価のまま）
     this.moveSeq++
     this.moveTouched = new WeakSet()
     this.sweepOrphans() // 幽霊掃除（2026-08-15）。reconcileが走れない連打中の保険
@@ -2015,6 +2019,7 @@ export class BoardView {
         }
         case 'special-born': {
           // 特殊駒生成を「誕生イベント」として演出する（codex_consult [D]-1。最優先＝基準品質のコア）
+          this.snapDoomedAt(this.key(e.at.x, e.at.y)) // Codexレビュー3回目P0：前の手の消え待ち駒を先に畳む
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
           const b = this.bs(sp)
           const style = SPECIAL_BORN_STYLE[e.piece.kind] ?? SPECIAL_BORN_STYLE.default
@@ -2170,6 +2175,7 @@ export class BoardView {
           break
         }
         case 'spore-born': {
+          this.snapDoomedAt(this.key(e.at.x, e.at.y)) // Codexレビュー3回目P0
           const sp = this.makePiece(e.at.x, e.at.y, { kind: 'spore' })
           const b = this.bs(sp)
           sp.scale.set(0)
@@ -2177,6 +2183,8 @@ export class BoardView {
           break
         }
         case 'spore-rise': {
+          this.snapDoomedAt(this.key(e.from.x, e.from.y)) // Codexレビュー3回目P0：両セルの消え待ちを畳む
+          this.snapDoomedAt(this.key(e.to.x, e.to.y))
           const sp = this.sprites.get(this.key(e.from.x, e.from.y))
           const other = this.sprites.get(this.key(e.to.x, e.to.y))
           if (sp) {
@@ -2192,12 +2200,22 @@ export class BoardView {
         }
         case 'spore-collected': {
           sfx.spore(t / 1000)
-          const sp = this.sprites.get(this.key(e.at.x, e.at.y))
+          const k = this.key(e.at.x, e.at.y)
+          const sp = this.sprites.get(k)
           if (sp) {
             this.snapPieceForMove(sp)
-            this.sprites.delete(this.key(e.at.x, e.at.y))
+            this.sprites.delete(k)
+            // Codexレビュー3回目P0：胞子の回収演出（250ms上昇フェード）も doomed 台帳へ載せる。
+            // 載せないと同セルへの補充が畳めず、旧胞子×新駒の共存になる（popPieceAtを通らない消し方の穴）
+            this.addDoomed(k, sp)
             tween(sp, { alpha: 0 }, 250, { delay: t })
-            tween(sp.position, { y: sp.position.y - this.S }, 250, { delay: t, onDone: () => sp.destroy() })
+            tween(sp.position, { y: sp.position.y - this.S }, 250, {
+              delay: t,
+              onDone: () => {
+                this.removeDoomed(k, sp)
+                if (!sp.destroyed) sp.destroy()
+              },
+            })
           }
           break
         }
@@ -2359,6 +2377,9 @@ export class BoardView {
         }
         case 'cell-sealed': {
           this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
+          // Codexレビュー3回目P0：エンジンは封鎖時に c.piece を null にするのに、ビューは駒を消していなかった。
+          // 残った駒スプライトは帳簿上「正」に見えるため後の解封→補充でリロール誤認のクロスフェードを招く
+          this.popPieceAt(e.at, t, true)
           const g = this.makeSealBlock(e.at.x, e.at.y)
           g.scale.set(0)
           tween(g.scale, { x: 1, y: 1 }, 220, { delay: t + 120, ease: easeOutBack })
@@ -2616,6 +2637,9 @@ export class BoardView {
     // ボスの顔（目+HPバー）オーバーレイの同期（修正7で単独関数に切り出し。boss-phase専用の部分更新とも共用）
     this.reconcileBossFace()
     this.updateIntentBadges() // 可視化第一波①：撃破・生成の取りこぼしをここでも吸収
+    // Codexレビュー3回目：reconcileの孤児destroyはonDoneを通らないため、doomed台帳に破棄済み個体が
+    // 残留する（残留すると snapDoomedAt が破棄済みへ触る）。ここで台帳を掃除して整合を保つ
+    for (const [k, list] of [...this.doomedByCell]) for (const en of list.slice()) if (en.sp.destroyed) this.removeDoomed(k, en.sp)
     // 修正9：reconcileが実際に何かを直した場合のみ出す。発生ゼロが正常の指標（QA・実機での観測用）
     if (corrected > 0) console.debug('[yacho] reconcile corrected', corrected)
   }
