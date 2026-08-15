@@ -92,6 +92,9 @@ export type BoardEvent =
   | { t: 'spore-collected'; at: XY }
   | { t: 'fall'; from: XY; to: XY }
   | { t: 'refill'; at: XY; piece: Piece }
+  // 詰み保険のその場色替え（C案移行Phase3で refill から分離。ビューは落下ではなくクロスフェードで描く。
+  // 従来は同じ 'refill' で流れ、ビューが「既存Spriteの有無」から意味を推測していた＝codex_arch_review.md §1-4）
+  | { t: 'reroll'; at: XY; piece: Piece }
   // index=Board.goals の添字（HUDカウンタの同定用）／at=進捗を生んだセル（収集演出の始点）
   | { t: 'goal-progress'; goal: Goal; index: number; done: number; at: XY }
   // 勝利シーケンス（RESEARCH §5: 残手数ドレイン→特殊駒変換→自動起爆）

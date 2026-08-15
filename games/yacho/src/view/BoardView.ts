@@ -2338,27 +2338,18 @@ export class BoardView {
           }
           break
         }
+        case 'reroll': {
+          // 詰み保険リロール（C案移行Phase3で専用イベント化）：盤上の駒のその場色替え＝クロスフェード
+          this.playReroll(e.at, e.piece, t)
+          break
+        }
         case 'refill': {
           const k = this.key(e.at.x, e.at.y)
           const already = this.sprites.get(k)
           if (already && !already.destroyed) {
-            // 修正6：詰み保険リロール（board.tsのrerollSomePieces）は盤上の駒をその場で色替えするだけで、
-            // 空きセルへの補充ではない。既存スプライトが居るのに上から落とすタイムラインへ流すと
-            // 「盤の中ほどの駒が突然消えて別の色が降ってくる」＝絵柄一斉変化に見えるため、その場で
-            // クロスフェードに差し替える（旧alpha→0／新alpha0→1を各150ms）。通常補充は下の分岐のまま。
-            this.snapPieceForMove(already)
-            this.mapRetire(k, already) // 修正3：フェードアウト中も台帳に残し、次にこのセルへ触れたら畳めるように
-            const oldSp = already
-            const newSp = this.makePiece(e.at.x, e.at.y, e.piece)
-            newSp.alpha = 0
-            tween(newSp, { alpha: 1 }, 150, { delay: t })
-            tween(oldSp, { alpha: 0 }, 150, {
-              delay: t,
-              onDone: () => {
-                this.removeDoomed(k, oldSp)
-                if (!oldSp.destroyed) oldSp.destroy()
-              },
-            })
+            // 防御的フォールバック：reroll分離後、refillが占有セルへ来ることは無いはずだが、
+            // 万一来ても旧挙動（修正6のクロスフェード）で吸収する
+            this.playReroll(e.at, e.piece, t)
             break
           }
           this.snapDoomedAt(k) // 修正3：通常補充でも、このセルにポップ待ち駒が残っていたら先に畳む
@@ -2942,6 +2933,34 @@ export class BoardView {
       }
     }
     this.reconcileBossFace()
+  }
+
+  /** 詰み保険リロールの描画（修正6）：盤上の駒をその場で色替え＝旧alpha→0／新alpha0→1の各150ms
+   *  クロスフェード。上から落とすタイムラインへ流すと「盤の中ほどの駒が突然消えて別の色が降ってくる」
+   *  ＝絵柄一斉変化に見えるための専用処理。既存スプライトが無ければ単純生成でフェードイン */
+  private playReroll(p: XY, piece: Piece, t: number) {
+    const k = this.key(p.x, p.y)
+    const already = this.sprites.get(k)
+    if (already && !already.destroyed) {
+      this.snapPieceForMove(already)
+      this.mapRetire(k, already) // 修正3：フェードアウト中も台帳に残し、次にこのセルへ触れたら畳めるように
+      const oldSp = already
+      const newSp = this.makePiece(p.x, p.y, piece)
+      newSp.alpha = 0
+      tween(newSp, { alpha: 1 }, 150, { delay: t })
+      tween(oldSp, { alpha: 0 }, 150, {
+        delay: t,
+        onDone: () => {
+          this.removeDoomed(k, oldSp)
+          if (!oldSp.destroyed) oldSp.destroy()
+        },
+      })
+      return
+    }
+    this.snapDoomedAt(k)
+    const sp = this.makePiece(p.x, p.y, piece)
+    sp.alpha = 0
+    tween(sp, { alpha: 1 }, 150, { delay: t })
   }
 
   private popPieceAt(p: XY, t: number, byFire = false, sparkSkipChance = 0) {

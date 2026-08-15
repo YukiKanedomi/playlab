@@ -236,7 +236,7 @@ export class Board {
       if (c?.piece?.kind === 'normal') {
         const piece: Piece = { kind: 'normal', color: this.pickColorNoMatch(x, y) }
         c.piece = piece
-        ev?.push({ t: 'refill', at: { x, y }, piece })
+        ev?.push({ t: 'reroll', at: { x, y }, piece }) // C案移行Phase3：補充と区別できる専用イベントで通知
       }
     }
   }
