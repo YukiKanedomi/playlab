@@ -73,43 +73,99 @@ type HookReplaySnapshot =
   | { on: 'enemyHit'; upgradeId: string; hook: Extract<Hook, { on: 'enemyHit' }>; cells: XY[]; amount: number }
 
 /**
- * C案移行Phase5（codex_arch_review.md §3-5）：1手の解決を「セグメント境界で停止できる」形で進めるハンドル。
- * swap()/tap() はこれを最後までdrainする互換adapter＝従来と完全に同じ同期挙動。
+ * C案移行Phase5.5（codex_c_phase46_plan.md §5）：エンジン自身が発行する実停止境界の種別。
+ * ビュー側の segmentEvents()（イベント種別からの分類）は補助であり、正本はこちら。
+ */
+export type ResolutionStepKind = 'swap' | 'resolve' | 'gravity' | 'after-move' | 'enemy' | 'finish'
+
+/** 表示・HUDが参照する論理状態の正規化スナップショット（deep clone済み・以後の盤面変化と独立） */
+export interface BoardSnapshot {
+  cells: Cell[][]
+  enemies: EnemyInstance[]
+  goalDone: number[]
+  movesLeft: number
+  score: number
+  chain: number
+  oxygen: number | null // run が無ければ null
+  floorCleared: boolean
+  runOverFired: boolean
+}
+
+/** 1停止境界ぶんの確定結果。events はこの境界までに新しく積まれた差分 */
+export interface ResolutionStep {
+  resolutionId: number
+  index: number
+  kind: ResolutionStepKind
+  events: BoardEvent[]
+  beforeRevision: number
+  afterRevision: number
+  snapshotAfter: BoardSnapshot
+}
+
+/**
+ * 1手の解決を「セグメント境界で停止できる」形で進めるハンドル。
+ * swap()/tap() はジェネレータを直接drainする互換adapter＝従来と完全に同じ同期挙動
+ * （snapshot構築のコストも払わない。runsimの性能を落とさないため）。
  * ResolutionCoordinator（Phase6）は next() でビュー再生の完了と交互に進める。
+ * 注: drain() はコスト上 steps[] を組まず events + finalSnapshot だけを返す
+ * （割込時の集計はイベント列から行える。codex_c_phase46_plan.md §8.2-B）。
  */
 export interface MoveResolution {
-  /** 次の境界まで実行し、そこまでのイベント差分を返す。もう差分が無ければ null */
-  next(): BoardEvent[] | null
-  /** 残りをすべて実行し、残り差分をまとめて返す（割込時の無演出drain用） */
-  drain(): BoardEvent[]
+  /** 次の境界まで実行し、その境界のstepを返す。もう差分が無ければ null */
+  next(): ResolutionStep | null
+  /** 残りをすべて実行し、残り差分と最終スナップショットを返す（割込時の無演出drain用） */
+  drain(): { events: BoardEvent[]; finalSnapshot: BoardSnapshot }
   readonly done: boolean
-  /** ここまでに積まれた全イベント（swap()互換の戻り値） */
+  /** ここまでに積まれた全イベント */
   readonly events: BoardEvent[]
 }
 
-function makeResolution(ev: BoardEvent[], gen: Generator<void>): MoveResolution {
+let resolutionSeq = 0
+
+function makeResolution(board: Board, ev: BoardEvent[], gen: Generator<ResolutionStepKind>): MoveResolution {
+  const resolutionId = ++resolutionSeq
   let cursor = 0
+  let index = 0
   let finished = false
   return {
     next: () => {
       if (finished && cursor >= ev.length) return null
-      // イベント差分が出るまで境界を進める（空セグメントは飛ばす）
-      while (!finished && ev.length === cursor) {
-        if (gen.next().done) finished = true
+      // イベント差分が出る境界まで進める（空境界は飛ばす）。kind はその境界の yield 値
+      let kind: ResolutionStepKind = 'finish'
+      while (!finished) {
+        const r = gen.next()
+        if (r.done) {
+          finished = true
+          break
+        }
+        if (ev.length > cursor) {
+          kind = r.value
+          break
+        }
       }
-      if (finished && ev.length === cursor) return null
-      const diff = ev.slice(cursor)
+      if (ev.length === cursor) return null
+      const events = ev.slice(cursor)
       cursor = ev.length
-      return diff
+      const beforeRevision = board.revision
+      board.revision++ // 境界の確定＝表示が追うべき論理状態が1つ進んだ
+      return {
+        resolutionId,
+        index: index++,
+        kind,
+        events,
+        beforeRevision,
+        afterRevision: board.revision,
+        snapshotAfter: board.snapshot(),
+      }
     },
     drain: () => {
       const start = cursor
       while (!finished) {
         if (gen.next().done) finished = true
       }
-      const diff = ev.slice(start)
       cursor = ev.length
-      return diff
+      board.revision++
+      return { events: ev.slice(start), finalSnapshot: board.snapshot() }
     },
     get done() {
       return finished
@@ -130,6 +186,8 @@ export class Board {
   chain = 0 // 現在の連鎖段数（SEピッチ用）
   subiCharge: number
   score = 0 // 消去1駒=10点×連鎖倍率、特殊駒発動=+50（DESIGN.md §2）
+  /** C案移行Phase5.5：停止境界の確定ごとに単調増加。表示側は presentedRevision と比較して追従を検証する */
+  revision = 0
 
   // ---- ローグライク拡張（ROGUE.md §3）：run が無ければ以下は一切使われない ----
   private hooks: { upgradeId: string; hook: Hook }[] = []
@@ -429,22 +487,40 @@ export class Board {
    * 不正手（マッチも特殊駒も絡まない）は illegal イベントのみで手数を消費しない。
    */
   swap(a: XY, b: XY): BoardEvent[] {
-    const r = this.swapStepped(a, b)
-    r.drain()
-    return r.events
+    const ev: BoardEvent[] = []
+    for (const _ of this.swapGen(a, b, ev)) {
+      /* drain（snapshot・step構築のコストは払わない） */
+    }
+    return ev
   }
 
   /** swapの段階的解決ハンドル（Phase5）。まだ何も実行していない＝最初のnext()/drain()で動き出す */
   swapStepped(a: XY, b: XY): MoveResolution {
     const ev: BoardEvent[] = []
-    return makeResolution(ev, this.swapGen(a, b, ev))
+    return makeResolution(this, ev, this.swapGen(a, b, ev))
   }
 
-  private *swapGen(a: XY, b: XY, ev: BoardEvent[]): Generator<void> {
+  /** 表示・HUDが参照する論理状態のdeep cloneスナップショット（Phase5.5） */
+  snapshot(): BoardSnapshot {
+    return structuredClone({
+      cells: this.cells,
+      enemies: this.enemies,
+      goalDone: this.goalDone,
+      movesLeft: this.movesLeft,
+      score: this.score,
+      chain: this.chain,
+      oxygen: this.run ? this.run.oxygen : null,
+      floorCleared: this.floorCleared,
+      runOverFired: this.runOverFired,
+    })
+  }
+
+  private *swapGen(a: XY, b: XY, ev: BoardEvent[]): Generator<ResolutionStepKind> {
     const ca = this.at(a.x, a.y)
     const cb = this.at(b.x, b.y)
     if (!ca?.piece || !cb?.piece || Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) {
       ev.push({ t: 'swap', a, b, illegal: true })
+      yield 'swap'
       return
     }
     this.beginResolve() // 1解決（このswap一手ぶんの連鎖・浮上再安定化まで）のフック予算をリセット
@@ -459,8 +535,9 @@ export class Board {
       ev.push({ t: 'combo', at: b, from: a, kinds: `${pa.kind}+${pb.kind}` })
       this.spendMove(ev)
       this.chain = 0
-      yield // swapセグメント境界
+      yield 'swap'
       this.fireSpecial(b, pb, ev, pa)
+      yield 'resolve' // 発動の消しが確定
       yield* this.cascadeSegments(ev)
       yield* this.endMoveSegments(ev)
       return
@@ -475,8 +552,9 @@ export class Board {
       ev.push({ t: 'swap', a, b, illegal: false })
       this.spendMove(ev)
       this.chain = 0
-      yield // swapセグメント境界
+      yield 'swap'
       this.fireSpecial(at, p, ev)
+      yield 'resolve' // 発動の消しが確定
       yield* this.cascadeSegments(ev)
       yield* this.endMoveSegments(ev)
       return
@@ -485,38 +563,43 @@ export class Board {
     if (!this.hasAnyMatch()) {
       this.swapPieces(ca, cb) // 戻す
       ev.push({ t: 'swap', a, b, illegal: true })
+      yield 'swap'
       return
     }
     ev.push({ t: 'swap', a, b, illegal: false })
     this.spendMove(ev)
     this.chain = 0
-    yield // swapセグメント境界
+    yield 'swap'
     this.resolveMatches(ev, b)
+    yield 'resolve' // 1連鎖目の消しが確定
     yield* this.cascadeSegments(ev)
     yield* this.endMoveSegments(ev)
   }
 
   /** 特殊駒タップ発動 */
   tap(at: XY): BoardEvent[] {
-    const r = this.tapStepped(at)
-    r.drain()
-    return r.events
+    const ev: BoardEvent[] = []
+    for (const _ of this.tapGen(at, ev)) {
+      /* drain */
+    }
+    return ev
   }
 
   /** tapの段階的解決ハンドル（Phase5） */
   tapStepped(at: XY): MoveResolution {
     const ev: BoardEvent[] = []
-    return makeResolution(ev, this.tapGen(at, ev))
+    return makeResolution(this, ev, this.tapGen(at, ev))
   }
 
-  private *tapGen(at: XY, ev: BoardEvent[]): Generator<void> {
+  private *tapGen(at: XY, ev: BoardEvent[]): Generator<ResolutionStepKind> {
     this.beginResolve()
     const c = this.at(at.x, at.y)
     if (!c?.piece || c.piece.kind === 'normal' || c.piece.kind === 'spore') return
     this.spendMove(ev)
     this.chain = 0
-    yield // 発動前の境界
+    yield 'swap' // 入力コスト（タップも入力フェーズとして扱う）
     this.fireAt(at, ev)
+    yield 'resolve' // 発動の消しが確定
     yield* this.cascadeSegments(ev)
     yield* this.endMoveSegments(ev)
   }
@@ -525,13 +608,13 @@ export class Board {
    * 1手の締め（swap/tapの共通末尾）。afterMove → 層クリア判定 → （未クリアなら）敵ターン。
    * 目標を達成した手では敵ターンを走らせない＝早く達成すれば反撃を受けずに層を出られる。
    */
-  private *endMoveSegments(ev: BoardEvent[]): Generator<void> {
-    yield // 連鎖の決着と手の締めの境界
-    this.afterMove(ev)
+  private *endMoveSegments(ev: BoardEvent[]): Generator<ResolutionStepKind> {
+    yield 'gravity' // cascadeSegments末尾（ガード後の充填・詰み保険reroll）をここで区切る
+    yield* this.afterMoveSegments(ev)
     this.checkFloorClear(ev)
+    yield 'finish' // floor-clear / oxygen-refill の確定（未クリアなら空境界としてスキップされる）
     if (this.floorCleared) return
-    yield // 敵ターンの境界
-    this.resolveEnemyTurn(ev)
+    yield* this.enemyTurnSegments(ev)
   }
 
   /** 1連鎖ぶんのマッチを消して特殊駒を生成。何か消したら true */
@@ -961,7 +1044,7 @@ export class Board {
     }
   }
 
-  private *cascadeSegments(ev: BoardEvent[]): Generator<void> {
+  private *cascadeSegments(ev: BoardEvent[]): Generator<ResolutionStepKind> {
     let guard = 0
     while (guard++ < 50) {
       // 充填（落下＋斜め滑り＋リフィル）が安定するまで反復してからマッチ解決
@@ -972,9 +1055,9 @@ export class Board {
         this.refill(ev)
         if (ev.length === before) break
       }
-      yield // 充填安定＝gravityセグメント境界
+      yield 'gravity' // 充填安定＝gravityセグメント境界
       if (!this.resolveMatches(ev)) break
-      yield // 1連鎖ぶんの消しが確定＝resolveセグメント境界
+      yield 'resolve' // 1連鎖ぶんの消しが確定＝resolveセグメント境界
     }
     // 連鎖ガード到達時も充填だけは安定させる（Codexレビュー#6）
     let inner2 = 0
@@ -1073,8 +1156,14 @@ export class Board {
       }
   }
 
-  /** 手の締め：胞子の浮上・回収、勝敗判定用の状態更新 */
-  private afterMove(ev: BoardEvent[]) {
+  /** 手の締め：胞子の浮上・回収、勝敗判定用の状態更新（テストが直接呼ぶ互換drain。本体からは afterMoveSegments を使う） */
+  protected afterMove(ev: BoardEvent[]) {
+    for (const _ of this.afterMoveSegments(ev)) {
+      /* drain */
+    }
+  }
+
+  private *afterMoveSegments(ev: BoardEvent[]): Generator<ResolutionStepKind> {
     let sporeMoved = false
     // 胞子は1手ごとに1マス浮上（上のマスの駒と入れ替わる「泡上がり」）。上端で回収。
     for (let y = 0; y < H; y++)
@@ -1097,8 +1186,12 @@ export class Board {
           sporeMoved = true
         }
       }
+    yield 'after-move' // 胞子の浮上・回収を区切る
     // 浮上で生じた空セル・偶発マッチを再安定化（Codexレビュー#3）
-    if (sporeMoved) this.resolveCascades(ev)
+    if (sporeMoved) {
+      yield* this.cascadeSegments(ev)
+      yield 'gravity' // 再安定化の末尾（充填・reroll）を区切る
+    }
     if (this.run) {
       this.run.records.maxChain = Math.max(this.run.records.maxChain, this.chain)
       this.run.records.maxDestroyed = Math.max(this.run.records.maxDestroyed, this.resolveDestroyCount)
@@ -1999,10 +2092,17 @@ export class Board {
       }
   }
 
-  /** ターン終了処理：封鎖期限→各敵の定期行動→再安定化→層クリア/遭難判定。endMove から呼ばれる */
-  private resolveEnemyTurn(ev: BoardEvent[]) {
+  /** ターン終了処理：封鎖期限→各敵の定期行動→再安定化→層クリア/遭難判定（テストが直接呼ぶ互換drain。本体からは enemyTurnSegments を使う） */
+  protected resolveEnemyTurn(ev: BoardEvent[]) {
+    for (const _ of this.enemyTurnSegments(ev)) {
+      /* drain */
+    }
+  }
+
+  private *enemyTurnSegments(ev: BoardEvent[]): Generator<ResolutionStepKind> {
     if (!this.run) return
     this.tickSeals(ev)
+    yield 'enemy' // 封鎖の期限切れを区切る
     for (const e of [...this.enemies]) {
       if (e.hp <= 0) continue
       const period = ENEMY_PERIOD[e.kind]
@@ -2020,17 +2120,26 @@ export class Board {
         case 'breathstealer':
         case 'boss': this.drainOxygen(e, ev); break
       }
+      yield 'enemy' // 敵1体の行動ごとの境界
     }
     // 敵の行動で空いた/塞がったセルを重力・補充で安定させる
-    this.resolveCascades(ev)
+    yield* this.cascadeSegments(ev)
+    yield 'gravity' // 再安定化の末尾（充填・reroll）を区切る
     // 敵ターン中の偶発マッチで目標が埋まることがあるので、ここでもクリアを見る（クリア優先）
     this.checkFloorClear(ev)
-    if (this.floorCleared) return
+    if (this.floorCleared) {
+      yield 'finish'
+      return
+    }
     if (this.run.oxygen <= 0 && !this.runOverFired) {
-      if (this.tryLastLight(ev)) return // 忘れ形見（祝福）が1回だけ遭難を肩代わりする
+      if (this.tryLastLight(ev)) {
+        yield 'finish' // last-light の確定
+        return
+      }
       this.runOverFired = true
       ev.push({ t: 'run-over' })
     }
+    yield 'finish'
   }
 
   /** 忘れ形見（祝福）：灯が尽きた瞬間に灯を戻す。ランに一度だけで、使い切ったら次は普通に遭難する */

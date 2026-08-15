@@ -3,7 +3,7 @@
 // 「どの個体が・どの手で・どの経路で」帳簿を出入りしたかを事後に追えるようにする。
 // 本番（フラグ無し）ではカウンタ加算も履歴記録も一切走らない（呼び出し側が DIAG でガードする）。
 import type { Sprite } from 'pixi.js'
-import { setTweenDiag } from '../juice/tween'
+import { hasTweenProperty, now as tweenNow, setTweenDiag } from '../juice/tween'
 
 export const DIAG = typeof location !== 'undefined' && /[?&](debug|diag)\b/.test(location.search)
 
@@ -93,6 +93,11 @@ if (DIAG) {
     counters,
     recentOps,
     conflictKinds: () => Object.fromEntries([...conflictKinds.entries()].sort((a, b) => b[1] - a[1])),
+    // 幽霊の三分類（codex_c_phase46_plan.md §6）用：検出器が「予約待ち（writerあり＝偽陽性）」と
+    // 「本物のstranded（writerなし）」を切り分けるための照会窓口
+    hasAlphaWriter: (sp: Sprite) => hasTweenProperty(sp, 'alpha'),
+    hasPositionWriter: (sp: Sprite) => hasTweenProperty(sp.position, 'x') || hasTweenProperty(sp.position, 'y'),
+    tweenNow: () => tweenNow(),
     reset: () => {
       for (const k of Object.keys(counters) as (keyof typeof counters)[]) counters[k] = 0
       ops.length = 0
