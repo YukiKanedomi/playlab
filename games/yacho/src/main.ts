@@ -3,7 +3,7 @@
 import { Application, Container, Graphics, Point, Sprite, Text, Texture } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
-import { createRunState, discardUpgrade, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
+import { createRunState, discardUpgrade, takeUpgrade, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
 import { isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
 import { FLOORS, type FloorDef } from './core/floors'
 import { RESOURCE_LABEL, UPGRADES, type UpgradeDef } from './core/upgrades'
@@ -49,7 +49,7 @@ const saveRogueBest = (floor: number) => {
 const themeFloorId = (floor: number) => (floor <= 10 ? 1 : floor <= 20 ? 11 : 21)
 
 /** 所持強化バーのアイコン：系統1色に対応する駒テクスチャキー（pieces.ts の n0〜n3。可視化第一波②） */
-const CATEGORY_ICON: Record<string, string> = { gear: 'n0', plant: 'n1', mineral: 'n2', relic: 'n3' }
+const CATEGORY_ICON: Record<string, string> = { gear: 'n0', plant: 'n1', mineral: 'n2', relic: 'n3', lamp: 'seiju' } // lamp＝探窟ランタンの駒絵を流用
 /** 異種シナジー強化は単一系統に還元できないため、2系統のテクスチャを斜め半分ずつ重ねる簡易表現 */
 const SYNERGY_HALVES: Record<string, [string, string]> = {
   'vine-rocket': ['n1', 'n0'],
@@ -78,7 +78,7 @@ const buildFloorLevelDef = (floor: number, seed: number, def: FloorDef): LevelDe
 // ---- ドラフトカード情報設計（codex_consult_rogue.md [B]。left切れ修正の第4波で全面差し替え） ----
 
 /** ドラフトカード見出し帯の系統ラベル（色だけに頼らず文字でも示す。UPGRADE_CATEGORYのカテゴリ→日本語1〜2字） */
-const CATEGORY_LABEL: Record<UpgradeCategory, string> = { plant: '植物', mineral: '鉱物', gear: 'ギア', relic: '遺物', synergy: '異種' }
+const CATEGORY_LABEL: Record<UpgradeCategory, string> = { plant: '植物', mineral: '鉱物', gear: 'ギア', relic: '遺物', synergy: '異種', lamp: '灯' }
 
 /** 採録画面の3つの行為（PHASE2.md §2.8）。採る＝入れ替え／合成＝枠が空く／深化＝枠は変わらない */
 type DraftMode = 'take' | 'fuse' | 'deepen'
@@ -2907,7 +2907,7 @@ async function boot() {
         const c = UPGRADE_CATEGORY[u.id]
         counts[c] = (counts[c] ?? 0) + 1
       }
-      const breakdownOrder: UpgradeCategory[] = ['plant', 'mineral', 'gear', 'relic', 'synergy']
+      const breakdownOrder: UpgradeCategory[] = ['plant', 'mineral', 'gear', 'relic', 'synergy', 'lamp']
       const breakdownText = breakdownOrder
         .filter((c) => counts[c])
         .map((c) => `${CATEGORY_LABEL[c]}${counts[c]}`)
@@ -2968,7 +2968,7 @@ async function boot() {
         const makeRoom = () => {
           if (run.upgrades.length >= run.slots) showDiscardPanel(options[i], makeRoom)
           else {
-            run.upgrades.push(options[i].id)
+            takeUpgrade(run, options[i].id) // 灯の器系（工程3）の会計もここで一度だけ効く
             goNextFloor()
           }
         }

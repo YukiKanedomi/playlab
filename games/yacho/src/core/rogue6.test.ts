@@ -173,9 +173,9 @@ describe('採掘慣れの説明文（夜間監査[C]6：実装と一致させる
 })
 
 describe('因果グラフのデータ化（夜間監査[B][C]5）', () => {
-  it('全20種にconsumes/producesが定義されており、語彙はRESOURCESの範囲に収まっている', () => {
-    // 採録で出る知見は20種のまま。合成でしか手に入らない知見（PHASE2 §2.8）は別に数える
-    expect(UPGRADES.filter((u) => !u.fusion).length).toBe(20)
+  it('全種にconsumes/producesが定義されており、語彙はRESOURCESの範囲に収まっている', () => {
+    // 採録で出る知見は20種＋増設8種（工程3）。合成でしか手に入らない知見（PHASE2 §2.8）は別に数える
+    expect(UPGRADES.filter((u) => !u.fusion).length).toBe(28)
     for (const u of UPGRADES) {
       expect(u.consumes).toBeDefined()
       expect(u.produces).toBeDefined()
@@ -187,7 +187,7 @@ describe('因果グラフのデータ化（夜間監査[B][C]5）', () => {
 })
 
 describe('スターター配布プールの限定（夜間監査[C]10/15）', () => {
-  it('単体で即座に盤面を動かす8種に限定されている', () => {
+  it('単体で即座に盤面を動かす8種に限定されている（工程3の増設は採録でのみ登場。run.ts の理由コメント参照）', () => {
     expect(new Set(STARTER_UPGRADE_IDS)).toEqual(
       new Set(['spore-bloom', 'fungal-awakening', 'deep-breath', 'mining-habit', AUTONOMOUS_MECHANISM_ID, PREHEAT_ID, 'transformation-furnace', 'relic-root']),
     )

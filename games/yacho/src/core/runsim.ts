@@ -11,7 +11,7 @@
 // （seeds省略時は120。このファイル自体はNode専用ツールで、main.ts/viewからは一切importされない）
 import { pathToFileURL } from 'node:url'
 import { Board, H, W } from './board'
-import { createRunState, discardUpgrade, type RunState } from './run'
+import { createRunState, discardUpgrade, takeUpgrade, type RunState } from './run'
 import { blessingSupply, isBlessingFloor, pickBlessingOptions, takeBlessing } from './blessings'
 import { FLOORS, type FloorDef } from './floors'
 import { UPGRADES, type UpgradeDef } from './upgrades'
@@ -259,7 +259,7 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
           firesById.delete(discardedId) // 採り直したときに新品として扱う（discardUpgrade と同じ扱い）
         }
         drafts.push({ floor, discardedId, action: 'take' })
-        run.upgrades.push(choice.id)
+        takeUpgrade(run, choice.id) // 灯の器系（工程3）の会計も本編と同じ経路で効かせる
       }
     }
   }

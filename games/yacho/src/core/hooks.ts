@@ -68,4 +68,10 @@ export type Hook =
   | { on: 'destroy'; act: (at: XY, cause: DestroyCause, piece: Piece, ctx: HookCtx) => void }
   | { on: 'sporeTouch'; act: (spore: XY, neighbor: XY, ctx: HookCtx) => void }
   | { on: 'gearTrigger'; act: (at: XY, count: number, ctx: HookCtx) => void }
+  // 原生種のHPが実際に削れた直後に発火（工程3：enemy-damage資源の使い手を作る）。
+  // 殻（鐘脚）・匣（深匣主第1段階）が受け止めた分では発火しない＝「傷ついた」の嘘を作らない。
+  // cells はその原生種の身体セル（撃破で開放される前の控え。生成位置の種に使う）。
+  // 注意：このフックの act から damageEnemy を呼ぶと dealEnemyDamage と相互再帰する。
+  // enemy-damage を consumes する知見は produces に enemy-damage を持たないこと（予算200が最後の防波堤）。
+  | { on: 'enemyHit'; act: (cells: XY[], amount: number, ctx: HookCtx) => void }
   | { on: 'turnEnd'; act: (ctx: HookCtx) => void } // MVP①では未発火（敵/ターン制は範囲外。型のみ用意）

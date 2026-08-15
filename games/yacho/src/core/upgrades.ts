@@ -53,6 +53,13 @@ export interface UpgradeDef {
    */
   fusion?: Resource
   /**
+   * 灯の器系（工程3）：採録した瞬間の器（lampMax）と灯の増分。run.ts の takeUpgrade が一度だけ適用し、
+   * discardUpgrade が器を対称に戻す（灯は戻さない。器からあふれたぶんだけその場で削れる＝祝福の呪いと同じ規則）。
+   * 「数値強化より挙動変化」（ROGUE2）の例外だが、オーナー承認済み（2026-08-15「知見選びで最大値上昇はベタだが良い」）。
+   */
+  lampMax?: number
+  lamp?: number
+  /**
    * スターター効果（ROGUE2.md §1 原則2）：強化を取得した瞬間に盤面へ即座に作用させる処理。
    * board.ts が Board 構築（＝次の層開始）のたび、まだ発火していない取得済み強化についてこれを1回だけ呼ぶ
    * （RunState.startersApplied で管理）。
@@ -88,6 +95,10 @@ export const MAGNETIC_MINING_ID = 'magnetic-mining'
 // ギア起動系の「N回で発動」はゲージ(gearCharge)を全強化で共有しているため、しきい値を1箇所に集約する。
 export const AUTONOMOUS_MECHANISM_ID = 'autonomous-mechanism'
 export const MECHANICAL_GARDEN_ID = 'mechanical-garden'
+// 増設8種（工程3）のうち board.ts が直接処理・進捗更新するもののID定数
+export const EMBER_CORE_ID = 'ember-core'
+export const DISMANTLE_KNACK_ID = 'dismantle-knack'
+export const POWDER_MILL_ID = 'powder-mill'
 export const RELIC_RESONANCE_ID = 'relic-resonance'
 /** 合成の知見のうち、遺物共鳴と同じ「次の遺物マッチ2倍」の待機状態を立てるもの（run.ts が手放しの後始末で見る） */
 export const RING_OF_RESONANCE_ID = 'ring-of-resonance'
@@ -542,6 +553,140 @@ export const UPGRADES: UpgradeDef[] = [
       desc: 'どの系統をそろえて消しても、胞子が2つ生まれる',
       apply: (h) => (h.on === 'match' ? { ...h, system: undefined } : h),
     },
+  },
+  // ---- 増設（8。工程3）----
+  // 31層では採録が約30回あり、20種のままでは後半が既視の札ばかりになるための増設。
+  // 狙い：①enemy-damage の使い手を作って環を閉じる（返り血の苔）②マッチ・連鎖を生む系を厚くする
+  // （返り血の苔・四つ目の刻印・胞子ぜんまい）③灯の器（lampMax）を知見でも動かせるようにする（2種）。
+  {
+    id: 'lamp-vessel',
+    name: '灯守の甕',
+    desc: '採録したその場で、灯の器が6ひろがり、灯も6ともる',
+    // 会計のみの知見（例外。UpgradeDef.lampMax のコメントを参照）。盤面は動かないのでフックも starter も無い。
+    // 較正（工程3）：初版 +8/+8 は遭難中央値を25へ押し上げた（(a)NG）ため +6/+6 へ
+    hooks: [],
+    consumes: [],
+    produces: [],
+    lampMax: 6,
+    lamp: 6,
+  },
+  {
+    id: 'deep-flask',
+    name: '深底の油壺',
+    desc: '採録したその場で、灯の器が12ひろがる（灯そのものは増えない）',
+    // 較正（工程3）：初版 +16 → +12（灯守の甕と同じ理由。祝福「大きな肺」の器+12と同格に置く）
+    hooks: [],
+    consumes: [],
+    produces: [],
+    lampMax: 12,
+  },
+  {
+    id: 'blood-moss',
+    name: '返り血の苔',
+    desc: '原生種が傷つくたび、そのそばに植物が1つ生える（マッチが繋がる位置を優先）',
+    // enemy-damage を使う初めての知見（これが無いと毒胞子・採掘慣れ等の産出が誰にも受け取られず環が閉じない）。
+    // enemyHit フックの act から damageEnemy を呼ぶと相互再帰するため、ここでは絶対に呼ばない（hooks.ts の注意書き）
+    hooks: [
+      {
+        on: 'enemyHit',
+        act: (cells, _amount, ctx) => {
+          const color = ctx.rng() < 0.5 ? 1 : 4
+          const spot = ctx.growthSpot(cells, color)
+          if (spot) ctx.spawnPiece(spot, color)
+        },
+      },
+    ],
+    consumes: ['enemy-damage'],
+    produces: ['plant'],
+  },
+  {
+    id: 'fourth-sigil',
+    name: '四つ目の刻印',
+    desc: '4つ以上そろえて消すと、跡地の近くの駒1つが遺物に変わる（マッチが繋がる位置を優先）',
+    hooks: [
+      {
+        on: 'match',
+        minSize: 4,
+        act: (g, ctx) => {
+          const target = ctx.transformSpot(g.cells, 3)
+          if (target) ctx.transform(target, { kind: 'normal', color: 3 })
+        },
+      },
+    ],
+    consumes: [],
+    produces: ['relic-match'],
+  },
+  {
+    id: 'spore-mainspring',
+    name: '胞子ぜんまい',
+    desc: '胞子が消えると、近くの駒1つがギアに変わる（マッチが繋がる位置を優先）',
+    starterDesc: 'おまけ: ギアのとなりに胞子を1つ置く',
+    hooks: [
+      {
+        on: 'sporeTouch',
+        act: (spore, _neighbor, ctx) => {
+          const target = ctx.transformSpot([spore], 0)
+          if (target) ctx.transform(target, { kind: 'normal', color: 0 })
+        },
+      },
+    ],
+    consumes: ['spore'],
+    produces: ['gear-trigger'],
+    // スターター配置：毒胞子・根食い鉱と同じ流儀＝本体がすぐ試せる「ギアのとなり」を狙い、無ければ空きマスへ後退
+    starter: (ctx) => {
+      const spot =
+        ctx.randomCell((c, p) => {
+          if (c.block || c.sporeToken) return false
+          return ctx.neighborsOf(p).some((n) => {
+            const np = ctx.at(n.x, n.y)?.piece
+            return np?.kind === 'normal' && np.color === 0
+          })
+        }) ?? ctx.randomCell((c) => !c.block && !c.sporeToken)
+      if (spot) ctx.spawnToken(spot, 'spore')
+    },
+  },
+  {
+    id: EMBER_CORE_ID,
+    name: '熾火の芯',
+    desc: '爆発鉱石が爆発すると、最寄りの原生種に2ダメージ',
+    starterDesc: 'おまけ: 爆発鉱石を1つ作る',
+    // 発動元は爆発そのもの（explodeAt）。destroyフックにすると破壊された駒1つごとに発火が数えられてしまう
+    // （fireDestroyHooksは駒単位で走る）ため、胞子弾と同じく board.ts が直接処理する（理由は最終報告と同型）。
+    hooks: [],
+    consumes: ['volatile-ore'],
+    produces: ['enemy-damage'],
+    starter: (ctx) => {
+      const ore = ctx.randomCell((c) => c.piece?.kind === 'normal' && c.piece.color === 2 && !c.piece.volatile)
+      if (ore) ctx.transform(ore, { kind: 'normal', color: 2, volatile: true })
+    },
+  },
+  {
+    id: DISMANTLE_KNACK_ID,
+    name: '解体の心得',
+    desc: '特殊駒が発動すると、最寄りの原生種に2ダメージ',
+    // 発動は「特殊駒が実際に撃たれた瞬間」＝5種のフック種別に無いため、蔓ロケット・胞子弾と同じく
+    // board.ts の fireSpecial 内で直接処理する。
+    hooks: [],
+    consumes: ['special'],
+    produces: ['enemy-damage'],
+  },
+  {
+    id: POWDER_MILL_ID,
+    name: '火薬の挽き臼',
+    desc: 'ギアが2回起動するたび、盤上の鉱物1つが爆発鉱石になる',
+    hooks: [
+      {
+        on: 'gearTrigger',
+        act: (_at, count, ctx) => {
+          if (count % GEAR_TRIGGER_THRESHOLD !== 0) return
+          const ore = ctx.randomCell((c) => c.piece?.kind === 'normal' && c.piece.color === 2 && !c.piece.volatile)
+          if (ore) ctx.transform(ore, { kind: 'normal', color: 2, volatile: true })
+        },
+      },
+    ],
+    consumes: ['gear-trigger'],
+    produces: ['volatile-ore'],
+    deepen: { desc: 'ギアが起動するたび、盤上の鉱物1つが爆発鉱石になる', apply: everyGearTrigger },
   },
   // ---- 合成の知見（6。PHASE2.md §2.8）----
   // 呼応する2つ（資源Rを**生む**知見＋Rを**使う**知見）を1つにまとめたもの。2枠が1枠になる＝枠が空く。

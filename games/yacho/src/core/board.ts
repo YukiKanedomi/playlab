@@ -7,9 +7,12 @@ import { systemOf } from './hooks'
 import {
   AUTONOMOUS_MECHANISM_ID,
   GEAR_TRIGGER_THRESHOLD,
+  DISMANTLE_KNACK_ID,
+  EMBER_CORE_ID,
   MAGNETIC_MINING_ID,
   MECHANICAL_GARDEN_ID,
   MIMIC_SLIME_ID,
+  POWDER_MILL_ID,
   PREHEAT_ID,
   RELIC_RESONANCE_ID,
   RESONANT_SHATTER_ID,
@@ -54,6 +57,7 @@ type HookReplaySnapshot =
   | { on: 'destroy'; upgradeId: string; hook: Extract<Hook, { on: 'destroy' }>; at: XY; cause: DestroyCause; piece: Piece }
   | { on: 'sporeTouch'; upgradeId: string; hook: Extract<Hook, { on: 'sporeTouch' }>; spore: XY; neighbor: XY }
   | { on: 'gearTrigger'; upgradeId: string; hook: Extract<Hook, { on: 'gearTrigger' }>; at: XY; count: number }
+  | { on: 'enemyHit'; upgradeId: string; hook: Extract<Hook, { on: 'enemyHit' }>; cells: XY[]; amount: number }
 
 export class Board {
   cells: Cell[][] = [] // [y][x]
@@ -714,6 +718,16 @@ export class Board {
         this.spawnTokenAt(at, 'spore', ev)
         ev.push({ t: 'upgrade-fire', id: SPORE_BULLET_ID, at })
       }
+      // 解体の心得（工程3）：特殊駒の発動そのものに反応する＝蔓ロケット・胞子弾と同じ直接処理組。
+      // 原生種が居ない層では発火アピールも出さない（嘘を作らない）
+      if (this.run.upgrades.includes(DISMANTLE_KNACK_ID)) {
+        const e = this.nearestEnemy(at)
+        if (e) {
+          ev.push({ t: 'upgrade-fire', id: DISMANTLE_KNACK_ID, at })
+          this.dealEnemyDamage(e.id, 2, ev) // 較正（工程3）：3→2（熾火の芯と同時に弱めた）
+          this.run.records.effectFires++
+        }
+      }
       // 模倣の粘菌(#14・第5波)：強化を1つも発動していなくても空振りしないためのフォールバック対象として、
       // 直前に発動した特殊駒効果（種類・位置・コンボ相手）をデータとして覚えておく（関数は保存しない。夜間監査[C]1）。
       // replayLast()はlastHookReplayが無いときだけこれを使う（makeCtx参照）。
@@ -1109,6 +1123,7 @@ export class Board {
     }
     ensure(AUTONOMOUS_MECHANISM_ID, GEAR_TRIGGER_THRESHOLD)
     ensure(MECHANICAL_GARDEN_ID, GEAR_TRIGGER_THRESHOLD)
+    ensure(POWDER_MILL_ID, GEAR_TRIGGER_THRESHOLD) // 火薬の挽き臼（工程3）も同じ「2回ごと」の可視化契約に乗る
     ensure(RELIC_RESONANCE_ID, 1) // 遺物共鳴は回数カウンタではなく「ブースト待機中」の0/1状態
   }
 
@@ -1232,7 +1247,7 @@ export class Board {
   private updateGearCountProgress(count: number) {
     if (!this.run) return
     const cur = ((count - 1) % GEAR_TRIGGER_THRESHOLD) + 1
-    for (const id of [AUTONOMOUS_MECHANISM_ID, MECHANICAL_GARDEN_ID]) {
+    for (const id of [AUTONOMOUS_MECHANISM_ID, MECHANICAL_GARDEN_ID, POWDER_MILL_ID]) {
       if (!this.run.upgrades.includes(id)) continue
       // 深化ずみ（PHASE2.md §2.8「2回ごと→毎回」）は間引きが無いので、進捗表示も 1/1 にする（1/2 のままだと嘘になる）
       this.run.progress[id] = this.run.deepened.includes(id) ? { cur: 1, max: 1 } : { cur, max: GEAR_TRIGGER_THRESHOLD }
@@ -1309,6 +1324,16 @@ export class Board {
       if (this.run.upgrades.includes(SPORE_BULLET_ID)) {
         this.spawnTokenAt(at, 'spore', ev)
         ev.push({ t: 'upgrade-fire', id: SPORE_BULLET_ID, at })
+      }
+      // 熾火の芯（工程3）：爆発が最寄りの原生種を焼く。destroyフックだと破壊駒1つごとに発火が数えられて
+      // しまうため、胞子弾と同じくここで直接処理する。原生種が居ない層では発火アピールも出さない（嘘を作らない）
+      if (this.run.upgrades.includes(EMBER_CORE_ID)) {
+        const e = this.nearestEnemy(at)
+        if (e) {
+          ev.push({ t: 'upgrade-fire', id: EMBER_CORE_ID, at })
+          this.dealEnemyDamage(e.id, 2, ev) // 較正（工程3）：3→2（遭難中央値を帯へ戻す）
+          this.run.records.effectFires++
+        }
       }
     }
   }
@@ -1583,6 +1608,12 @@ export class Board {
               snap.hook.act(snap.at, snap.count, replayCtx)
               break
             }
+            case 'enemyHit': {
+              const replayCtx = self.makeCtx(ev, snap.cells[0])
+              ev.push({ t: 'upgrade-fire', id: snap.upgradeId, at: snap.cells[0] })
+              snap.hook.act(snap.cells, snap.amount, replayCtx)
+              break
+            }
           }
           self.run!.records.effectFires++
           return
@@ -1660,6 +1691,20 @@ export class Board {
       h.act(at, count, ctx)
       this.run.records.effectFires++
       this.lastHookReplay = { on: 'gearTrigger', upgradeId, hook: h, at, count }
+    }
+  }
+
+  /** 原生種のHPが実際に削れた直後（工程3・hooks.ts の enemyHit）。cells＝撃破で開放される前の身体セル */
+  private fireEnemyHitHooks(cells: XY[], amount: number, ev: BoardEvent[]) {
+    if (!this.run || this.hooksSuspended) return
+    const ctx = this.makeCtx(ev, cells[0])
+    for (const { upgradeId, hook: h } of this.hooks) {
+      if (h.on !== 'enemyHit') continue
+      if (!this.consumeHookBudget()) return
+      ev.push({ t: 'upgrade-fire', id: upgradeId, at: cells[0] })
+      h.act(cells, amount, ctx)
+      this.run.records.effectFires++
+      this.lastHookReplay = { on: 'enemyHit', upgradeId, hook: h, cells, amount }
     }
   }
 
@@ -1760,7 +1805,11 @@ export class Board {
     }
     e.hp = Math.max(0, e.hp - amount)
     ev.push({ t: 'enemy-damage', id, amount, hpLeft: e.hp })
+    const bodyCells = [...e.cells] // 撃破で身体セルが開放される前に控える（enemyHitフックの生成位置の種）
     if (e.hp <= 0) this.defeatEnemy(e, ev, heavy)
+    // enemyHit（工程3）：殻・匣で止まった分は上でreturn済み＝ここに来るのは本当にHPが削れたときだけ。
+    // 撃破処理の後に発火する＝開放されたセルも生成先に使える（swarm伝播の再帰内でもそれぞれ発火する）
+    this.fireEnemyHitHooks(bodyCells, amount, ev)
   }
 
   /** 第2段階へ：中央2セルだけ残して身体を縮める（盤面が広がるご褒美） */

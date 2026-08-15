@@ -2,7 +2,7 @@
 // Board はこれを任意（コンストラクタ第2引数）で受け取り、フックの発火判定・記録集計に使う。
 // 未指定なら Board は完全に旧来の（非ローグ）挙動のまま動く。
 import { makeRng, randInt, type Rng } from './rng'
-import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID, RELIC_RESONANCE_ID, RING_OF_RESONANCE_ID } from './upgrades'
+import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID, RELIC_RESONANCE_ID, RING_OF_RESONANCE_ID, UPGRADES } from './upgrades'
 
 /**
  * ラン開始時の灯（PLAN_LOOP.md §1.4）。1スワップ=1消費なので「最初の持ち手数」でもある。
@@ -33,7 +33,10 @@ export const OXYGEN_SUPPLY_PER_FLOOR = 12
  * 灯喰みの奪う量も「先に落とせば効かない」ので強いビルドには課金されない。幕ごとに補給を落とすのが
  * 「深いほど細る」を全ビルドに効かせる唯一の手だった（较正の記録：assets_src/_runsim.txt）。
  */
-export const SUPPLY_BY_ACT = [12, 10, 3]
+// 工程3の再較正：知見が20→28種に増えて第二幕の貯金が実測+8〜10（深度20の補給前 25.7→36前後）に膨らみ、
+// 遭難中央値が25へ逸脱した。増設個別の弱体化（除外実験では単独犯なし＝合算で強い）より、観測とちょうど
+// 釣り合う第二幕 10→9 で相殺する（10層ぶんで-10）。120シードで9指標がすべて帯へ戻ることを確認済み
+export const SUPPLY_BY_ACT = [12, 9, 3]
 export function supplyForFloor(floor: number): number {
   return SUPPLY_BY_ACT[Math.min(SUPPLY_BY_ACT.length - 1, Math.max(0, Math.floor((floor - 1) / 10)))]
 }
@@ -64,6 +67,9 @@ export const STARTER_UPGRADE_IDS: string[] = [
   'transformation-furnace',
   'relic-root',
 ]
+// 増設（工程3）の返り血の苔・火薬の挽き臼も「単体で盤面を動かす」条件は満たすが、プールへ足すと
+// 全シードの初期配布が組み替わり、較正済みの8種の分布ごと壊れる（実測：遭難中央値が25へ逸脱）ため
+// 足していない。増設分は採録でのみ登場する。
 
 export interface RunRecords {
   maxChain: number // 1手内で到達した最大連鎖数
@@ -147,6 +153,19 @@ export function gainLamp(run: RunState, amount: number): number {
 }
 
 /**
+ * 知見を1つ採録する唯一の入口（main.ts のドラフト確定・runsim が使う。テストが upgrades を直接組む場合は不要）。
+ * 灯の器系の知見（UpgradeDef.lampMax / lamp。工程3）はここで会計を済ませる：
+ * 器の増分は採録の瞬間に一度だけ効き、手放し（discardUpgrade）で対称に戻る。
+ * 灯の増分は gainLamp を通す＝器でクランプし、実際に増えた量だけがともる（+Nの嘘を作らない）。
+ */
+export function takeUpgrade(run: RunState, id: string) {
+  run.upgrades.push(id)
+  const def = UPGRADES.find((u) => u.id === id)
+  if (def?.lampMax) run.lampMax += def.lampMax
+  if (def?.lamp) gainLamp(run, def.lamp)
+}
+
+/**
  * 知見を1つ手放す（PHASE2.md §2「取る＝捨てる」）。
  * 効果はその場で消える：Board は構築時に run.upgrades からフック一覧を組むので、
  * ここで外れた知見は次に組まれる盤面（＝採録直後の層）で既に働かない。
@@ -154,7 +173,15 @@ export function gainLamp(run: RunState, amount: number): number {
  * （残しておくと、採り直した知見だけおまけが出ない不整合になる）。
  */
 export function discardUpgrade(run: RunState, id: string) {
+  const had = run.upgrades.includes(id)
   run.upgrades = run.upgrades.filter((u) => u !== id)
+  // 灯の器系（工程3）：ひろげた器を戻し、あふれた灯はその場で削る（祝福の「器がせばまる」呪いと同じ規則）。
+  // 採り直せばまた takeUpgrade でひろがる＝対称なので、取る/捨てるの往復で器が無限に育つことはない
+  const def = UPGRADES.find((u) => u.id === id)
+  if (had && def?.lampMax) {
+    run.lampMax -= def.lampMax
+    run.oxygen = Math.min(run.oxygen, run.lampMax)
+  }
   run.startersApplied = run.startersApplied.filter((u) => u !== id)
   // 深化（PHASE2.md §2.8）も一緒に落とす＝採り直したら条件も元に戻る（深化だけが残ると幽霊になる）
   run.deepened = run.deepened.filter((u) => u !== id)

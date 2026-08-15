@@ -3,9 +3,9 @@
 // 系統分類（UPGRADE_CATEGORY）は upgrades.ts §4 の見出し区分（植物/鉱物/ギア/遺物/異種シナジー）をそのままIDで写す。
 // main.ts のドラフト抽選（系統一致シナジー判定）もこの分類を共用する。
 
-export type UpgradeCategory = 'plant' | 'mineral' | 'gear' | 'relic' | 'synergy'
+export type UpgradeCategory = 'plant' | 'mineral' | 'gear' | 'relic' | 'synergy' | 'lamp'
 
-/** upgrades.ts 20種のID→系統（ROGUE.md §4の見出し順）。配列の並び順に依存しないようIDを明示する */
+/** upgrades.ts 全種のID→系統（ROGUE.md §4の見出し順＋増設）。配列の並び順に依存しないようIDを明示する */
 export const UPGRADE_CATEGORY: Record<string, UpgradeCategory> = {
   // 植物
   'spore-bloom': 'plant',
@@ -32,6 +32,15 @@ export const UPGRADE_CATEGORY: Record<string, UpgradeCategory> = {
   'spore-bullet': 'synergy',
   'mechanical-garden': 'synergy',
   'relic-root': 'synergy',
+  // 増設（工程3）。灯の器系だけは4系統のどれでもないので専用カテゴリ lamp（ラベルは「灯」）
+  'lamp-vessel': 'lamp',
+  'deep-flask': 'lamp',
+  'blood-moss': 'plant',
+  'fourth-sigil': 'relic',
+  'spore-mainspring': 'synergy',
+  'ember-core': 'mineral',
+  'dismantle-knack': 'synergy',
+  'powder-mill': 'synergy',
   // 合成の知見（PHASE2.md §2.8）。2系統をまたいで1つになったものなので、どれも異種シナジー扱い
   'ring-of-spores': 'synergy',
   'blasting-vein': 'synergy',
@@ -41,7 +50,7 @@ export const UPGRADE_CATEGORY: Record<string, UpgradeCategory> = {
   'ring-of-resonance': 'synergy',
 }
 
-/** 代表強化の修飾語（名前の頭を飾る）。20種すべてに1語を割当てる */
+/** 代表強化の修飾語（名前の頭を飾る）。全種に1語を割当てる */
 const MODIFIER: Record<string, string> = {
   'spore-bloom': '繁殖',
   'fungal-awakening': '覚醒',
@@ -69,6 +78,15 @@ const MODIFIER: Record<string, string> = {
   'clockwork-chain': '絡繰',
   'mossy-drift': '苔生',
   'ring-of-resonance': '環鳴',
+  // 増設（工程3）
+  'lamp-vessel': '灯守',
+  'deep-flask': '深底',
+  'blood-moss': '返り血',
+  'fourth-sigil': '刻印',
+  'spore-mainspring': '発条',
+  'ember-core': '熾火',
+  'dismantle-knack': '解体',
+  'powder-mill': '火薬',
 }
 
 /** 主系統名詞（最も多く取った系統） */
@@ -78,6 +96,7 @@ const SYSTEM_NOUN: Record<UpgradeCategory, string> = {
   gear: '機関',
   relic: '遺物',
   synergy: '機巧',
+  lamp: '灯火',
 }
 
 /** 末尾の器（2番目に多い系統から選ぶ。無ければ主系統を流用） */
@@ -87,10 +106,11 @@ const SUFFIX_BY_CATEGORY: Record<UpgradeCategory, string> = {
   gear: '工場',
   relic: '装置',
   synergy: '工場',
+  lamp: '灯台',
 }
 
 /** 系統別の取得数が同数のときのタイブレーク順（ROGUE.md §4 見出し順） */
-const CATEGORY_PRIORITY: UpgradeCategory[] = ['plant', 'mineral', 'gear', 'relic', 'synergy']
+const CATEGORY_PRIORITY: UpgradeCategory[] = ['plant', 'mineral', 'gear', 'relic', 'synergy', 'lamp']
 
 /** 強化を1つも取らずに終わったラン（層1で力尽きた等）の既定名 */
 const FALLBACK_NAME = '無垢なる踏破者'
