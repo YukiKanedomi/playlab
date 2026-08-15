@@ -17,7 +17,7 @@ import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgr
 import { loadSave, type SaveData } from './core/save'
 import { BELLFOOT_SHELL_MAX, BOSS_SHELL_COUNT, enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
 import { systemOf } from './core/hooks'
-import type { BoardEvent, Color, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
+import type { BoardEvent, Color, EnemyKind, Goal, GoalType, LevelDef, Piece, XY } from './core/types'
 import { GLOSSARY, findTerm, type GlossaryEntry } from './core/glossary'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
@@ -960,14 +960,18 @@ async function boot() {
     header.addChild(bestT)
     // ビルド刻印（2026-08-15）：不具合報告時に「どのビルドを踏んでいるか」を推測でなく確認するため。
     // 値は vite.config.ts の define（ビルド時刻 MM-DD hh:mm）
+    // 視認性: 小さすぎて読めなかった（2026-08-15）ため、暗色の下敷きつきプラークに変更
     const buildT = new Text({
       text: `build ${__BUILD_ID__}`,
-      style: { fill: 0x8a7c5e, fontSize: fs(0.018), fontFamily: FONT },
+      style: { fill: 0xd8c9a3, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' },
     })
-    buildT.anchor.set(0, 1)
-    buildT.alpha = 0.75
-    buildT.position.set(vw * 0.03, vh * 0.995)
-    mapRoot.addChild(buildT)
+    buildT.anchor.set(0, 0.5)
+    const buildBg = new Graphics()
+    const bw = buildT.width + fs(0.03)
+    const bh = buildT.height + fs(0.016)
+    buildBg.roundRect(vw * 0.02, vh * 0.985 - bh, bw, bh, bh * 0.3).fill({ color: 0x1d1710, alpha: 0.78 })
+    buildT.position.set(vw * 0.02 + fs(0.015), vh * 0.985 - bh / 2)
+    mapRoot.addChild(buildBg, buildT)
     mapRoot.addChild(header)
 
     // 中央「ランかいし」ボタン（拠点の主導線。ROGUE.md §8）
@@ -2473,8 +2477,68 @@ async function boot() {
     }
     playRoot.on('pointerupoutside', discardPress)
     playRoot.on('pointercancel', discardPress)
+    // ---------- デバッグ配置モード（URLに ?debug）----------
+    // 2026-08-15 オーナー提案：「特殊駒を自由に置いてテストする」。爆弾・星珠の大量消し＋連鎖で出る
+    // 表示バグの再現装置。パレットで種類を選び、盤セルをタップすると**手数を消費せず**その駒に置き換わる。
+    // エンジンの駒を直接書き換えて view.reconcile() で同期するだけ＝本編のイベント経路は汚さない
+    const DEBUG_PLACE = new URLSearchParams(location.search).has('debug')
+    let debugSel: { piece: Piece | null } | null = null
+    const debugSetPiece = (x: number, y: number, p: Piece | null) => {
+      const c = board.at(x, y)
+      if (!c || c.block) return
+      c.piece = p ? { ...p } : null
+      view.reconcile()
+    }
+    ;(window as unknown as Record<string, unknown>).__yachoDebugSetPiece = debugSetPiece
+    if (DEBUG_PLACE) {
+      const kinds: { label: string; piece: Piece | null }[] = [
+        { label: '壺', piece: { kind: 'hitsubo' } },
+        { label: '銛─', piece: { kind: 'harpoon', dir: 'h' } },
+        { label: '銛｜', piece: { kind: 'harpoon', dir: 'v' } },
+        { label: '珠', piece: { kind: 'seiju' } },
+        { label: '虫', piece: { kind: 'hamushi' } },
+        { label: '消', piece: null },
+      ]
+      const palY = vh * 0.965
+      const btnW = fs(0.1)
+      const marks: Graphics[] = []
+      kinds.forEach((k, i) => {
+        const bx = vw * 0.02 + i * (btnW + fs(0.012))
+        const g = new Graphics()
+        const draw = (on: boolean) => {
+          g.clear()
+          g.roundRect(bx, palY - fs(0.05), btnW, fs(0.1), 6).fill({ color: on ? 0x6b4b23 : 0x2a2216, alpha: 0.92 })
+          g.roundRect(bx, palY - fs(0.05), btnW, fs(0.1), 6).stroke({ width: 2, color: on ? 0xf2d98a : UI.brass, alpha: 0.9 })
+        }
+        draw(false)
+        marks.push(g)
+        const t = new Text({ text: k.label, style: { fill: 0xf4e8cf, fontSize: fs(0.032), fontFamily: FONT, fontWeight: 'bold' } })
+        t.anchor.set(0.5)
+        t.position.set(bx + btnW / 2, palY)
+        g.eventMode = 'static'
+        g.hitArea = { contains: (hx: number, hy: number) => hx >= bx && hx <= bx + btnW && hy >= palY - fs(0.05) && hy <= palY + fs(0.05) }
+        g.on('pointerdown', (ev2) => {
+          ev2.stopPropagation()
+          debugSel = debugSel?.piece === k.piece ? null : { piece: k.piece }
+          marks.forEach((m, mi) => {
+            m.clear()
+            const on = debugSel !== null && kinds[mi] === k && debugSel.piece === k.piece
+            m.roundRect(vw * 0.02 + mi * (btnW + fs(0.012)), palY - fs(0.05), btnW, fs(0.1), 6).fill({ color: on ? 0x6b4b23 : 0x2a2216, alpha: 0.92 })
+            m.roundRect(vw * 0.02 + mi * (btnW + fs(0.012)), palY - fs(0.05), btnW, fs(0.1), 6).stroke({ width: 2, color: on ? 0xf2d98a : UI.brass, alpha: 0.9 })
+          })
+        })
+        playRoot.addChild(g, t)
+      })
+    }
     playRoot.on('pointerup', (e) => {
       if (inputLocked || !downAt || !downCell) return
+      // デバッグ配置：選択中はタップでその駒を置くだけ（手は消費しない）
+      if (debugSel !== null) {
+        debugSetPiece(downCell.x, downCell.y, debugSel.piece)
+        downAt = null
+        downCell = null
+        return
+      }
       const dx = e.global.x - downAt.x
       const dy = e.global.y - downAt.y
       const dist = Math.hypot(dx, dy)

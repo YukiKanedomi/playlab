@@ -1994,8 +1994,16 @@ export class BoardView {
     // 10連鎖以上を含む手は「暴走時」扱いにし、粒子の同時上限を80→120へ緩める（codex_consult [D]-6）
     this.rampageActive = evs.some((ev) => ev.t === 'match' && ev.chain >= 10)
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
+    // 全イベント共有のハード予算（2026-08-15 実測）：連鎖拍とspecial-fireの予算だけでは足りず、
+    // 敵撃破(200ms)・爆発(200ms+ヒットストップ)・特殊駒誕生(35ms)・block-hit等の積み増しが敵の多い層で
+    // t を再び数十秒へ爆発させていた（層7実測：41セルが上空で alpha=0 のまま・quiet が永遠に偽）。
+    // Codex設計レビューの「漸減ルールではなく全イベントで共有するハード予算にする」の文字通りの実装。
+    // 連鎖拍の総和は最大4660ms（22連鎖）なのでキャップ5200msは通常域の拍を一切壊さない。
+    // キャップ到達後のイベントは同拍に積まれる＝暴走域の「要約・バッチ化」（JUICE §0-5）
+    const T_HARD_CAP = 5200
     for (let ei = 0; ei < evs.length; ei++) {
       const e = evs[ei]
+      if (t > T_HARD_CAP) t = T_HARD_CAP
       switch (e.t) {
         case 'swap': {
           const a = this.sprites.get(this.key(e.a.x, e.a.y))
