@@ -72,6 +72,54 @@ type HookReplaySnapshot =
   | { on: 'gearTrigger'; upgradeId: string; hook: Extract<Hook, { on: 'gearTrigger' }>; at: XY; count: number }
   | { on: 'enemyHit'; upgradeId: string; hook: Extract<Hook, { on: 'enemyHit' }>; cells: XY[]; amount: number }
 
+/**
+ * C案移行Phase5（codex_arch_review.md §3-5）：1手の解決を「セグメント境界で停止できる」形で進めるハンドル。
+ * swap()/tap() はこれを最後までdrainする互換adapter＝従来と完全に同じ同期挙動。
+ * ResolutionCoordinator（Phase6）は next() でビュー再生の完了と交互に進める。
+ */
+export interface MoveResolution {
+  /** 次の境界まで実行し、そこまでのイベント差分を返す。もう差分が無ければ null */
+  next(): BoardEvent[] | null
+  /** 残りをすべて実行し、残り差分をまとめて返す（割込時の無演出drain用） */
+  drain(): BoardEvent[]
+  readonly done: boolean
+  /** ここまでに積まれた全イベント（swap()互換の戻り値） */
+  readonly events: BoardEvent[]
+}
+
+function makeResolution(ev: BoardEvent[], gen: Generator<void>): MoveResolution {
+  let cursor = 0
+  let finished = false
+  return {
+    next: () => {
+      if (finished && cursor >= ev.length) return null
+      // イベント差分が出るまで境界を進める（空セグメントは飛ばす）
+      while (!finished && ev.length === cursor) {
+        if (gen.next().done) finished = true
+      }
+      if (finished && ev.length === cursor) return null
+      const diff = ev.slice(cursor)
+      cursor = ev.length
+      return diff
+    },
+    drain: () => {
+      const start = cursor
+      while (!finished) {
+        if (gen.next().done) finished = true
+      }
+      const diff = ev.slice(start)
+      cursor = ev.length
+      return diff
+    },
+    get done() {
+      return finished
+    },
+    get events() {
+      return ev
+    },
+  }
+}
+
 export class Board {
   cells: Cell[][] = [] // [y][x]
   rng: Rng
@@ -370,18 +418,34 @@ export class Board {
   }
 
   // ---- 解決ループ ----
+  // C案移行Phase5（codex_arch_review.md §3-5）：1手の解決はジェネレータ（swapGen/tapGen）が
+  // セグメント境界（yield）を挟みながら実行する。従来の swap()/tap() は最後までdrainする
+  // 互換adapter＝呼び出し側から見た同期挙動・イベント順・RNG消費は完全に不変。
+  // 将来のResolutionCoordinator（Phase6）は swapStepped()/tapStepped() の next() で
+  // ビュー再生の完了と交互に進める（表示境界と論理境界を一致させる）。
 
   /**
    * プレイヤーの1手（スワップ）。イベント列を返す。
    * 不正手（マッチも特殊駒も絡まない）は illegal イベントのみで手数を消費しない。
    */
   swap(a: XY, b: XY): BoardEvent[] {
+    const r = this.swapStepped(a, b)
+    r.drain()
+    return r.events
+  }
+
+  /** swapの段階的解決ハンドル（Phase5）。まだ何も実行していない＝最初のnext()/drain()で動き出す */
+  swapStepped(a: XY, b: XY): MoveResolution {
     const ev: BoardEvent[] = []
+    return makeResolution(ev, this.swapGen(a, b, ev))
+  }
+
+  private *swapGen(a: XY, b: XY, ev: BoardEvent[]): Generator<void> {
     const ca = this.at(a.x, a.y)
     const cb = this.at(b.x, b.y)
     if (!ca?.piece || !cb?.piece || Math.abs(a.x - b.x) + Math.abs(a.y - b.y) !== 1) {
       ev.push({ t: 'swap', a, b, illegal: true })
-      return ev
+      return
     }
     this.beginResolve() // 1解決（このswap一手ぶんの連鎖・浮上再安定化まで）のフック予算をリセット
     const isSpecial = (p: Piece) => p.kind !== 'normal' && p.kind !== 'spore'
@@ -395,10 +459,11 @@ export class Board {
       ev.push({ t: 'combo', at: b, from: a, kinds: `${pa.kind}+${pb.kind}` })
       this.spendMove(ev)
       this.chain = 0
+      yield // swapセグメント境界
       this.fireSpecial(b, pb, ev, pa)
-      this.resolveCascades(ev)
-      this.endMove(ev)
-      return ev
+      yield* this.cascadeSegments(ev)
+      yield* this.endMoveSegments(ev)
+      return
     }
     // 片方が特殊駒: スワップして移動先で単発発動
     if (isSpecial(ca.piece) || isSpecial(cb.piece)) {
@@ -410,38 +475,63 @@ export class Board {
       ev.push({ t: 'swap', a, b, illegal: false })
       this.spendMove(ev)
       this.chain = 0
+      yield // swapセグメント境界
       this.fireSpecial(at, p, ev)
-      this.resolveCascades(ev)
-      this.endMove(ev)
-      return ev
+      yield* this.cascadeSegments(ev)
+      yield* this.endMoveSegments(ev)
+      return
     }
     this.swapPieces(ca, cb)
     if (!this.hasAnyMatch()) {
       this.swapPieces(ca, cb) // 戻す
       ev.push({ t: 'swap', a, b, illegal: true })
-      return ev
+      return
     }
     ev.push({ t: 'swap', a, b, illegal: false })
     this.spendMove(ev)
     this.chain = 0
+    yield // swapセグメント境界
     this.resolveMatches(ev, b)
-    this.resolveCascades(ev)
-    this.endMove(ev)
-    return ev
+    yield* this.cascadeSegments(ev)
+    yield* this.endMoveSegments(ev)
   }
 
   /** 特殊駒タップ発動 */
   tap(at: XY): BoardEvent[] {
+    const r = this.tapStepped(at)
+    r.drain()
+    return r.events
+  }
+
+  /** tapの段階的解決ハンドル（Phase5） */
+  tapStepped(at: XY): MoveResolution {
     const ev: BoardEvent[] = []
+    return makeResolution(ev, this.tapGen(at, ev))
+  }
+
+  private *tapGen(at: XY, ev: BoardEvent[]): Generator<void> {
     this.beginResolve()
     const c = this.at(at.x, at.y)
-    if (!c?.piece || c.piece.kind === 'normal' || c.piece.kind === 'spore') return ev
+    if (!c?.piece || c.piece.kind === 'normal' || c.piece.kind === 'spore') return
     this.spendMove(ev)
     this.chain = 0
+    yield // 発動前の境界
     this.fireAt(at, ev)
-    this.resolveCascades(ev)
-    this.endMove(ev)
-    return ev
+    yield* this.cascadeSegments(ev)
+    yield* this.endMoveSegments(ev)
+  }
+
+  /**
+   * 1手の締め（swap/tapの共通末尾）。afterMove → 層クリア判定 → （未クリアなら）敵ターン。
+   * 目標を達成した手では敵ターンを走らせない＝早く達成すれば反撃を受けずに層を出られる。
+   */
+  private *endMoveSegments(ev: BoardEvent[]): Generator<void> {
+    yield // 連鎖の決着と手の締めの境界
+    this.afterMove(ev)
+    this.checkFloorClear(ev)
+    if (this.floorCleared) return
+    yield // 敵ターンの境界
+    this.resolveEnemyTurn(ev)
   }
 
   /** 1連鎖ぶんのマッチを消して特殊駒を生成。何か消したら true */
@@ -863,7 +953,15 @@ export class Board {
 
   // ---- 重力・リフィル・連鎖 ----
 
+  /** 互換drain（Phase5）：内部呼び出し（afterMoveの再安定化・敵ターン・勝利起爆）はセグメント停止を
+   *  使わないので、ジェネレータをその場で回し切る＝旧resolveCascadesと同一挙動 */
   private resolveCascades(ev: BoardEvent[]) {
+    for (const _ of this.cascadeSegments(ev)) {
+      /* drain */
+    }
+  }
+
+  private *cascadeSegments(ev: BoardEvent[]): Generator<void> {
     let guard = 0
     while (guard++ < 50) {
       // 充填（落下＋斜め滑り＋リフィル）が安定するまで反復してからマッチ解決
@@ -874,7 +972,9 @@ export class Board {
         this.refill(ev)
         if (ev.length === before) break
       }
+      yield // 充填安定＝gravityセグメント境界
       if (!this.resolveMatches(ev)) break
+      yield // 1連鎖ぶんの消しが確定＝resolveセグメント境界
     }
     // 連鎖ガード到達時も充填だけは安定させる（Codexレビュー#6）
     let inner2 = 0
@@ -971,17 +1071,6 @@ export class Board {
         c.piece = piece
         ev.push({ t: 'refill', at: { x, y }, piece })
       }
-  }
-
-  /**
-   * 1手の締め（swap/tapの4経路で共通）。afterMove → 層クリア判定 → （未クリアなら）敵ターン。
-   * 目標を達成した手では敵ターンを走らせない＝早く達成すれば反撃を受けずに層を出られる。
-   */
-  private endMove(ev: BoardEvent[]) {
-    this.afterMove(ev)
-    this.checkFloorClear(ev)
-    if (this.floorCleared) return
-    this.resolveEnemyTurn(ev)
   }
 
   /** 手の締め：胞子の浮上・回収、勝敗判定用の状態更新 */
