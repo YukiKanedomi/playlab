@@ -3043,7 +3043,8 @@ async function boot() {
       const cardInsetX = Math.max(cardW * 0.06, 12) // 本文はカード内側からさらに6%以上内側（必達）
       const cardIconSize = Math.max(30, Math.min(40, fs(0.1)))
       const connIconSize = Math.max(16, Math.min(20, fs(0.045)))
-      const bodyFont = fs(0.0265)
+      // 2026-08-15 オーナー「文字が枠に対して小さい」→ 本文を一段大きく（0.0265→0.031）
+      const bodyFont = fs(0.031)
 
       // ---- 82〜96%：接続要約＋確定ボタン（選択状態に応じてrenderBottomで描き直す） ----
       const bottomTop = vh * 0.82
@@ -3203,7 +3204,7 @@ async function boot() {
           const textX = cardInsetX + cardIconSize + fs(0.018)
           const catT = new Text({
             text: view.category,
-            style: { fill: 0x8a6a3f, fontSize: fs(0.02), fontFamily: FONT, fontWeight: 'bold' },
+            style: { fill: 0x8a6a3f, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' },
           })
           catT.position.set(textX, headerTop)
           card.addChild(catT)
@@ -3211,7 +3212,8 @@ async function boot() {
             text: view.name,
             style: {
               fill: UI.paperInk,
-              fontSize: fs(0.032),
+              fontSize: fs(0.038), // 2026-08-15 オーナー「文字が枠に対して小さい」→ 見出しを一段大きく
+
               fontFamily: FONT,
               fontWeight: 'bold',
               wordWrap: true,
@@ -3226,7 +3228,7 @@ async function boot() {
           if (view.note) {
             const noteT = new Text({
               text: view.note,
-              style: { fill: 0x8a6a3f, fontSize: fs(0.021), fontFamily: FONT, wordWrap: true, wordWrapWidth: cardW - textX - cardInsetX, breakWords: true },
+              style: { fill: 0x8a6a3f, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: cardW - textX - cardInsetX, breakWords: true },
             })
             noteT.position.set(textX, headerTop + headerBlockH + fs(0.004))
             card.addChild(noteT)

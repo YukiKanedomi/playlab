@@ -120,8 +120,9 @@ export class BoardView {
   // 修正3：popPieceAtはsprites.deleteを即時に行うが、消滅演出(縮小/alpha)はdelay予約でdestroyは
   // その onDone（連鎖後半だと数秒先）。snapPieceForMoveはspritesマップ経由でしか駒を辿れないため、
   // 割込で「snapで定位置に出た新駒」と「ポップ待ちの旧駒」が同一セルに二重表示される穴があった。
-  // destroy待ちの駒をセル単位で台帳に残し、そのセルに再び触れるタイミングでsnapして畳み切る。
-  private doomedByCell = new Map<string, Sprite[]>()
+  // destroy待ちの駒をセル単位で台帳に残し、そのセルに**次の手以降**で触れたときにsnapして畳み切る
+  // （mv=登録時のmoveSeq。同じ手の消滅予約を畳むと、消える予定の駒がスワップ瞬間に透明化する）。
+  private doomedByCell = new Map<string, { sp: Sprite; mv: number }[]>()
   blockG = new Map<string, Container>()
   groundG = new Map<string, Container>()
   busyUntil = 0 // タイムライン終端（ms, performance.now 基準）
@@ -133,6 +134,7 @@ export class BoardView {
   private timelineEndAbs = 0 // 並走中の全タイムラインの終端（tween内部時計 now() 基準。修正2）。終端reconcileは最長の尻尾に合わせる
   // ---- アイドルヒント（RM/Candy式・控えめ） ----
   private hintSprites: Sprite[] = [] // 現在パルス中のスプライト（clearHintで確実に止めるため保持）
+  private hintGlows: Graphics[] = [] // 駒の下の光輪（clearHintで破棄）
 
   // ---- ローグライク拡張（ROGUE.md §5）：敵・環境オーバーレイの帳簿 ----
   private armorG = new Map<string, Graphics>() // "x,y" -> 甲殻オーバーレイ
@@ -1720,33 +1722,38 @@ export class BoardView {
     }
   }
 
-  /** destroy待ち（popPieceAt等）の駒をセル台帳へ登録する（修正3） */
+  /** destroy待ち（popPieceAt等）の駒をセル台帳へ登録する（修正3）。どの手で消えた駒かも記録する */
   private addDoomed(k: string, sp: Sprite) {
+    const entry = { sp, mv: this.moveSeq }
     const list = this.doomedByCell.get(k)
-    if (list) list.push(sp)
-    else this.doomedByCell.set(k, [sp])
+    if (list) list.push(entry)
+    else this.doomedByCell.set(k, [entry])
   }
 
   /** destroy直前に台帳から外す（onDoneでsp.destroy()する直前に呼ぶ） */
   private removeDoomed(k: string, sp: Sprite) {
     const list = this.doomedByCell.get(k)
     if (!list) return
-    const idx = list.indexOf(sp)
+    const idx = list.findIndex((e) => e.sp === sp)
     if (idx >= 0) list.splice(idx, 1)
     if (list.length === 0) this.doomedByCell.delete(k)
   }
 
   /** 指定セルのdoomed駒をまとめてsnapし、destroyまで畳み切る（修正3：snap→onDone発火→sp.destroy()）。
-   *  play()がswap/fall/refill/popPieceAtでセルに触れるたびに呼び、旧駒と新駒の二重表示を防ぐ */
+   *  play()がswap/fall/refill/popPieceAtでセルに触れるたびに呼び、旧駒と新駒の二重表示を防ぐ。
+   *  **同じ手（moveSeq一致）の駒は畳まない**：いま予約したばかりの消滅演出を自分の後続イベント
+   *  （同じセルへの落下・補充）が即座に畳むと、連鎖で消える予定の駒がスワップの瞬間に透明化してしまう
+   *  （2026-08-15 オーナー報告の回帰。畳むべきは「前の手」の残骸だけ） */
   private snapDoomedAt(k: string) {
     const list = this.doomedByCell.get(k)
     if (!list || !list.length) return
-    for (const sp of list.slice()) {
+    for (const e of list.slice()) {
+      if (e.mv === this.moveSeq) continue // この手の消滅予約は生かす（演出はこれから再生される）
       // position → scale → sp本体の順（snapPieceForMoveと同じ規約）。sp本体のsnapがonDoneでdestroyを
       // 発火するため、destroy後にscale/positionへ書き込まない
-      snap(sp.position)
-      snap(sp.scale)
-      snap(sp)
+      snap(e.sp.position)
+      snap(e.sp.scale)
+      snap(e.sp)
     }
   }
 
@@ -1755,8 +1762,9 @@ export class BoardView {
     return now() >= this.timelineEndAbs
   }
 
-  /** アイドルヒント：対象2駒を1.0→1.06→1.0で2回パルス（計600ms、'fx'チャンネル・音なし）。
-   *  帳簿に無い/destroy済みの駒は黙って無視する（消えかけの駒を揺らして事故る方が悪い） */
+  /** アイドルヒント：対象2駒を1.0→1.10→1.0で2回パルス＋駒の下に灯色の淡い光輪（計600ms、'fx'チャンネル・音なし）。
+   *  帳簿に無い/destroy済みの駒は黙って無視する（消えかけの駒を揺らして事故る方が悪い）。
+   *  1.06＋揺れのみでは気づかれなかった（2026-08-15 オーナー「もうちょいわかりやすくてもいい」）ため光輪を足した */
   showHint(a: XY, b: XY): void {
     this.clearHint()
     for (const p of [a, b]) {
@@ -1764,22 +1772,27 @@ export class BoardView {
       if (!sp || sp.destroyed) continue
       const base = this.bs(sp)
       this.hintSprites.push(sp)
+      // 光輪（駒の下・underFxLayer）。灯と同じ真鍮系の色＝「おすすめ」の色をこれで固定する
+      const glow = new Graphics()
+      glow.circle(0, 0, this.S * 0.56).fill({ color: 0xf1d189, alpha: 0.5 })
+      glow.circle(0, 0, this.S * 0.44).fill({ color: 0xfff3cf, alpha: 0.45 })
+      glow.position.set(this.px(p.x), this.px(p.y))
+      glow.alpha = 0
+      this.underFxLayer.addChild(glow)
+      this.hintGlows.push(glow)
       const pulse = (times: number) => {
         if (sp.destroyed) return
-        tween(sp.scale, { x: base * 1.06, y: base * 1.06 }, 150, {
-          ease: easeOutCubic,
-          channel: 'fx',
-          onDone: () => {
-            if (sp.destroyed) return
-            tween(sp.scale, { x: base, y: base }, 150, {
-              ease: easeOutCubic,
-              channel: 'fx',
-              onDone: () => {
-                if (times > 1) pulse(times - 1)
-              },
-            })
+        tween(sp.scale, { x: base * 1.1, y: base * 1.1 }, 150, { ease: easeOutCubic, channel: 'fx' })
+        if (!glow.destroyed) tween(glow, { alpha: 1 }, 150, { ease: easeOutCubic, channel: 'fx' })
+        delay(
+          150,
+          () => {
+            if (!sp.destroyed) tween(sp.scale, { x: base, y: base }, 150, { ease: easeOutCubic, channel: 'fx' })
+            if (!glow.destroyed) tween(glow, { alpha: 0 }, 150, { ease: easeOutCubic, channel: 'fx' })
+            if (times > 1) delay(150, () => pulse(times - 1), 'fx')
           },
-        })
+          'fx',
+        )
       }
       pulse(2)
     }
@@ -1794,6 +1807,11 @@ export class BoardView {
       sp.scale.set(base)
     }
     this.hintSprites = []
+    for (const g of this.hintGlows) {
+      cancel(g)
+      if (!g.destroyed) g.destroy()
+    }
+    this.hintGlows = []
   }
 
   /** イベント列をアニメ予約。所要合計msを返す */
