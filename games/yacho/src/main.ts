@@ -6,7 +6,7 @@ import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, discardUpgrade, takeUpgrade, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
 import { isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
 import { FLOORS, type FloorDef } from './core/floors'
-import { RESOURCE_LABEL, UPGRADES, type UpgradeDef } from './core/upgrades'
+import { UPGRADES, type UpgradeDef } from './core/upgrades'
 import { buildPostmortem, thinningFloor, type DrainSample, type FloorLight } from './core/postmortem'
 import { buildRunName, UPGRADE_CATEGORY, type UpgradeCategory } from './core/runname'
 import { makeRng, type Rng } from './core/rng'
@@ -17,7 +17,7 @@ import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgr
 import { loadSave, type SaveData } from './core/save'
 import { BELLFOOT_SHELL_MAX, BOSS_SHELL_COUNT, enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
 import { systemOf } from './core/hooks'
-import type { BoardEvent, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
+import type { BoardEvent, Color, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
 import { GLOSSARY, findTerm, type GlossaryEntry } from './core/glossary'
 import * as tw from './juice/tween'
 import { sfx, startBgm, toggleMute, isMuted } from './juice/sound'
@@ -34,6 +34,10 @@ const UI = {
 
 // 古い図鑑ふうの明朝（index.html で読み込み。未着ならserifへフォールバック）
 const FONT = '"Shippori Mincho", serif'
+
+// ---- アイドルヒント（RM/Candy式・控えめ。校正しやすいよう定数化） ----
+const HINT_IDLE_MS = 4000 // この時間、無操作かつ盤面が静止したら最初のパルス
+const HINT_REPEAT_MS = 3000 // 以降、手が打たれるまでこの間隔で同じ手を再パルス
 
 // ---- ラン記録（拠点の「さいこう とうたつ」表示。ROGUE.md §8） ----
 const ROGUE_BEST_KEY = 'yacho-rogue-best'
@@ -93,8 +97,10 @@ interface DraftCardView {
   desc: string
   /** 見出しの下の小さな1行（合成の元2つ／深化まえの効果） */
   note?: string
-  /** 本文の下のバッジ（呼応 N／枠がひとつ空く／枠は変わらない） */
+  /** 本文の下のバッジ（枠がひとつ空く／枠は変わらない。合成・深化のみ） */
   chip?: string
+  /** 呼応する所持知見のid（採るときだけ。文章は作らずアイコン併記のみで見せる） */
+  connectedIds?: string[]
   /** 採録時のおまけ（採るときだけ） */
   bonus?: string
 }
@@ -118,51 +124,34 @@ function splitDesc(desc: string): { condition: string | null; effect: string } {
   return { condition: desc.slice(0, hitIdx + hitMarker.length - 1), effect: desc.slice(hitIdx + hitMarker.length) }
 }
 
-// ---- 読めるシナジー表示（codex_consult_ui.md [D]：金文字の名前羅列をやめ、因果の一文にする） ----
+// ---- 呼応表示（オーナー指示：説明文はやめ「今持ってるこれとシナジーがある」をアイコン併記だけで示す。Hadesのデュオブーン式） ----
 // 資源の語彙は upgrades.ts の RESOURCES ただ1つを正とする（抽選 core/draft.ts・表示・計測が同じ定義を読む）。
 // 以前ここに produces/consumes の「近似表」を別語彙（plantPiece/ore/gearPiece/relicBoost）で持っており、
 // upgrades.ts の正式語彙（plant/volatile-ore/gear-trigger/relic-match）と混ざって
 // ラベル解決が undefined になる不具合を出した。真実の源を2つ持つのをやめ、近似表は削除した。
-// 表示名 RESOURCE_LABEL も語彙と同じ upgrades.ts へ移した（結果画面の「あと一つ」が core 側で同じ表を読むため）。
-// 呼応の一文が「Aが胞子を生む → Bが使う」形になり、効果文を埋め込まなくなったため shortEffect() は削除した（PHASE2 §3）
+// 「Aが胞子を生む→Bが使う」の一文表示は廃止した。理由文なしのタグ／アイコン提示に一本化する（Fated Choice式）。
 interface ConnectionInfo {
   count: number
-  sentence: string | null
+  connected: UpgradeDef[]
 }
 /**
- * 所持強化群 対 候補1枚の「読めるシナジー」（[D]：名前の羅列でなく因果の一文）。
- * 型は優先度順に4種：①所持が作る資源を候補が使う ②候補が作る資源を所持が使う ③同じきっかけで発動が重なる
- * ④同じ系統（フォールバック）。countは所持のうちどれか1つでも当てはまった数（バッジの「接続 N」）、
- * sentenceは最も説明力の高い1件だけを代表として出す（複数を連結すると長くなりすぎるため）。
+ * 所持強化群 対 候補1枚の呼応（判定規則は従来と同一＝produces/consumesの資源の橋のみ。同系統・同トリガは数えない）。
+ * connectedは呼応した所持知見の定義そのもの（アイコン併記に使う。文章は作らない）。
  */
 function computeConnection(owned: UpgradeDef[], candidate: UpgradeDef): ConnectionInfo {
   // 資源はcore/upgrades.tsのconsumes/producesを正とする（抽選・表示・計測が同じ定義を読む。監査[C]5）
   const candProduces = candidate.produces ?? []
   const candConsumes = candidate.consumes ?? []
-  const kindRank = { produce: 0, consume: 1 } as const
-  let best: { rank: number; sentence: string } | null = null
-  let count = 0
+  const connected: UpgradeDef[] = []
   for (const o of owned) {
     const oProduces = o.produces ?? []
     const oConsumes = o.consumes ?? []
     const produced = oProduces.find((r) => candConsumes.includes(r))
     const consumed = candProduces.find((r) => oConsumes.includes(r))
-    let kind: keyof typeof kindRank | null = null
-    let sentence = ''
-    if (produced) {
-      kind = 'produce'
-      sentence = `${o.name}が${RESOURCE_LABEL[produced]}を生む → この知見が使う`
-    } else if (consumed) {
-      kind = 'consume'
-      sentence = `この知見が${RESOURCE_LABEL[consumed]}を生む → ${o.name}が使う`
-    }
     // 同トリガ・同系統は「近縁」であって因果の接続ではないため数えない（監査[C]5）
-    if (!kind) continue
-    count++
-    const rank = kindRank[kind]
-    if (!best || rank < best.rank) best = { rank, sentence }
+    if (produced || consumed) connected.push(o)
   }
-  return { count, sentence: best?.sentence ?? null }
+  return { count: connected.length, connected }
 }
 
 
@@ -425,6 +414,32 @@ function drawConnectionChip(host: Container, x: number, y: number, maxW: number,
   label.position.set(textX, y + (chipH - label.height) / 2)
   host.addChild(label)
   return y + chipH
+}
+/**
+ * 呼応する所持知見を「アイコンの併記」だけで見せる（オーナー指示：説明文は不要）。
+ * 接頭に「呼応」の1語だけ添え、アイコンを最大3つ横並び、あふれたら「+N」。理由文・ツールチップは付けない。
+ * 戻り値はブロック下端のy（後続要素の積み上げ用）
+ */
+function drawConnectedIcons(host: Container, x: number, y: number, ids: string[], iconSize: number): number {
+  const label = new Text({ text: '呼応', style: { fill: 0x8a6a3f, fontSize: iconSize * 0.72, fontFamily: FONT, fontWeight: 'bold' } })
+  label.position.set(x, y + (iconSize - label.height) / 2)
+  host.addChild(label)
+  let cx = x + label.width + iconSize * 0.3
+  const gap = iconSize * 0.22
+  const shown = ids.slice(0, 3)
+  for (const id of shown) {
+    const icon = makeUniqueUpgradeIcon(id, iconSize)
+    icon.position.set(cx + iconSize / 2, y + iconSize / 2)
+    host.addChild(icon)
+    cx += iconSize + gap
+  }
+  const overflow = ids.length - shown.length
+  if (overflow > 0) {
+    const moreT = new Text({ text: `+${overflow}`, style: { fill: 0x8a6a3f, fontSize: iconSize * 0.62, fontFamily: FONT, fontWeight: 'bold' } })
+    moreT.position.set(cx + iconSize * 0.08, y + (iconSize - moreT.height) / 2)
+    host.addChild(moreT)
+  }
+  return y + iconSize
 }
 const ENEMY_ICON_TEX: Partial<Record<EnemyKind, string>> = { rockshell: 'kokeishi', sporeling: 'subi', swarm: 'e_swarm', boss: 'hako' }
 function makeEnemyIconContainer(kind: EnemyKind, size: number): Container {
@@ -2377,6 +2392,53 @@ async function boot() {
       if (x < 0 || y < 0 || x >= W || y >= H) return null
       return { x, y }
     }
+    // ---------- アイドルヒント（RM/Candy式・控えめ。無操作HINT_IDLE_MSで「消せる1組」だけ小さく揺れる） ----------
+    let hintIdleMs = 0 // 直近の入力/手の解決からの経過(ms)。ticker.deltaMSを積む
+    let hintNextAt = HINT_IDLE_MS // 次にパルスする閾値（発火のたびHINT_REPEAT_MSぶん先送り）
+    let hintMove: { a: XY; b: XY } | null = null // 選定キャッシュ（盤面が変わるまで使い回す。resetHintTimerで捨てる）
+    const resetHintTimer = () => {
+      hintIdleMs = 0
+      hintNextAt = HINT_IDLE_MS
+      hintMove = null
+      view.clearHint()
+    }
+    const pickHintMove = (): { a: XY; b: XY } | null => {
+      const moves = board.validMoves()
+      if (!moves.length) return null
+      // 優先1：未達の色課目（残数>0）に触れる手。Candy Crushも事実上ランダムなので凝った評価はしない
+      const unmetColors = new Set<Color>()
+      board.goals.forEach((g, i) => {
+        if (g.type === 'color' && g.color !== undefined && board.goalDone[i] < g.count) unmetColors.add(g.color)
+      })
+      if (unmetColors.size > 0) {
+        const hit = moves.find((mv) => {
+          const pa = board.at(mv.a.x, mv.a.y)?.piece
+          const pb = board.at(mv.b.x, mv.b.y)?.piece
+          return (pa?.kind === 'normal' && unmetColors.has(pa.color)) || (pb?.kind === 'normal' && unmetColors.has(pb.color))
+        })
+        if (hit) return hit
+      }
+      return moves[0] // 優先2：先頭の手
+    }
+    const idleHintTick = (t: { deltaMS: number }) => {
+      if (!alive()) {
+        app.ticker.remove(idleHintTick)
+        return
+      }
+      // inputLocked中・盤面演出中はアイドル判定を進めない（演出が終わった瞬間から4秒を数え直す）
+      if (inputLocked || !view.isQuiet()) {
+        hintIdleMs = 0
+        hintNextAt = HINT_IDLE_MS
+        return
+      }
+      hintIdleMs += t.deltaMS
+      if (hintIdleMs < hintNextAt) return
+      if (!hintMove) hintMove = pickHintMove()
+      if (hintMove) view.showHint(hintMove.a, hintMove.b)
+      hintNextAt += HINT_REPEAT_MS
+    }
+    app.ticker.add(idleHintTick)
+
     // 入力は playRoot 自身（hitArea=app.screen）で拾う（UIボタンは各自 eventMode）。
     // 旧実装にあった未使用の全画面 stage コンテナは、ui層のgear/back等より後ろに手前へ差し込まれ
     // ヒットテストを奪ってしまう（リスナー無しの死んだレイヤー）ため、このシーンでは持ち込まない（逸脱・理由は最終報告）。
@@ -2391,7 +2453,16 @@ async function boot() {
       }
       downAt = { x: e.global.x, y: e.global.y }
       downCell = toCell(e.global.x, e.global.y)
+      resetHintTimer()
     })
+    // Codexレビュー#5：pointerupoutside/pointercancelでも必ずpress状態を破棄する（放置すると次のpointerupが
+    // 遠く離れた場所からのスワイプとして誤解決される）
+    const discardPress = () => {
+      downAt = null
+      downCell = null
+    }
+    playRoot.on('pointerupoutside', discardPress)
+    playRoot.on('pointercancel', discardPress)
     playRoot.on('pointerup', (e) => {
       if (inputLocked || !downAt || !downCell) return
       const dx = e.global.x - downAt.x
@@ -2402,8 +2473,14 @@ async function boot() {
         const c = board.at(downCell.x, downCell.y)
         if (c?.piece && c.piece.kind !== 'normal' && c.piece.kind !== 'spore') evs = board.tap(downCell)
       } else {
-        const dir = Math.abs(dx) > Math.abs(dy) ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) }
-        evs = board.swap(downCell, { x: downCell.x + dir.x, y: downCell.y + dir.y })
+        const adx = Math.abs(dx)
+        const ady = Math.abs(dy)
+        // Codexレビュー#6：斜めスワイプの方向ロック。主軸が副軸の1.25倍未満は「どちらへ倒したいか曖昧」として
+        // 何もしない（不正手扱いにもしない＝音も往復も出さずキャンセル。1px差の決め打ちで誤爆していた）
+        if (Math.max(adx, ady) >= Math.min(adx, ady) * 1.25) {
+          const dir = adx > ady ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) }
+          evs = board.swap(downCell, { x: downCell.x + dir.x, y: downCell.y + dir.y })
+        }
       }
       downAt = null
       downCell = null
@@ -2420,6 +2497,7 @@ async function boot() {
     let refillAmount = OXYGEN_SUPPLY_PER_FLOOR
     const floorFireCount = new Map<string, number>()
     const handleFloorResult = (evs: BoardEvent[]) => {
+      resetHintTimer() // 手が解決したので、次の無操作4秒をここから数え直す（選定キャッシュも捨てる）
       const dur = view.play(evs)
       // 飛翔が落ちても数字は必ず board.goalDone に追いつく（演出の取りこぼしを表示に持ち込まない）
       tw.delay(Math.min(dur + 500, 2200), () => {
@@ -2763,6 +2841,10 @@ async function boot() {
       }
       const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
       const connections = options.map((opt) => computeConnection(owned, opt))
+      // おすすめリボン（オーナー指示：知見にもおすすめがあっていい）。呼応が最多の1枚だけに付け、理由文は書かない。
+      // 同数タイならより左のカード。全カード0件なら誰にも付けない（無理に薦めない）
+      const maxConnCount = Math.max(0, ...connections.map((c) => c.count))
+      const recommendedIndex = maxConnCount > 0 ? connections.findIndex((c) => c.count === maxConnCount) : -1
       const padX = Math.max(20, vw * 0.05)
       // 3つの行為（PHASE2.md §2.8）。合成できる／深められるときだけ札が増える。
       // 上限3件はカード枠と同数（既存の3枚レイアウトをそのまま使い、新しい作法を持ち込まない）
@@ -2798,7 +2880,7 @@ async function boot() {
           category: CATEGORY_LABEL[UPGRADE_CATEGORY[opt.id]] ?? '',
           name: opt.name,
           desc: opt.desc,
-          chip: connections[i].count > 0 ? `呼応 ${connections[i].count}` : undefined,
+          connectedIds: connections[i].connected.map((u) => u.id),
           bonus: opt.starterDesc,
         }))
       }
@@ -2876,9 +2958,12 @@ async function boot() {
       stripHost.hitArea = { contains: (x: number, y: number) => x >= -4 && x <= stripW + 4 && y >= -stripIconSize / 2 - 6 && y <= stripIconSize / 2 + 6 }
       panel.addChild(stripHost)
       const stripGap = stripIconSize * 0.3
+      // カード選択との双方向ハイライト用：所持id→そのアイコンに重ねる淡いリング（オーナー指示：所持ストリップ側も呼応を示す）
+      const stripHighlightRings = new Map<string, Graphics[]>()
       owned.forEach((u, i) => {
+        const cx = i * (stripIconSize + stripGap) + stripIconSize / 2
         const ic = makeUniqueUpgradeIcon(u.id, stripIconSize)
-        ic.position.set(i * (stripIconSize + stripGap) + stripIconSize / 2, 0)
+        ic.position.set(cx, 0)
         ic.eventMode = 'static'
         ic.cursor = 'pointer'
         const hr = stripIconSize * 0.6
@@ -2889,7 +2974,23 @@ async function boot() {
           showFieldNote(buildUpgradeEntry(u, run))
         })
         stripHost.addChild(ic)
+        const ring = new Graphics()
+        ring.circle(0, 0, stripIconSize * 0.62).stroke({ width: 2.5, color: 0xf2d98a, alpha: 0.95 })
+        ring.position.set(cx, 0)
+        ring.visible = false
+        stripHost.addChild(ring)
+        const rings = stripHighlightRings.get(u.id) ?? []
+        rings.push(ring)
+        stripHighlightRings.set(u.id, rings)
       })
+      /** 選択カードと呼応する所持アイコンだけを淡く光らせる（選択解除・別カード選択で戻る） */
+      const setStripHighlight = (ids: string[] | null) => {
+        const idSet = new Set(ids ?? [])
+        stripHighlightRings.forEach((rings, id) => {
+          const on = idSet.has(id)
+          rings.forEach((r) => (r.visible = on))
+        })
+      }
       const stripContentW = owned.length ? owned.length * (stripIconSize + stripGap) - stripGap : 0
       if (stripContentW > stripW) {
         // 7個を超えたら縮小せず横スクロール（[D]）。ドラッグはstripHostが子アイコンからのバブリングも拾う
@@ -2941,6 +3042,7 @@ async function boot() {
       const cardW = safeW - 32
       const cardInsetX = Math.max(cardW * 0.06, 12) // 本文はカード内側からさらに6%以上内側（必達）
       const cardIconSize = Math.max(30, Math.min(40, fs(0.1)))
+      const connIconSize = Math.max(16, Math.min(20, fs(0.045)))
       const bodyFont = fs(0.0265)
 
       // ---- 82〜96%：接続要約＋確定ボタン（選択状態に応じてrenderBottomで描き直す） ----
@@ -3004,18 +3106,13 @@ async function boot() {
           t.position.set(padX, summaryTop)
           bottomContainer.addChild(t)
         } else if (selectedIndex !== null) {
-          const conn = connections[selectedIndex]
+          // 呼応はカード側のアイコン併記だけで見せる（文章はここでも作らない。オーナー指示）。
+          // ここは選択中の知見名だけを淡く添える（[D]）
           const opt = options[selectedIndex]
           const summaryTop = bottomH * 0.06
-          if (conn.sentence) {
-            // 選択時：因果の一文をカード内より広い幅でフルに見せる（[D]：カードで収まらない分はここで見せる）
-            drawConnectionChip(bottomContainer, padX, summaryTop, vw - padX * 2, `呼応 ${conn.count}　${conn.sentence}`, fs(0.024))
-          } else {
-            // 相性なしは罰のように見せない：バッジは出さず、選択中の強化名だけ淡く添える（[D]）
-            const t = new Text({ text: opt.name, style: { fill: 0x9a8968, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
-            t.position.set(padX, summaryTop)
-            bottomContainer.addChild(t)
-          }
+          const t = new Text({ text: opt.name, style: { fill: 0x9a8968, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+          t.position.set(padX, summaryTop)
+          bottomContainer.addChild(t)
         }
 
         const btn = new Container()
@@ -3052,6 +3149,8 @@ async function boot() {
           tw.tween(c.scale, { x: on ? 1.035 : 1, y: on ? 1.035 : 1 }, 140, { ease: tw.easeOutBack })
         })
         renderBottom()
+        // 所持ストリップとの双方向ハイライト（オーナー指示）。採るとき以外・未選択は消灯
+        setStripHighlight(mode === 'take' && selectedIndex !== null ? connections[selectedIndex].connected.map((u) => u.id) : null)
       }
 
       // カード3枚は行為タブで中身が入れ替わるので、専用のホストへ描いて丸ごと作り直す
@@ -3082,6 +3181,22 @@ async function boot() {
           card.addChild(glow)
           cardGlows.push(glow)
           cardContainers.push(card)
+
+          // おすすめリボン（採るときだけ・呼応最多の1枚だけ）：理由文は書かず、真鍮色のタグ1個のみ（Fated Choice式）
+          if (mode === 'take' && i === recommendedIndex) {
+            const ribbonT = new Text({ text: 'おすすめ', style: { fill: 0x2a1c10, fontSize: fs(0.02), fontFamily: FONT, fontWeight: 'bold' } })
+            const ribbonPadX = fs(0.014)
+            const ribbonPadY = fs(0.008)
+            const ribbonW = ribbonT.width + ribbonPadX * 2
+            const ribbonH = ribbonT.height + ribbonPadY * 2
+            const ribbonX = cardW - ribbonW - fs(0.012)
+            const ribbonY = fs(0.012)
+            const ribbonBg = new Graphics()
+            ribbonBg.roundRect(ribbonX, ribbonY, ribbonW, ribbonH, ribbonH * 0.25).fill({ color: UI.brass, alpha: 0.92 })
+            card.addChild(ribbonBg)
+            ribbonT.position.set(ribbonX + ribbonPadX, ribbonY + ribbonPadY)
+            card.addChild(ribbonT)
+          }
 
           // ① 左に固有アイコン36〜40px、右に系統名（小）＋強化名（大）
           const headerTop = cardH * 0.06
@@ -3131,8 +3246,11 @@ async function boot() {
             layoutRichText(card, cardMeasurer, tokenizeRich(view.desc, cardUsedTerms), cardInsetX, bodyTop, bodyWrapW, bodyFont, UI.paperInk, 0x7a5a1e, openGlossaryTerm) +
             cardH * 0.025
 
-          // ③ バッジ（あれば）：採るときは「呼応 N」のみ（因果の一文は選択後に下部の比較欄で見せる。[D]）。
+          // ③ バッジ（あれば）：採るときは呼応する所持知見のアイコン併記のみ（文章は作らない。オーナー指示）。
           // 合成・深化は枠がどう動くかをここに出す
+          if (view.connectedIds && view.connectedIds.length) {
+            rowY = drawConnectedIcons(card, cardInsetX, rowY, view.connectedIds, connIconSize) + cardH * 0.02
+          }
           if (view.chip) {
             rowY = drawConnectionChip(card, cardInsetX, rowY, cardW - cardInsetX * 2, view.chip, Math.max(10, fs(0.022))) + cardH * 0.02
           }
@@ -3210,6 +3328,7 @@ async function boot() {
             renderTabs()
             renderCards()
             renderBottom()
+            setStripHighlight(null)
           })
           tabHost.addChild(hit)
         })

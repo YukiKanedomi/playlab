@@ -168,9 +168,10 @@ export function pieceKey(p: Piece): string {
 
 /** サイズ S のセルに合わせた駒テクスチャ。生成アセット優先・無ければ Graphics 描き */
 export function pieceTexture(renderer: Renderer, p: Piece, S: number): Texture {
-  // 生成アセット（銛は縦画像を横向きに回すのでキーは共通）
+  // 生成アセット優先。ただし銛は「飛ぶ向き」が絵の生命線のため、向きを持たないスプライト（s_wrench.png）は
+  // 使わずベクター描画（下のharpoon節）に回す。pieceKeyがharpoon-h/-vを区別するのでキャッシュも向き別に効く
   const assetKey = p.kind === 'normal' ? `n${p.color}` : p.kind
-  const asset = loaded.get(assetKey)
+  const asset = p.kind === 'harpoon' ? null : loaded.get(assetKey)
   if (asset) return asset
   const key = `${pieceKey(p)}@${S}`
   const hit = cache.get(key)
@@ -218,14 +219,19 @@ export function pieceTexture(renderer: Renderer, p: Piece, S: number): Texture {
         break
     }
   } else if (p.kind === 'harpoon') {
-    // 銛: 真鍮の矢
-    const w = r * 0.34
+    // 銛: 真鍮の矢。dirがそのまま絵になる＝盤上で見て発動方向（撃つ行/列の軸）が分かる。
+    // 矢頭を大きめに・尾羽を付けて軸を強調（元絵は矢頭が小さく方向性が弱かった）
+    const w = r * 0.32
     if (p.dir === 'h') {
-      g.roundRect(cx - r, cy - w, r * 2, w * 2, w).fill(PAL.brass).stroke({ width: S * 0.04, color: outline })
-      g.moveTo(cx + r * 1.15, cy).lineTo(cx + r * 0.45, cy - r * 0.5).lineTo(cx + r * 0.45, cy + r * 0.5).closePath().fill(PAL.brass)
+      g.roundRect(cx - r * 0.85, cy - w, r * 1.7, w * 2, w).fill(PAL.brass).stroke({ width: S * 0.04, color: outline })
+      g.moveTo(cx + r * 1.25, cy).lineTo(cx + r * 0.3, cy - r * 0.62).lineTo(cx + r * 0.3, cy + r * 0.62).closePath().fill(PAL.brass).stroke({ width: S * 0.03, color: outline })
+      g.moveTo(cx - r * 0.85, cy - w).lineTo(cx - r * 1.15, cy - r * 0.4).lineTo(cx - r * 0.55, cy - w * 0.4).closePath().fill(PAL.brass)
+      g.moveTo(cx - r * 0.85, cy + w).lineTo(cx - r * 1.15, cy + r * 0.4).lineTo(cx - r * 0.55, cy + w * 0.4).closePath().fill(PAL.brass)
     } else {
-      g.roundRect(cx - w, cy - r, w * 2, r * 2, w).fill(PAL.brass).stroke({ width: S * 0.04, color: outline })
-      g.moveTo(cx, cy - r * 1.15).lineTo(cx - r * 0.5, cy - r * 0.45).lineTo(cx + r * 0.5, cy - r * 0.45).closePath().fill(PAL.brass)
+      g.roundRect(cx - w, cy - r * 0.85, w * 2, r * 1.7, w).fill(PAL.brass).stroke({ width: S * 0.04, color: outline })
+      g.moveTo(cx, cy - r * 1.25).lineTo(cx - r * 0.62, cy - r * 0.3).lineTo(cx + r * 0.62, cy - r * 0.3).closePath().fill(PAL.brass).stroke({ width: S * 0.03, color: outline })
+      g.moveTo(cx - w, cy + r * 0.85).lineTo(cx - r * 0.4, cy + r * 1.15).lineTo(cx - w * 0.4, cy + r * 0.55).closePath().fill(PAL.brass)
+      g.moveTo(cx + w, cy + r * 0.85).lineTo(cx + r * 0.4, cy + r * 1.15).lineTo(cx + w * 0.4, cy + r * 0.55).closePath().fill(PAL.brass)
     }
     g.circle(cx, cy, r * 0.3).fill(0xf1d189)
   } else if (p.kind === 'hamushi') {

@@ -55,7 +55,8 @@ const GOAL_PT = new Point()
 // juice 実測値テーブル（ms）
 export const T = {
   swap: 150, // 成立スワップ（easeOutBackSoft で約5%行き過ぎて戻る）
-  swapBack: 120, // 不成立スワップの片道（往復240ms）
+  swapBackGo: 90, // 不成立スワップの行き（Codexレビュー#9：往復240msは「詰まった」感が強く160msへ短縮）
+  swapBackReturn: 70, // 不成立スワップの戻り
   pop: 200, // 消滅ポップ 170-230
   blockHit: 300, // 箱破壊 270-330
   fall: 380, // 落下 330-430
@@ -130,6 +131,8 @@ export class BoardView {
   private moveSeq = 0 // 手の世代。前の手が予約した終端処理（reconcile等）は最新の手のものだけが生きる
   private moveTouched = new WeakSet<object>() // この手でsnap済みの駒（1手内の二重snap＝自分のトゥイーン破壊を防ぐ）
   private timelineEndAbs = 0 // 並走中の全タイムラインの終端（tween内部時計 now() 基準。修正2）。終端reconcileは最長の尻尾に合わせる
+  // ---- アイドルヒント（RM/Candy式・控えめ） ----
+  private hintSprites: Sprite[] = [] // 現在パルス中のスプライト（clearHintで確実に止めるため保持）
 
   // ---- ローグライク拡張（ROGUE.md §5）：敵・環境オーバーレイの帳簿 ----
   private armorG = new Map<string, Graphics>() // "x,y" -> 甲殻オーバーレイ
@@ -349,7 +352,7 @@ export class BoardView {
     const base = target / Math.max(sp.texture.width, sp.texture.height)
     sp.scale.set(base)
     ;(sp as unknown as { __base: number }).__base = base
-    if (p.kind === 'harpoon' && p.dir === 'h') sp.rotation = Math.PI / 2 // 縦画像を横向きに
+    // 銛は向き別テクスチャ（harpoon-h/-v）を直接描くので、ここで回して見せかける必要はない
     sp.position.set(this.px(x), this.px(y))
     ;(sp as unknown as { __kind: string }).__kind = pieceKey(p)
     this.pieceLayer.addChild(sp)
@@ -1747,6 +1750,52 @@ export class BoardView {
     }
   }
 
+  /** 盤面演出が静止しているか（並走中のタイムラインが尽きたか）。呼び出し側はこれを見てからヒントを出す */
+  isQuiet(): boolean {
+    return now() >= this.timelineEndAbs
+  }
+
+  /** アイドルヒント：対象2駒を1.0→1.06→1.0で2回パルス（計600ms、'fx'チャンネル・音なし）。
+   *  帳簿に無い/destroy済みの駒は黙って無視する（消えかけの駒を揺らして事故る方が悪い） */
+  showHint(a: XY, b: XY): void {
+    this.clearHint()
+    for (const p of [a, b]) {
+      const sp = this.sprites.get(this.key(p.x, p.y))
+      if (!sp || sp.destroyed) continue
+      const base = this.bs(sp)
+      this.hintSprites.push(sp)
+      const pulse = (times: number) => {
+        if (sp.destroyed) return
+        tween(sp.scale, { x: base * 1.06, y: base * 1.06 }, 150, {
+          ease: easeOutCubic,
+          channel: 'fx',
+          onDone: () => {
+            if (sp.destroyed) return
+            tween(sp.scale, { x: base, y: base }, 150, {
+              ease: easeOutCubic,
+              channel: 'fx',
+              onDone: () => {
+                if (times > 1) pulse(times - 1)
+              },
+            })
+          },
+        })
+      }
+      pulse(2)
+    }
+  }
+
+  /** アイドルヒントの揺れを止め、基準スケールへ戻す */
+  clearHint(): void {
+    for (const sp of this.hintSprites) {
+      if (sp.destroyed) continue
+      cancel(sp.scale)
+      const base = this.bs(sp)
+      sp.scale.set(base)
+    }
+    this.hintSprites = []
+  }
+
   /** イベント列をアニメ予約。所要合計msを返す */
   play(evs: BoardEvent[]): number {
     // rm_tempo.md §7(b)/§8 P3：割込で前の演出を切らない（RM実測 §4「並行続行」）。
@@ -1793,14 +1842,15 @@ export class BoardView {
                 })
             }
             if (e.illegal) {
-              // 行って戻る（往復240ms。オーバーシュートを付けると「震え」に見えるのでイージングは据え置き）
-              tween(a.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBack, { delay: t })
-              tween(b.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBack, { delay: t })
-              tween(a.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBack, { delay: t + T.swapBack })
-              tween(b.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBack, { delay: t + T.swapBack })
+              // 行って戻る（往復160ms＝行き90+戻り70。オーバーシュートを付けると「震え」に見えるのでイージングは据え置き。
+              // 無くしはしない＝往復自体は残し「なぜ成立しないか」の学習を保つ）
+              tween(a.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackGo, { delay: t })
+              tween(b.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackGo, { delay: t })
+              tween(a.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackReturn, { delay: t + T.swapBackGo })
+              tween(b.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackReturn, { delay: t + T.swapBackGo })
               this.sprites.set(this.key(e.a.x, e.a.y), a)
               this.sprites.set(this.key(e.b.x, e.b.y), b)
-              t += T.swapBack * 2
+              t += T.swapBackGo + T.swapBackReturn
             } else {
               move(a, e.b, false)
               move(b, e.a, false)
@@ -1894,6 +1944,14 @@ export class BoardView {
           if (e.piece.kind === 'normal' && e.piece.volatile) {
             this.makeVolatileOverlay(e.at.x, e.at.y, scaleUpStart)
             this.floatLabelFx(e.at, '爆発鉱石！', 0xff8a3d, scaleUpStart, -0.2)
+          }
+          if (e.piece.kind === 'harpoon') {
+            // 誕生時の小さな「回り込み」：構えが定まる仕草として、共通の誕生回転が収まった直後に追加で振る
+            const settleAt = scaleUpStart + 145 + 90
+            delay(settleAt, () => {
+              sp.rotation = (-25 * Math.PI) / 180
+              tween(sp, { rotation: 0 }, 180, { ease: easeOutBack })
+            })
           }
           t += stop
           break
@@ -2320,7 +2378,8 @@ export class BoardView {
           sp.position.set(wantX, wantY)
           sp.alpha = 1
           sp.scale.set(b)
-          if (want.kind !== 'harpoon') sp.rotation = 0
+          // 銛の向きはテクスチャ自体（harpoon-h/-v）が持つので、休止状態は他駒と同じく回転0が正
+          sp.rotation = 0
         }
       }
     // mapに居ない可視孤児を掃除
