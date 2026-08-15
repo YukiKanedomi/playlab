@@ -10,6 +10,7 @@ import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import {
   cancel,
   completeChannel,
+  compressChannel,
   delay,
   easeInCubic,
   easeInQuad,
@@ -1766,6 +1767,37 @@ export class BoardView {
     }
   }
 
+  /** 帳簿の上書き前に、そこに居座る**別の生きたスプライト**を畳む（2026-08-15 幽霊調査）。
+   *  黙って sprites.set で上書きすると、古いスプライトが帳簿から漏れて alpha=1 のまま盤上に
+   *  置き去りになる（幽霊）。上書きされる側はエンジン上もう存在しない駒なので、tweenを畳んで即消す */
+  private foldStaleAt(k: string, keep?: Sprite) {
+    const old = this.sprites.get(k)
+    if (!old || old === keep || old.destroyed) return
+    snap(old.position)
+    snap(old.scale)
+    snap(old) // destroy系のonDoneがあればここで走る
+    if (!old.destroyed) old.destroy()
+    console.debug('[yacho] stale sprite folded at', k)
+  }
+
+  /** 幽霊掃除（2026-08-15 幽霊調査）：帳簿にもdoomed台帳にも無く、tweenも一切持たない完全放置の
+   *  スプライトを毎手の冒頭で破棄する。終端のreconcileは盤面静止まで走らないため、連打中に生まれた
+   *  幽霊はこの掃除だけが拾える（実測：CPU5倍遅延の連打40手で幽霊が5秒以上滞留していた） */
+  private sweepOrphans() {
+    const mapped = new Set<Sprite>(this.sprites.values())
+    const doomed = new Set<Sprite>()
+    for (const list of this.doomedByCell.values()) for (const e of list) doomed.add(e.sp)
+    let n = 0
+    for (const ch of [...this.pieceLayer.children]) {
+      const sp = ch as Sprite
+      if (sp.destroyed || mapped.has(sp) || doomed.has(sp)) continue
+      if (hasTween(sp) || hasTween(sp.position) || hasTween(sp.scale)) continue
+      sp.destroy()
+      n++
+    }
+    if (n > 0) console.debug('[yacho] orphan swept', n)
+  }
+
   /** 盤面演出が静止しているか（並走中のタイムラインが尽きたか）。呼び出し側はこれを見てからヒントを出す */
   isQuiet(): boolean {
     return now() >= this.timelineEndAbs
@@ -1846,8 +1878,15 @@ export class BoardView {
     // ③WebAudio絶対時刻予約（sfx）とのズレ を生んでいた。現在はこの手が触る駒だけを snapPieceForMove() で
     // 終端へ飛ばし、前の手の落下・破片・ビームは予定どおり並走させる（終端の reconcile が最後の保険）
     if (FULL_SNAP_ON_INPUT) completeChannel('board')
+    // 前の手の残り演出を「切らずに早送り」する（2026-08-15 重なり調査）。深い連鎖は数秒先まで消滅予約が
+    // 残っており、割込んだ新しい手の駒が先に到着して消え待ち駒と共存して見える。未開始予約を一様圧縮して
+    // 共存の窓を縮める（順序保存＝全演出は再生される。JUICE §0-5 と両立）
+    compressChannel('board', 0.45)
+    const nowAbs = now()
+    if (this.timelineEndAbs > nowAbs) this.timelineEndAbs = nowAbs + (this.timelineEndAbs - nowAbs) * 0.45
     this.moveSeq++
     this.moveTouched = new WeakSet()
+    this.sweepOrphans() // 幽霊掃除（2026-08-15）。reconcileが走れない連打中の保険
     // 可視化第二波：演出用の決定的乱数を1手ごとに再シード（QA比較の安定のため Math.random() は使わない）
     this.fxSeed = (this.fxSeed * 48271 + 12345) % 0x7fffffff || 1
     this.fxRand = mulberry32(this.fxSeed)
@@ -1862,6 +1901,9 @@ export class BoardView {
     // 補充のトレイン（2026-08-15）：同じ拍・同じ列の補充駒を「上空に1マス間隔で整列→一斉落下」させる
     // ための収集器。キーは `${拍t}|${列x}`。実際の湧き位置・落下tweenはイベント走査の後で組む
     const refillTrains = new Map<string, { sp: Sprite; row: number; col: number; t: number }[]>()
+    // 盤内の落下も同じキーで収集する。同列・同拍の落下と補充は**同じ遅延・同じ所要時間**で動かす
+    // （距離ごとに別durationだと長距離の駒が短距離の駒に追いつき交差する。列内は剛体でしか動かさない）
+    const columnFalls = new Map<string, { sp: Sprite; toX: number; toY: number; dist: number }[]>()
     const swarmChain = this.classifySwarmChain(evs) // swarm連鎖ドミノの段階付け（codex_consult [D]-4）
     // 10連鎖以上を含む手は「暴走時」扱いにし、粒子の同時上限を80→120へ緩める（codex_consult [D]-6）
     this.rampageActive = evs.some((ev) => ev.t === 'match' && ev.chain >= 10)
@@ -1900,6 +1942,22 @@ export class BoardView {
             } else {
               move(a, e.b, false)
               move(b, e.a, false)
+              t += T.swap
+            }
+          } else if (a || b) {
+            // 片方の駒しか帳簿に無い（前の手の消滅・移動と競合した稀ケース）。旧実装は何もせず
+            // 帳簿がズレたまま進み、後続の fall の上書きで幽霊を量産していた（2026-08-15 幽霊調査）。
+            // 見つかった側だけでも正しいセルへ移し、行き先の居座りは畳む
+            const sp = (a ?? b)!
+            const fromK = a ? this.key(e.a.x, e.a.y) : this.key(e.b.x, e.b.y)
+            const toC = a ? e.b : e.a
+            this.snapPieceForMove(sp)
+            this.snapDoomedAt(this.key(toC.x, toC.y))
+            if (!e.illegal) {
+              this.sprites.delete(fromK)
+              this.foldStaleAt(this.key(toC.x, toC.y), sp)
+              this.sprites.set(this.key(toC.x, toC.y), sp)
+              tween(sp.position, { x: this.px(toC.x), y: this.px(toC.y) }, T.swap, { delay: t, ease: easeOutBackSoft })
               t += T.swap
             }
           }
@@ -2059,25 +2117,16 @@ export class BoardView {
             this.snapPieceForMove(sp)
             this.snapDoomedAt(this.key(e.to.x, e.to.y)) // 修正3：着地セルにポップ待ち駒が残っていたら先に畳む
             this.sprites.delete(this.key(e.from.x, e.from.y))
+            this.foldStaleAt(this.key(e.to.x, e.to.y), sp) // 幽霊調査：行き先の居座りを黙って上書きしない
             this.sprites.set(this.key(e.to.x, e.to.y), sp)
-            const dist = Math.abs(e.to.y - e.from.y)
-            const b = this.bs(sp)
-            const fallDur = Math.min(FALL_MAX, FALL_COEF * Math.sqrt(dist)) // 自由落下 t∝√h（見える落下。rm_tempo §8 P2）
-            const colStagger = ((e.to.x * 5) % 4) * 9 // 列ごとの決定的スタッガー＝板ではなく崩れに見せる
-            const landY = this.px(e.to.y)
-            tween(sp.position, { x: this.px(e.to.x), y: landY }, fallDur, {
-              delay: t + T.pop + colStagger,
-              ease: easeInQuad,
-              onDone: () => {
-                // 着地：52msだけ潰れて沈み、110msで戻す（潰れと沈みを対で動かすと重さが出る）
-                tween(sp.scale, { x: b * 1.14, y: b * 0.86 }, 52, {
-                  onDone: () => tween(sp.scale, { x: b, y: b }, 110, { ease: easeOutBackSoft }),
-                })
-                tween(sp.position, { y: landY + this.S * 0.052 }, 52, {
-                  onDone: () => tween(sp.position, { y: landY }, 110, { ease: easeOutBackSoft }),
-                })
-              },
-            })
+            // 落下tweenはここでは張らない。同じ列・同じ拍の落下と補充を**同じ遅延・同じ所要時間**で
+            // 動かすため（別々のdurationだと落下距離の長い駒が短い駒に途中で追いつき重なる）、
+            // 記録だけして play() 末尾の列ドロップ組みでまとめて張る（2026-08-15 幽霊調査の非幽霊2件）
+            const dropKey = `${t}|${e.to.x}`
+            const g = columnFalls.get(dropKey)
+            const item = { sp, toX: e.to.x, toY: e.to.y, dist: Math.abs(e.to.y - e.from.y) }
+            if (g) g.push(item)
+            else columnFalls.set(dropKey, [item])
           }
           break
         }
@@ -2371,18 +2420,41 @@ export class BoardView {
           break
       }
     }
-    // 補充トレインの組み立て（case 'refill' の収集の続き）：同じ拍・同じ列の補充駒を、着地行の並びを
-    // そのまま保った1マス間隔で盤の上空に整列させ、同じ遅延・同じ所要時間で一斉に落とす（剛体トレイン）。
-    // 全駒が同速・同時刻で動くので、列内の密着・追い越し・湧き点のスタックが構造的に起きない。
-    // 上空の待機列は pieceLayer のマスクで隠れ、「枠の奥から降ってくる」に見える（王道3マッチの標準）
-    for (const train of refillTrains.values()) {
+    // 列ドロップの組み立て（case 'fall' / 'refill' の収集の続き）：同じ拍・同じ列の落下と補充を、
+    // **同じ遅延・同じ所要時間**で一斉に落とす（剛体）。開始時も終了時も1マス以上の間隔がある駒同士が
+    // 同じ時間関数で動くので、密着・追い越し・湧き点のスタックが構造的に起きない。
+    // 補充は着地行の並びを保った1マス間隔で盤の上空に整列し、pieceLayer のマスクの奥から降ってくる
+    const dropKeys = new Set([...refillTrains.keys(), ...columnFalls.keys()])
+    for (const key of dropKeys) {
+      const train = refillTrains.get(key) ?? []
+      const falls = columnFalls.get(key) ?? []
+      const segT = Number(key.split('|')[0])
+      const col = train[0]?.col ?? falls[0]?.toX ?? 0
       train.sort((a, b) => a.row - b.row)
-      const maxRow = train[train.length - 1].row
-      const dropRows = maxRow + 1.8 // 最下段の駒の落下距離（マス数）。全駒同じだけ落ちる＝間隔が保たれる
-      const dur = Math.min(FALL_MAX, FALL_COEF * Math.sqrt(dropRows))
+      const dropRows = train.length ? train[train.length - 1].row + 1.8 : 0
+      const maxFall = falls.reduce((m, f) => Math.max(m, f.dist), 0)
+      // 列内の全駒が共有する所要時間（最長の旅程に合わせる。短距離の駒はゆっくり落ちる＝崩れの一体感）
+      const dur = Math.min(FALL_MAX, FALL_COEF * Math.sqrt(Math.max(dropRows, maxFall, 0.8)))
+      const colStagger = ((col * 5) % 4) * 9 // 列ごとの決定的スタッガー＝板ではなく崩れに見せる
+      const startAt = segT + T.pop + colStagger
+      for (const f of falls) {
+        const landY = this.px(f.toY)
+        const b = this.bs(f.sp)
+        tween(f.sp.position, { x: this.px(f.toX), y: landY }, dur, {
+          delay: startAt,
+          ease: easeInQuad,
+          onDone: () => {
+            // 着地：52msだけ潰れて沈み、110msで戻す（潰れと沈みを対で動かすと重さが出る）
+            tween(f.sp.scale, { x: b * 1.14, y: b * 0.86 }, 52, {
+              onDone: () => tween(f.sp.scale, { x: b, y: b }, 110, { ease: easeOutBackSoft }),
+            })
+            tween(f.sp.position, { y: landY + this.S * 0.052 }, 52, {
+              onDone: () => tween(f.sp.position, { y: landY }, 110, { ease: easeOutBackSoft }),
+            })
+          },
+        })
+      }
       for (const it of train) {
-        const colStagger = ((it.col * 5) % 4) * 9 // fall と同じ列ごとの決定的スタッガー
-        const startAt = it.t + T.pop + colStagger
         it.sp.position.y = this.px(it.row) - dropRows * this.S
         tween(it.sp, { alpha: 1 }, 80, { delay: startAt })
         tween(it.sp.position, { y: this.px(it.row) }, dur, { delay: startAt, ease: easeInQuad })

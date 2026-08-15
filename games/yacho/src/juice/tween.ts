@@ -134,6 +134,21 @@ export function cancel(obj: unknown): void {
   }
 }
 
+/**
+ * チャンネル内の**未開始**トゥイーンの残り時間を一様に圧縮する（2026-08-15 重なり調査）。
+ * 新しい手が始まったとき、前の手の残り演出（深い連鎖ほど数秒先まで予約がある）を「切らずに早送り」する。
+ * 一様な線形圧縮なので予約同士の順序は保たれ、演出は全部再生される＝JUICE §0-5「前の演出を切って
+ * スナップするのは禁止」と両立する。進行中（開始済み）のトゥイーンは触らない（速度が跳ねるのを防ぐ）。
+ */
+export function compressChannel(channel: string, factor: number): void {
+  for (const tw of tweens) {
+    if (tw.dead || tw.channel !== channel) continue
+    if (tw.t >= 0) continue // 開始済みは触らない
+    if (tw.delay > 0) tw.delay *= factor
+    tw.dur *= factor
+  }
+}
+
 /** 全トゥイーンを即時完了（新しいタイムライン開始前のスナップ）。onDone も発火する */
 export function completeAll(): void {
   // onDone が新しいトゥイーンを生む場合があるので、現時点の分だけ処理
