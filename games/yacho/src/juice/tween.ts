@@ -73,8 +73,11 @@ export function tween(
 
 export function delay(ms: number, fn: () => void, channel?: string): void {
   // channel 省略時は 'board'（tween側の既定）。装飾FXの生成予約は 'fx' を渡し、
-  // 盤面チャンネルの全断（completeChannel('board')）に巻き込まれないようにする（rm_tempo.md §8 P3 Step1）
-  tween({}, {}, ms, { onDone: fn, channel })
+  // 盤面チャンネルの全断（completeChannel('board')）に巻き込まれないようにする（rm_tempo.md §8 P3 Step1）。
+  // **dur=ms ではなく delay=ms で予約する**（Codex検収 blocking-1）：dur方式だと初回updateで開始済み
+  // (t>=0) になり、compressChannel の「未開始のみ圧縮」から1フレームで外れてしまう＝SE・発火FXの
+  // 予約が圧縮に追従しない。delay方式なら発火の瞬間まで「未開始」なので予約全体が圧縮できる
+  tween({}, {}, 0, { delay: ms, onDone: fn, channel })
 }
 
 /** 対象オブジェクトの全トゥイーンを終端値まで飛ばす（入力割込のスナップ用） */
@@ -124,6 +127,33 @@ export function snapSoft(obj: unknown, ms = 70): void {
 /** 対象オブジェクトに生きたトゥイーンがあるか（修正5：移動中の駒を古い座標へピン留めしないための判定用） */
 export function hasTween(obj: unknown): boolean {
   return tweens.some((tw) => tw.obj === obj && !tw.dead)
+}
+
+/** 対象オブジェクトに、指定プロパティ(key)を to に含む生きたトゥイーンがあるか（タイムライン予算C：
+ *  hasTween(obj)は「何かしら」のtweenの有無しか見ないため、rotationだけのtweenが残る透明駒（alpha別tween無し）
+ *  を誤って「生きている」扱いしてしまう。alpha専用の判定用に追加（codex_timeline_review.md §4-1） */
+export function hasTweenProperty(obj: unknown, key: string): boolean {
+  return tweens.some((tw) => tw.obj === obj && !tw.dead && key in tw.to)
+}
+
+/** 指定チャンネルの生存トゥイーンの残り時間(ms)の最大値。未開始= max(0,delay)+dur、開始済み= max(0,dur-t)
+ *  （タイムライン予算B：単調増加するtimelineEndAbsの代わりに、圧縮後の実際の残時間を再計算する。
+ *  codex_timeline_review.md §4-1・§2-B） */
+export function channelEnd(channel: string): number {
+  let max = 0
+  for (const tw of tweens) {
+    if (tw.dead || tw.channel !== channel) continue
+    const remain = tw.t < 0 ? Math.max(0, tw.delay) + tw.dur : Math.max(0, tw.dur - tw.t)
+    if (remain > max) max = remain
+  }
+  return max
+}
+
+/** 複数チャンネルの channelEnd の最大値 */
+export function channelEndMany(channels: string[]): number {
+  let max = 0
+  for (const ch of channels) max = Math.max(max, channelEnd(ch))
+  return max
 }
 
 /** 対象オブジェクトのトゥイーンを onDone を呼ばずに打ち切る（修正8：FXパーティクルプール回収用。

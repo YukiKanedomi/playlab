@@ -9,6 +9,7 @@ import { UPGRADES } from '../core/upgrades'
 import { PAL, pieceKey, pieceTexture, spriteTexture } from './pieces'
 import {
   cancel,
+  channelEndMany,
   completeChannel,
   compressChannel,
   delay,
@@ -18,6 +19,7 @@ import {
   easeOutBackSoft,
   easeOutCubic,
   hasTween,
+  hasTweenProperty,
   now,
   snap,
   snapSoft,
@@ -45,6 +47,9 @@ const SPECIAL_BORN_STYLE: Record<string, { color: number; rotDeg: number }> = {
   default: { color: 0xf4ead0, rotDeg: 10 },
 }
 
+// タイムライン予算：25発以降のspecial-fireを集約表示する際の短い和名（main.tsのグロッサリー名を短縮）
+const FIRE_KIND_NAME: Record<string, string> = { harpoon: '銛', hamushi: '羽虫', hitsubo: '火壺', seiju: '星珠' }
+
 // 目標の種類ごとに「壊れて見える瞬間」までのオフセット(ms)と破片色（GoalType を増やしたら両テーブルに行を足すこと）
 const GOAL_FX_DELAY: Record<GoalType, number> = { color: 90, system: 90, tsutagoke: 120, kokeishi: 120, touhen: 120, spore: 220, 'enemy-kill': 0 }
 const GOAL_DEBRIS_COLOR: Record<GoalType, number> = {
@@ -69,6 +74,46 @@ export const T = {
  *  旧実装の加速カーブ（520→220ms）はRM実測により誤設計と確定し廃止（JUICE.md §0-5）。
  *  テンポ実験はこの定数1つを差し替えて試す（520/560/600/620 など） */
 const CHAIN_BEAT = 600
+
+/** タイムライン予算（codex_timeline_review.md §3・§4）：ここから先は「通常域」ではなく「暴走域」。
+ *  1〜6連鎖はCHAIN_BEAT一定を守り、7連鎖以降だけ間隔を逓減させる（JUICE §0-5「加速ではなく要約」）。
+ *  EXTREME_CHAIN_BEATSはchain=EXTREME_CHAIN_START以降のインデックス（0始まり、末尾でクランプ＝下限80ms）*/
+const EXTREME_CHAIN_START = 7
+const EXTREME_CHAIN_BEATS = [300, 200, 120, 80] as const
+
+/** chainに対応する「前セグメントからの最短間隔」(ms)を返す純関数（検算・単体テストしやすいよう分離） */
+export function chainBeatFor(chain: number): number {
+  if (chain < EXTREME_CHAIN_START) return CHAIN_BEAT
+  const idx = chain - EXTREME_CHAIN_START
+  return EXTREME_CHAIN_BEATS[Math.min(idx, EXTREME_CHAIN_BEATS.length - 1)]
+}
+
+/** special-fire演出の表示品質の境界（play()全体を通した通し番号で判定。codex_timeline_review.md §2-A末尾）。
+ *  1〜FIRE_FULL_LIMIT発＝通常品質、それ以降〜FIRE_SIMPLE_LIMIT発＝簡略FX、それ以降＝種類ごとに集約し
+ *  FX/SE/振動をイベント毎には生成しない（popPieceAtによる盤面状態反映だけは常に維持する） */
+const FIRE_FULL_LIMIT = 8
+const FIRE_SIMPLE_LIMIT = 24
+/** special-fireが1セグメント内の主時計(t)へ足せる上限(ms)。何十発起きても1つの連鎖セグメントが
+ *  単独で異常に間延びしない（旧実装は1発ごとに無条件で+160msしており260発で41.6秒に達していた） */
+const FIRE_SEGMENT_CAP = 320
+/** special-fireが play() 全体を通して主時計(t)へ足せる合計の上限(ms)。セグメント上限だけだと、
+ *  22連鎖のように「低い拍（暴走域）のセグメントを何個も狙ってFIRE_SEGMENT_CAPぶん積む」細工で
+ *  合計が伸び続けてしまう（各セグメントは上限内でも、セグメント数ぶん積み上がる）。play()1回で
+ *  special-fireが払える「時間」の総額そのものに上限を引くことで、セグメント数・分布によらず
+ *  「合計 ≤ 連鎖拍の総和 + FIRE_GLOBAL_BUDGET + T.pop + T.fall」が常に成り立つ（検算はscratchpad参照）。
+ *  22連鎖（chain1〜6=600ms・7段以降は逓減）の拍総和は4660msなので、5.5秒予算の残りに収まる値に設定。
+ *  Codex検収：200msでは3発目以降が同拍になり品質3段階が時間的に読めない → 400msへ増額
+ *  （最悪総計は約5.8秒＝main.ts の QUIET_WAIT_MAX=6000 の内側） */
+const FIRE_GLOBAL_BUDGET = 400
+const FIRE_SUB_BEAT_FULL = 160
+const FIRE_SUB_BEAT_SIMPLE = 60
+
+/** win-drain（勝利ドレイン）SEのタイミング予算：最初の10件は45ms、以降20ms、合計700ms上限
+ *  （codex_timeline_review.md §3。残手数が多い層で数百件級になり得るため） */
+const WIN_DRAIN_FULL_COUNT = 10
+const WIN_DRAIN_STEP_FULL = 45
+const WIN_DRAIN_STEP_LATER = 20
+const WIN_DRAIN_BUDGET = 700
 
 /** 落下時間 = FALL_COEF·√dist（上限 FALL_MAX）。RM実測 ~300ms/1-3行の「見える落下」に寄せる
  *  （rm_tempo.md §8 P2。一定拍化で生じる拍後半の空白を落下の見える移動で埋める） */
@@ -1802,6 +1847,28 @@ export class BoardView {
     if (n > 0) console.debug('[yacho] orphan swept', n)
   }
 
+  /** タイムライン予算の保険（C）：連鎖が極端に長くなった場合の最終防衛線。sprites に登録済み・
+   *  destroyされていない・doomedでない・エンジン上も同セルに駒がある・alpha<0.999・alpha宛の生存tween
+   *  が無い、という条件が揃った駒は「補充等のフェード予約を(圧縮やbugで)取りこぼして透明のまま残った」
+   *  とみなし、100msでフェードインする。reconcile()は最終的にalpha=1へ直すため、Bが正しく機能していれば
+   *  Cは通常運用で一度も発火しないのが正常（codex_timeline_review.md §2-C・実装項目8） */
+  private repairStrandedAlpha(): void {
+    const doomed = new Set<Sprite>()
+    for (const list of this.doomedByCell.values()) for (const e of list) doomed.add(e.sp)
+    for (const [k, sp] of this.sprites) {
+      if (sp.destroyed || doomed.has(sp) || sp.alpha >= 0.999) continue
+      if (hasTweenProperty(sp, 'alpha')) continue
+      const [xs, ys] = k.split(',')
+      const c = this.board.at(Number(xs), Number(ys))
+      if (!c || c.block || !c.piece) continue
+      // Codex検収：kind不一致（エンジン上は別の駒に置き換わっている）の古いスプライトをフェードインしない。
+      // その差し替え自体は終端のreconcileが担う
+      if ((sp as unknown as { __kind?: string }).__kind !== pieceKey(c.piece)) continue
+      console.debug('[yacho] repairStrandedAlpha: fading in stranded piece at', k, c.piece.kind)
+      tween(sp, { alpha: 1 }, 100)
+    }
+  }
+
   /** 盤面演出が静止しているか（並走中のタイムラインが尽きたか）。呼び出し側はこれを見てからヒントを出す */
   isQuiet(): boolean {
     return now() >= this.timelineEndAbs
@@ -1885,12 +1952,17 @@ export class BoardView {
     // 前の手の残り演出を「切らずに早送り」する（2026-08-15 重なり調査）。深い連鎖は数秒先まで消滅予約が
     // 残っており、割込んだ新しい手の駒が先に到着して消え待ち駒と共存して見える。未開始予約を一様圧縮して
     // 共存の窓を縮める（順序保存＝全演出は再生される。JUICE §0-5 と両立）
+    // 'cue'（発火前のFX/SE予約）も'board'と同じ係数で圧縮しないと、割込時に盤面だけ先に進み
+    // SEが元の時刻に残ってズレる（codex_timeline_review.md §2「AudioContextとの同期」）
     compressChannel('board', 0.45)
-    // timelineEndAbs は縮めない（Codexレビュー3回目：開始済みtweenは圧縮対象外なので、終端まで縮めると
-    // 進行中の長い落下の最中に reconcile が発火し一斉スナップを招く。終端は安全側＝過大評価のまま）
+    compressChannel('cue', 0.45)
+    // timelineEndAbs はこのplay()末尾でchannelEndMany(['board','cue'])から実測値へ引き直す（タイムライン
+    // 予算B）。開始済みtweenはcompressChannelの対象外なので、進行中の長い落下の途中でreconcileが早発する
+    // ことはない（channelEndが開始済みtweenの残り時間 dur-t をそのまま返すため過小評価にはならない）
     this.moveSeq++
     this.moveTouched = new WeakSet()
     this.sweepOrphans() // 幽霊掃除（2026-08-15）。reconcileが走れない連打中の保険
+    this.repairStrandedAlpha() // タイムライン予算C：透明のまま取り残された駒の保険（play()冒頭）
     // 可視化第二波：演出用の決定的乱数を1手ごとに再シード（QA比較の安定のため Math.random() は使わない）
     this.fxSeed = (this.fxSeed * 48271 + 12345) % 0x7fffffff || 1
     this.fxRand = mulberry32(this.fxSeed)
@@ -1902,6 +1974,16 @@ export class BoardView {
     let disruptLabelCount = 0 // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
     let goalFxCount = 0 // 目標収集：この手で何本目の飛翔か（破片4件・飛翔6件で打ち止める）
     const hitstop = new HitstopBudget() // 600ms窓で最大80msに制限するヒットストップ予算（codex_consult [D]-2/4）
+    // ---- タイムライン予算（codex_timeline_review.md §4-3/4-5）：special-fireのセグメント内サブ拍 ----
+    let fireSegOffset = 0 // 現在の連鎖セグメント内でspecial-fireが主時計へ足した量（FIRE_SEGMENT_CAPで頭打ち）
+    let fireGlobalBudget = FIRE_GLOBAL_BUDGET // play()全体でspecial-fireが主時計へ足せる残り予算（セグメント数に関わらず総和を保証）
+    let lastFireSfxT = -1 // 直近にSEを鳴らしたfire拍のt（同拍への多重SEを防ぐ＝「同拍1音まで」）
+    let visibleFireCount = 0 // このplay()全体を通したspecial-fireの通し番号（品質3段階の判定に使う）
+    const aggregateFireCounts = new Map<string, number>() // 集約域（25発以降）：kind別の間引き件数
+    const aggregateFireAt = new Map<string, XY>() // 集約域：最後に発火した位置（×N表示の置き場所）
+    // ---- win-drain（勝利ドレイン）のタイミング予算（codex_timeline_review.md §3・実装項目6） ----
+    let winDrainCount = 0
+    let winDrainTotal = 0
     // 補充のトレイン（2026-08-15）：同じ拍・同じ列の補充駒を「上空に1マス間隔で整列→一斉落下」させる
     // ための収集器。キーは `${拍t}|${列x}`。実際の湧き位置・落下tweenはイベント走査の後で組む
     const refillTrains = new Map<string, { sp: Sprite; row: number; col: number; t: number }[]>()
@@ -1969,11 +2051,15 @@ export class BoardView {
         }
         case 'match': {
           if (e.chain > chainSeen) {
-            // 連鎖ビート＝前セグメント開始から一定拍（rm_tempo.md §8 P1。加速はしない）
-            if (e.chain > 1) t = Math.max(t, chainStartT + CHAIN_BEAT)
+            // 連鎖ビート＝前セグメント開始から一定拍。1〜6連鎖はCHAIN_BEAT固定、7連鎖以降だけ
+            // chainBeatForで逓減させる（タイムライン予算：加速ではなく「暴走域だけ拍を詰める」。
+            // JUICE.md §0-5・codex_timeline_review.md §3）
+            if (e.chain > 1) t = Math.max(t, chainStartT + chainBeatFor(e.chain))
             chainSeen = e.chain
             chainStartT = t
-            sfx.pop(e.chain, t / 1000)
+            fireSegOffset = 0 // 新しいセグメントに入ったのでspecial-fireのサブ拍予算をリセット
+            lastFireSfxT = -1
+            delay(t, () => sfx.pop(e.chain), 'cue') // AudioContext絶対時刻の先行予約をやめ、tween時計に合わせて鳴らす
             delay(t, () => buzz(e.chain >= 5 ? 'chain' : 'pop'), 'fx') // 連鎖段が上がった瞬間だけ鳴らす（1マッチ最大1回）
             this.updateChainCounter(e.chain, t)
           }
@@ -1983,24 +2069,56 @@ export class BoardView {
           break
         }
         case 'special-fire': {
-          this.popPieceAt(e.at, t, true) // 発動した特殊駒自身のスプライトを消す（描画残りバグ対策）
-          for (const p of e.cleared) this.popPieceAt(p, t, true)
-          this.fireFx(e.at, e.piece, t)
-          sfx.fire(e.piece.kind, t / 1000)
-          if (e.piece.kind === 'hitsubo') {
-            delay(t, () => buzz('blast'), 'fx')
-            this.shakeRootDecay(t, 4, 160) // 歯車爆弾：3×3相当の揺れ
-            t += hitstop.request(t, 45)
+          // タイムライン予算（codex_timeline_review.md §2-A・§4-3/4-5）：special-fireは連鎖の主時計tへ
+          // 無条件で+160msするのをやめ、セグメント開始(chainStartT)からのサブ拍offsetとして配置する。
+          // offset自体もFIRE_SEGMENT_CAPで頭打ちにするので、1セグメント内で何十発起きても次の連鎖拍を
+          // 無制限に押さない。表示品質は通し番号visibleFireCountで3段階（旧実装は260発なら41.6秒だった）
+          const idx = visibleFireCount
+          const tier: 'full' | 'simple' | 'aggregate' =
+            idx < FIRE_FULL_LIMIT ? 'full' : idx < FIRE_SIMPLE_LIMIT ? 'simple' : 'aggregate'
+          const step = tier === 'full' ? FIRE_SUB_BEAT_FULL : tier === 'simple' ? FIRE_SUB_BEAT_SIMPLE : 0
+          // セグメント上限とplay()全体の総額上限、両方の残りで頭打ち（総額上限がセグメント数を跨いだ悪用を塞ぐ）
+          const applied = Math.min(step, FIRE_SEGMENT_CAP - fireSegOffset, fireGlobalBudget)
+          fireSegOffset += applied
+          fireGlobalBudget -= applied
+          const fireT = chainStartT + fireSegOffset
+          // 盤面状態の反映（駒の消滅）は品質段に関わらず必ず維持する
+          this.popPieceAt(e.at, fireT, true) // 発動した特殊駒自身のスプライトを消す（描画残りバグ対策）
+          for (const p of e.cleared) this.popPieceAt(p, fireT, true)
+          if (tier === 'aggregate') {
+            // 25発以降：FX・SE・振動はイベント毎には生成しない。種類ごとに件数だけ数え、末尾で×N表示する
+            aggregateFireCounts.set(e.piece.kind, (aggregateFireCounts.get(e.piece.kind) ?? 0) + 1)
+            aggregateFireAt.set(e.piece.kind, e.at)
+          } else {
+            visibleFireCount++
+            this.fireFx(e.at, e.piece, fireT, tier === 'simple') // simple=trueで粒子数を間引く
+            if (fireT !== lastFireSfxT) {
+              delay(fireT, () => sfx.fire(e.piece.kind), 'cue') // 同拍1音まで（多重AudioNode生成の防止）
+              lastFireSfxT = fireT
+            }
+            if (e.piece.kind === 'hitsubo') {
+              delay(fireT, () => buzz('blast'), 'fx')
+              this.shakeRootDecay(fireT, 4, 160) // 歯車爆弾：3×3相当の揺れ
+              t = Math.max(t, fireT + hitstop.request(fireT, 45))
+            }
           }
-          t += 160 // 起爆ごとのビート（連発時に畳み掛ける間隔）
+          t = Math.max(t, fireT)
           // codex_consult [D]-3：特殊駒発火では連鎖段を0に戻さない。同じ解決内なら連鎖を維持し、音階/低域を積み上げる
           break
         }
         case 'win-drain': {
           // 残手数→特殊駒変換の彗星（1手 約45ms＝実測30-60msの中庸）
           if (e.convertAt) this.cometFx(e.convertAt, t)
-          sfx.drain(this.drainCount++, t / 1000)
-          t += 45
+          // win-drainのタイミング予算（実装項目6）：最初のWIN_DRAIN_FULL_COUNT件は45ms、以降20ms、
+          // 合計WIN_DRAIN_BUDGET msで頭打ち。残手数が多い層では数百件級になり得るため
+          const step = winDrainCount < WIN_DRAIN_FULL_COUNT ? WIN_DRAIN_STEP_FULL : WIN_DRAIN_STEP_LATER
+          winDrainCount++
+          if (winDrainTotal < WIN_DRAIN_BUDGET) {
+            const applied = Math.min(step, WIN_DRAIN_BUDGET - winDrainTotal)
+            delay(t, () => sfx.drain(this.drainCount++), 'cue')
+            winDrainTotal += applied
+            t += applied
+          }
           break
         }
         case 'win-detonate-begin': {
@@ -2048,7 +2166,7 @@ export class BoardView {
           tween(sp.scale, { x: b * 1.18, y: b * 1.18 }, 145, { delay: scaleUpStart, ease: easeOutBack })
           tween(sp.scale, { x: b, y: b }, 90, { delay: scaleUpStart + 145 })
           this.birthBurstFx(e.at, scaleUpStart, style.color)
-          sfx.born(e.piece.kind, (born0 + 70) / 1000)
+          delay(born0 + 70, () => sfx.born(e.piece.kind), 'cue')
           // 可視化第一波③：爆発鉱石への変換（特殊駒生成イベントを共用）は一瞬明滅+ラベルで因果を示す
           if (e.piece.kind === 'normal' && e.piece.volatile) {
             this.makeVolatileOverlay(e.at.x, e.at.y, scaleUpStart)
@@ -2066,7 +2184,7 @@ export class BoardView {
           break
         }
         case 'block-hit': {
-          if (e.destroyed) sfx.block(t / 1000)
+          if (e.destroyed) delay(t, () => sfx.block(), 'cue')
           const g = this.blockG.get(this.key(e.at.x, e.at.y))
           if (g) {
             const gg = g
@@ -2199,7 +2317,7 @@ export class BoardView {
           break
         }
         case 'spore-collected': {
-          sfx.spore(t / 1000)
+          delay(t, () => sfx.spore(), 'cue')
           const k = this.key(e.at.x, e.at.y)
           const sp = this.sprites.get(k)
           if (sp) {
@@ -2441,6 +2559,12 @@ export class BoardView {
           break
       }
     }
+    // タイムライン予算：special-fireが25発以降で集約された分は、種類ごとに「×N」で因果をまとめて示す
+    for (const [kind, count] of aggregateFireCounts) {
+      const at = aggregateFireAt.get(kind)
+      if (!at) continue
+      this.floatLabelFx(at, `${FIRE_KIND_NAME[kind] ?? kind} ×${count}`, 0xf2c14e, t)
+    }
     // 列ドロップの組み立て（case 'fall' / 'refill' の収集の続き）：同じ拍・同じ列の落下と補充を、
     // **同じ遅延・同じ所要時間**で一斉に落とす（剛体）。開始時も終了時も1マス以上の間隔がある駒同士が
     // 同じ時間関数で動くので、密着・追い越し・湧き点のスタックが構造的に起きない。
@@ -2483,32 +2607,47 @@ export class BoardView {
     }
     const total = t + T.pop + T.fall
     // 可視化第一波①：敵の残りターン表示は「エンジン確定後」の値を見せたいのでタイムライン終端で更新
+    // housekeeping：reconcile・カウンタ消去・フラグ解除の予約は計測対象（board/cue）から除外する
+    // （codex_timeline_review.md §2-B。自分自身がchannelEndを延長する罠を避ける）
     const ep = this.epoch
     const mv = this.moveSeq
-    delay(total, () => {
-      if (ep !== this.epoch) return
-      this.updateIntentBadges()
-    })
+    delay(
+      total,
+      () => {
+        if (ep !== this.epoch) return
+        this.updateIntentBadges()
+      },
+      'housekeeping',
+    )
     this.fadeChainCounter(total + 120) // 連鎖数表示は次の一手までに消す
-    delay(total + 200, () => {
-      if (ep === this.epoch && mv === this.moveSeq) this.rampageActive = false // 暴走時フラグは手の終端で解除
-    })
+    delay(
+      total + 200,
+      () => {
+        if (ep === this.epoch && mv === this.moveSeq) this.rampageActive = false // 暴走時フラグは手の終端で解除
+      },
+      'housekeeping',
+    )
     // タイムライン終端で必ず照合修復：稀な競合で残る位置ズレ/孤児を吸収し、描画=エンジンを保証。
-    // 並行続行では前の手の尻尾のほうが長いことがあるため、「並走中の全タイムラインの終端」に合わせ、
-    // かつ最新の手の予約だけを生かす（mv判定）＝reconcile が進行中の演出（消えかけの駒等）を途中で刈らない
-    // 修正2：壁時計(performance.now)ではなくtween内部時計(now())を基準にする。フレーム落ちで
-    // tween時計が遅れたとき、壁時計基準だと+200msバッファを食い潰して前の手の演出中にreconcileが
-    // 早発し、複数駒の一斉スナップ（絵柄一斉変化・テレポートの主因候補）を招いていた。
-    const nowMs = now()
-    this.timelineEndAbs = Math.max(this.timelineEndAbs, nowMs + total)
-    delay(this.timelineEndAbs - nowMs + 200, () => {
-      if (ep === this.epoch && mv === this.moveSeq) this.reconcile()
-    })
+    // 終端の再定義（タイムライン予算B）：単調増加するMath.maxをやめ、圧縮後の実際の残時間
+    // channelEnd('board'/'cue') の最大値を都度測り直す。これにより割込・圧縮のたびに終端も縮む。
+    // reconcile timer自身はhousekeepingチャンネルなので計測対象に含まれない（自己延長を防ぐ）。
+    // 着地バウンス等onDone子tween（最大180ms）はchannelEndが予知できないが、+200msバッファが吸収する
+    // 前提（channelEndで拾えるのは予約済みtweenの残時間だけ。180ms<200msなのでこの前提は崩れない）
+    const endMs = channelEndMany(['board', 'cue'])
+    this.timelineEndAbs = now() + endMs
+    delay(
+      endMs + 200,
+      () => {
+        if (ep === this.epoch && mv === this.moveSeq) this.reconcile()
+      },
+      'housekeeping',
+    )
     return total
   }
 
   /** エンジン状態への収束（差分だけ直すので通常は何も起きない） */
   reconcile() {
+    this.repairStrandedAlpha() // タイムライン予算C：透明のまま取り残された駒の保険（reconcile直前）
     let corrected = 0 // 修正9：実際に直した件数（位置スナップ/差し替え/孤児破棄）。0が正常の指標
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++) {
@@ -2758,8 +2897,8 @@ export class BoardView {
     }, 'fx')
   }
 
-  /** 特殊駒ごとの発動演出 */
-  private fireFx(at: XY, piece: Piece, t: number) {
+  /** 特殊駒ごとの発動演出。simplified=true（9〜24発目・タイムライン予算）は粒子数を間引く */
+  private fireFx(at: XY, piece: Piece, t: number, simplified = false) {
     const S = this.S
     if (piece.kind === 'harpoon') {
       // 行/列を走る光のスイープ
@@ -2792,9 +2931,9 @@ export class BoardView {
         coreColor: 0xffc978,
         ringColor: 0xffc978,
         chunkColor: 0x8a7048,
-        sparkCount: 22,
-        chunkCount: 10,
-        smokeCount: 5,
+        sparkCount: simplified ? 8 : 22,
+        chunkCount: simplified ? 4 : 10,
+        smokeCount: simplified ? 2 : 5,
         ringMaxScale: 2.8,
       })
       delay(t, () => {
@@ -2814,11 +2953,12 @@ export class BoardView {
       // ランタンの虹色放射
       delay(t, () => {
         const colors = [0xf7b1a0, 0xf7e3a0, 0xb9e6a8, 0xa8cdf0, 0xd7b5ec]
-        for (let i = 0; i < 10; i++) {
+        const rayCount = simplified ? 4 : 10
+        for (let i = 0; i < rayCount; i++) {
           const ray = new Graphics()
           ray.roundRect(0, -S * 0.09, S * 3.4, S * 0.18, S * 0.09).fill({ color: colors[i % colors.length], alpha: 0.8 })
           ray.position.set(this.px(at.x), this.px(at.y))
-          ray.rotation = (i / 10) * Math.PI * 2
+          ray.rotation = (i / rayCount) * Math.PI * 2
           ray.scale.set(0.1, 1)
           this.fxLayer.addChild(ray)
           tween(ray.scale, { x: 1 }, 300, { ease: easeOutCubic, channel: 'fx' })

@@ -2547,13 +2547,22 @@ async function boot() {
       // 決着の画面は**盤面の演出が本当に終わってから**出す（2026-08-15 オーナー「連鎖が続いているのに
       // 勝利ページが出てくる」）。旧実装の Math.min(dur, 1200) は長い連鎖・勝利連射の途中で被せていた。
       // dur は「この手」のタイムラインだが、並行続行では前の手の尻尾も残りうるので isQuiet() で締める
+      // 静止待ちには**上限**を置く（2026-08-15 オーナー報告「クリア条件を満たしてもクリア判定にならない」の根治）。
+      // 大連鎖でタイムラインが数十秒に膨れると isQuiet() が延々 false のまま＝入力ロックで固まって見える。
+      // 予算側（タイムライン予算）で通常は数秒に収まるが、どんな場合でも QUIET_WAIT_MAX で必ず決着画面を出す
+      const QUIET_WAIT_MAX = 6000
       const whenBoardQuiet = (fn: () => void) => {
+        const firstWait = Math.min(dur + 250, 3000) // durも爆発しうるので初回待ちにも上限
+        let waited = firstWait // 上限は**関数開始からの通算**で数える（Codex検収 blocking-2：初回待ちを含めないと最大9.1秒になっていた）
         const poll = () => {
           if (!alive()) return
-          if (view.isQuiet()) fn()
-          else tw.delay(180, poll)
+          if (view.isQuiet() || waited >= QUIET_WAIT_MAX) fn()
+          else {
+            waited += 180
+            tw.delay(180, poll)
+          }
         }
-        tw.delay(dur + 250, poll)
+        tw.delay(firstWait, poll)
       }
       if (cleared) {
         inputLocked = true
