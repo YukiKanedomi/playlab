@@ -126,6 +126,7 @@ export type BoardEvent =
   | { t: 'oxygen-refill'; amount: number; left: number } // 層クリアの補給
   | { t: 'oxygen-drained'; id: number; amount: number; left: number } // 息喰み/ボスが酸素を直接奪う
   | { t: 'last-light'; amount: number; left: number } // 忘れ形見（祝福）：遭難の代わりに酸素が戻った（ランに1回だけ）
+  | { t: 'lamp-bonus'; amount: number; at: XY; left: number } // 大喰らい（祝福）：4つ以上のまとめ消しで灯がともった（amountは器のクランプ後＝実際に増えた量）
   | { t: 'floor-clear' } // 層の目標をすべて達成した（残敵の有無は問わない）
   | { t: 'run-over' } // oxygen<=0 で遭難
 

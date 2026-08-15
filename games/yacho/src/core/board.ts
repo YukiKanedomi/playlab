@@ -18,7 +18,7 @@ import {
   VINE_ROCKET_ID,
 } from './upgrades'
 import { gainLamp, type RunState } from './run'
-import { blessingDrain, blessingLastLight, blessingSupply, hasFreeFirstMove } from './blessings'
+import { blessingBigMatchLamp, blessingBoardFx, blessingDrain, blessingLastLight, blessingSupply } from './blessings'
 import {
   BELLFOOT_SHELL_MAX,
   bossBodyCells,
@@ -82,9 +82,9 @@ export class Board {
   enemies: EnemyInstance[] = []
   private floorCleared = false
   private runOverFired = false
-  /** 早鐘（祝福）：この層でまだ1手も使っていない＝次の1手は灯を消費しない。Board は層ごとに作り直されるので
-   *  「その層の最初の1手」はこのフラグ1つで足りる */
-  private freeFirstMove = false
+  /** 大喰らい（祝福）：4つ以上のまとめ消し1回につきともる灯（0＝持っていない）。
+   *  盤面を動かさない会計への還元なのでフックにせず、このフラグ1つで resolveMatches が扱う */
+  private bigMatchLamp = 0
   private resolveSeq = 0 // 解決（1手）の通し番号。beginResolve で進む
   private bossShellHitAtSeq = -1 // 匣を剥がした解決の番号（同一解決での二重剥がし抑止。初期値-1＝未剥がし）
 
@@ -105,7 +105,7 @@ export class Board {
         const deepen = u.deepen && run.deepened.includes(u.id) ? u.deepen.apply : null
         return u.hooks.map((hook) => ({ upgradeId: u.id, hook: deepen ? deepen(hook) : hook }))
       })
-    if (run) this.freeFirstMove = hasFreeFirstMove(run.blessings)
+    if (run) this.bigMatchLamp = blessingBigMatchLamp(run.blessings)
     this.initProgress()
     this.loadLayout(def.layout)
     this.fillInitial()
@@ -113,6 +113,7 @@ export class Board {
     this.applyPreheat(initEv)
     if (floor) this.spawnFloor(floor)
     this.applyStarters(initEv) // 第3波：敵配置の後（damageEnemyが敵を参照できるように）
+    this.applyBlessingFloorStart(initEv) // 祝福の盤面効果（工程2）。原生種を傷つけるものがあるので敵配置の後
     // fillInitial の詰み防止は spawnFloor より前に走るため、敵配置や採録時のおまけ（starter）で
     // 駒が書き換わると保証が破れる。**盤面を動かす処理をすべて終えた最後に**もう一度「有効手あり」を
     // 作り直す（有効手0で始まる層をなくす）。starter の後に置かないと、たとえば磁気採掘が最後の有効手を
@@ -453,6 +454,12 @@ export class Board {
       if (this.run) {
         const g: MatchGroup = { cells: cl.cells, color: cl.color, chain: this.chain, system: systemOf(cl.color) }
         this.fireMatchHooks(g, ev)
+        // 大喰らい（祝福）：4つ以上のまとめ消し（2×2含む）1回につき灯が1ともる。器で頭打ち＝実際に
+        // 増えた量だけを出す（満タンで0なら何も出さない。「+0」の嘘の実況を作らない）
+        if (this.bigMatchLamp > 0 && cl.cells.length >= 4) {
+          const gained = gainLamp(this.run, this.bigMatchLamp)
+          if (gained > 0) ev.push({ t: 'lamp-bonus', amount: gained, at: cl.cells[0], left: this.run.oxygen })
+        }
       }
       if (cl.special) {
         // 生成位置：プレイヤーのスワップ先がクラスタ内ならそこ、でなければ中央
@@ -981,10 +988,7 @@ export class Board {
   private spendMove(ev: BoardEvent[]) {
     this.movesLeft--
     if (!this.run) return
-    // 早鐘（祝福）：この層の最初の1手だけ灯が減らない。「手を1つ使った」事実は変わらないので
-    // oxygen-spent は同じように出す（HUDの脈打ちと層の手数計上がこのイベントを数えている）
-    if (this.freeFirstMove) this.freeFirstMove = false
-    else this.run.oxygen--
+    this.run.oxygen--
     ev.push({ t: 'oxygen-spent', left: this.run.oxygen })
   }
 
@@ -1145,6 +1149,50 @@ export class Board {
       ev.splice(before, 0, { t: 'upgrade-fire', id: u.id, at })
       this.run.records.effectFires++
     }
+  }
+
+  /**
+   * 祝福の盤面効果（工程2）。**発火点は層開始（Board構築時）の一度だけ**：毎マッチ反応する知見と違い、
+   * 祝福は「層がこう始まる」という規則の変更として画面に現れる（blessings.ts の切り分けを参照）。
+   * 順序は敵配置・starterの後＝原生種を傷つける効果が敵を参照でき、構築末尾の詰み防止（有効手の作り直し）が
+   * ここで置いた駒も込みで走る。乱数は盤面と同じ this.rng＝同じ層seedなら同じ場所に出る（決定的）。
+   */
+  private applyBlessingFloorStart(ev: BoardEvent[]) {
+    if (!this.run) return
+    const fx = blessingBoardFx(this.run.blessings)
+    const randomCell = (pred: (c: Cell) => boolean): XY | null => {
+      const cands: XY[] = []
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const c = this.at(x, y)
+          if (c && pred(c)) cands.push({ x, y })
+        }
+      return cands.length ? cands[randInt(this.rng, cands.length)] : null
+    }
+    // 火の脈：鉱物の駒2つが爆発鉱石に。鉱物が足りない盤では他の通常駒を鉱物ごと爆発鉱石へ変える（死んだ祝福を作らない）
+    for (let i = 0; i < fx.oreSeeds; i++) {
+      const p =
+        randomCell((c) => c.piece?.kind === 'normal' && c.piece.color === 2 && !c.piece.volatile) ??
+        randomCell((c) => c.piece?.kind === 'normal' && !c.piece.volatile)
+      if (!p) break
+      this.transformPieceAt(p, { kind: 'normal', color: 2, volatile: true }, ev)
+    }
+    // 置き銛：通常駒1つを銛に置き換える（銛はタップで撃てるので、有効手の保証にもそのまま数えられる）
+    for (let i = 0; i < fx.harpoons; i++) {
+      const p = randomCell((c) => c.piece?.kind === 'normal' && !c.piece.volatile)
+      if (!p) break
+      this.transformPieceAt(p, { kind: 'harpoon', dir: this.rng() < 0.5 ? 'h' : 'v' }, ev)
+    }
+    // 光の名残：光胞子トークンを落とす（隣で駒が消えると反応する既存のトークンそのもの）
+    for (let i = 0; i < fx.sporeTokens; i++) {
+      const p = randomCell((c) => !c.block && !c.sporeToken)
+      if (!p) break
+      this.spawnTokenAt(p, 'spore', ev)
+    }
+    // 先手の礫：すべての原生種が傷を負って始まる（殻もち＝深匣主・鐘脚は殻が1枚剥がれる）
+    if (fx.wound > 0) for (const e of [...this.enemies]) this.dealEnemyDamage(e.id, fx.wound, ev)
+    // 眠りの帳：定期行動のカウンタを負から始める＝初回だけ発火が遅れる（resolveEnemyTurn が負の間は発火させない）
+    if (fx.wakeDelay > 0) for (const e of this.enemies) e.actionTimer -= fx.wakeDelay
   }
 
   /**
@@ -1774,7 +1822,8 @@ export class Board {
       const period = ENEMY_PERIOD[e.kind]
       if (period <= 0) continue // swarm は定期行動を持たない
       e.actionTimer++
-      if (e.actionTimer % period !== 0) continue
+      // 眠りの帳（祝福）はカウンタを負から始める。0以下＝まだ眠っている（通常のランでは常に1以上なので素通り）
+      if (e.actionTimer <= 0 || e.actionTimer % period !== 0) continue
       switch (e.kind) {
         case 'rockshell': this.rockshellAction(e, ev); break
         case 'sporeling': this.harvesterAction(e, ev); break

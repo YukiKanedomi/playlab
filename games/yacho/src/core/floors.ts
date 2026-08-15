@@ -145,7 +145,8 @@ export const FLOORS: FloorDef[] = [
 
   // ---- 第二幕 11〜20 炉あかり：二課目の優先順位／価値の高い駒の保護 ----
   // 新課目＝光胞子（11で単独導入）、新原生種＝綴じ蟲（12で単独学習）。以降は既知の組合せだけで編む
-  { floor: 11, enemies: swarm(3), goals: [sporeGoal(9)], layout: L_SUBI_A }, // 光胞子の単独導入（浮上に手数がかかることを学ぶ）
+  // 要求9→7（2026-08-15 工程2）：旧祝福の課目減（早足の測量など）が消えたぶん実測13手台に伸びたため、帯（6〜12手）へ戻す再較正
+  { floor: 11, enemies: swarm(3), goals: [sporeGoal(7)], layout: L_SUBI_A }, // 光胞子の単独導入（浮上に手数がかかることを学ぶ）
   { floor: 12, enemies: F12, goals: [wipeGoal(F12), plantGoal(55)], layout: FLAT }, // 綴じ蟲の単独学習。掃討のみだと数手で終わるので収集を添える
   { floor: 13, enemies: [spawn('rockshell', P1), ...swarm(2)], goals: [{ type: 'tsutagoke', count: 11 }, plantGoal(45)], layout: L_MOSS_C }, // 二課目の初出（蔦苔＋植物）
   { floor: 14, enemies: [spawn('breathstealer', P1)], goals: [sporeGoal(6), { type: 'touhen', count: 6 }], layout: L_SUBI_H }, // 時間の課目と手数の課目、どちらを先に

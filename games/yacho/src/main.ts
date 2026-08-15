@@ -4,7 +4,7 @@ import { Application, Container, Graphics, Point, Sprite, Text, Texture } from '
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
 import { createRunState, discardUpgrade, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
-import { applyBlessingsToFloor, isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
+import { isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
 import { FLOORS, type FloorDef } from './core/floors'
 import { RESOURCE_LABEL, UPGRADES, type UpgradeDef } from './core/upgrades'
 import { buildPostmortem, thinningFloor, type DrainSample, type FloorLight } from './core/postmortem'
@@ -1285,7 +1285,7 @@ async function boot() {
   const showBlessingPanel = (onDone: () => void) => {
     const run = runState!
     // 同じランの同じ回で必ず同じ3枚が出る（採録と同じ作法。runSeed は startRun で確定済み）
-    const options = pickBlessingOptions(run.blessings, makeRng((runSeed + run.blessings.length * 65537 + 3) | 0), 3, run.floor)
+    const options = pickBlessingOptions(run.blessings, makeRng((runSeed + run.blessings.length * 65537 + 3) | 0), 3)
     const padX = Math.max(20, vw * 0.05)
 
     const panel = new Container()
@@ -1403,7 +1403,7 @@ async function boot() {
     playRoot.visible = true
     playRoot.removeAllListeners()
     playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
-    // 祝福はランの規則（灯・課目・盤面形状）を書き換えるので、決めてから最初の盤面を組む
+    // 祝福はランの規則（灯・補給・層開始の盤面）を書き換えるので、決めてから最初の盤面を組む
     showBlessingPanel(() => {
       buildFloorScene(1)
       ensureBgm(themeFloorId(1))
@@ -1413,8 +1413,8 @@ async function boot() {
   const buildFloorScene = (floor: number) => {
     const run = runState!
     run.floor = floor
-    // 祝福・呪いは課目と盤面形状も書き換えるので、層の正典（FLOORS）を通してから盤面を組む
-    const floorDef = applyBlessingsToFloor(FLOORS[floor - 1], run.blessings)
+    // 祝福の盤面効果（爆発鉱石・銛・光胞子・原生種の傷）は Board 構築時に applyBlessingFloorStart が織り込む
+    const floorDef = FLOORS[floor - 1]
     const floorSeed = (runSeed + floor * 7919) | 0
     board = new Board(buildFloorLevelDef(floor, floorSeed, floorDef), run, floorDef)
     // 灯を奪ったのが誰かを結果画面で名指すための対応表（PHASE2.md §2.5②）。
@@ -2450,6 +2450,8 @@ async function boot() {
       for (const e of evs) if (e.t === 'oxygen-drained') oxygenDrainFx(e.amount)
       // 忘れ形見（祝福）で灯が戻った手は、補給と同じ演出でゲージへ入れる（尽きた事実を黙って通さない）
       for (const e of evs) if (e.t === 'last-light') oxygenRefillFx(e.amount)
+      // 大喰らい（祝福）でともった灯も同じ「+N」で実況する（amountは器のクランプ後＝実際に増えた量）
+      for (const e of evs) if (e.t === 'lamp-bonus') oxygenRefillFx(e.amount)
       // 1手ぶんの消費(-1)は数字の脈動だけで示す。音・揺れ・赤フラッシュは出さない（毎手鳴らすとメリハリが死ぬ。JUICE §0-2）
       if (evs.some((e) => e.t === 'oxygen-spent')) {
         movesThisFloor++ // 1手＝酸素-1。採録帯の「この層 N手」はこの数え方（不成立スワップは含まない）

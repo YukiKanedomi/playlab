@@ -1,19 +1,19 @@
-// 祝福と呪い（PHASE2.md §3）のエンジン層テスト。
-// 祝福は7種あり、どれも「利点1行」と「代償1行」の対なので、1種につき**両方が実際に効いている**ことを見る。
-// 盤面のイベントには触らない設計なので、確認するのは灯・課目・深度・盤面形状・知見の枠の5点だけ。
+// 祝福と呪い（PHASE2.md §3・工程2の再設計）のエンジン層テスト。
+// 祝福は9種あり、どれも「利点1行」と「代償1行」の対なので、1種につき**両方が実際に効いている**ことを見る。
+// 再設計の規則＝祝福は盤面・駒・原生種に見える挙動（発火点は層開始の一度だけ）、呪いは会計（補給・灯・器・枠）。
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
 import {
-  applyBlessingsToFloor,
   BLESSINGS,
+  blessingBoardFx,
   blessingSupply,
   isBlessingFloor,
   pickBlessingOptions,
   takeBlessing,
 } from './blessings'
 import { createRunState, LAMP_MAX_START, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR, UPGRADE_SLOTS_DEFAULT } from './run'
-import { enemyIntent } from './enemies'
-import { FLOORS } from './floors'
+import { enemyIntent, turnsUntilAction } from './enemies'
+import { FLOORS, type FloorDef } from './floors'
 import { makeRng } from './rng'
 import type { BoardEvent, LevelDef, Piece } from './types'
 
@@ -25,6 +25,14 @@ const plain = (over: Partial<LevelDef> = {}): LevelDef => ({
   goals: [{ type: 'color', color: 0, count: 999 }],
   layout: Array(8).fill('........'),
   ...over,
+})
+
+/** 敵入りの層定義（floor-start の盤面効果は Board 構築時に適用されるので、敵はこの経路で置く） */
+const floorWith = (enemies: FloorDef['enemies']): FloorDef => ({
+  floor: 1,
+  enemies,
+  goals: [{ type: 'color', color: 0, count: 999 }],
+  layout: Array(8).fill('........'),
 })
 
 /** 市松で絶対にマッチしない充填（oxygen.test.ts と同じ道具） */
@@ -65,14 +73,32 @@ function refillAt(run: ReturnType<typeof createRunState>, floor: number): number
   return refillOf(ev)
 }
 
+/** 盤上の駒を条件で数える（火の脈・置き銛の「層開始時に置かれている」の確認用） */
+function countPieces(b: Board, pred: (p: Piece) => boolean): number {
+  let n = 0
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const p = b.at(x, y)?.piece
+      if (p && pred(p)) n++
+    }
+  return n
+}
+
 describe('祝福の枠組み', () => {
-  it('7種あり、どれも利点と代償の両方を文で持っている（隠しデメリットを作らない）', () => {
-    expect(BLESSINGS.length).toBe(7)
+  it('9種あり、どれも利点と代償の両方を文で持っている（隠しデメリットを作らない）', () => {
+    expect(BLESSINGS.length).toBe(9)
     for (const b of BLESSINGS) {
       expect(b.boon.length).toBeGreaterThan(0)
       expect(b.curse.length).toBeGreaterThan(0)
     }
     expect(new Set(BLESSINGS.map((b) => b.id)).size).toBe(BLESSINGS.length)
+  })
+
+  it('呪いはすべて会計（補給・灯・器・枠）＝盤面を触る呪いを作らない', () => {
+    for (const b of BLESSINGS) {
+      const accounting = (b.supply !== undefined || (b.light ?? 0) < 0 || (b.lampMax ?? 0) < 0 || (b.slots ?? 0) < 0)
+      expect(accounting, `${b.id} の呪いが会計になっていない`).toBe(true)
+    }
   })
 
   it('幕主の深度10・20の後だけ祝福を選ぶ', () => {
@@ -82,31 +108,25 @@ describe('祝福の枠組み', () => {
   })
 
   it('候補に所持済みは出ない（同名重複なし）', () => {
-    const opts = pickBlessingOptions(['great-lung', 'first-bell'], makeRng(3))
+    const opts = pickBlessingOptions(['great-lung', 'fire-vein'], makeRng(3))
     expect(opts.length).toBe(3)
     expect(opts.map((b) => b.id)).not.toContain('great-lung')
     expect(new Set(opts.map((b) => b.id)).size).toBe(3)
   })
 
-  it('幕主のあとの深度では、呪いがもう効かない祝福を候補に出さない', () => {
-    // 底ゆきの勘の呪いは「深度4までの補給−4」なので、深度10で出すと代償のない祝福になってしまう
-    for (let i = 0; i < 20; i++) {
-      expect(pickBlessingOptions([], makeRng(i), 3, 10).map((b) => b.id)).not.toContain('deep-diver')
-    }
-    const start = new Set<string>()
-    for (let i = 0; i < 20; i++) for (const b of pickBlessingOptions([], makeRng(i), 3, 1)) start.add(b.id)
-    expect(start.has('deep-diver')).toBe(true) // ラン開始時（深度1）には出る
-  })
-
-  it('祝福を1つも持たないランは、灯も課目も盤面も一切変わらない', () => {
+  it('祝福を1つも持たないランは、灯も補給も盤面も一切変わらない', () => {
     const run = createRunState([])
     expect(run.blessings).toEqual([])
     expect(blessingSupply([], 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR)
-    expect(applyBlessingsToFloor(FLOORS[0], [])).toBe(FLOORS[0]) // 正典をそのまま返す
+    const fx = blessingBoardFx([])
+    expect(fx).toEqual({ oreSeeds: 0, harpoons: 0, sporeTokens: 0, wound: 0, wakeDelay: 0 })
+    const b = new Board(plain(), run)
+    expect(countPieces(b, (p) => p.kind !== 'normal')).toBe(0)
+    expect(countPieces(b, (p) => p.kind === 'normal' && p.volatile === true)).toBe(0)
   })
 })
 
-describe('大きな肺（灯の器が12ひろがり灯も12ふえる／補給が半分）', () => {
+describe('大きな肺（灯の器が12ひろがり灯も12ふえる／補給が1へる）', () => {
   it('受けた瞬間に器（lampMax）が12ひろがり、灯も12ふえる（広がった器は超えない）', () => {
     const run = createRunState([])
     takeBlessing(run, 'great-lung')
@@ -114,52 +134,14 @@ describe('大きな肺（灯の器が12ひろがり灯も12ふえる／補給が
     expect(run.oxygen).toBe(Math.min(OXYGEN_START + 12, run.lampMax))
   })
 
-  it('層を出るときの補給が半分になる', () => {
+  it('層を出るときの補給が1へる', () => {
     const run = createRunState([])
     takeBlessing(run, 'great-lung')
-    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - Math.floor(OXYGEN_SUPPLY_PER_FLOOR / 2))
+    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 1)
   })
 })
 
-describe('早鐘（最初の1手は灯を消費しない／知見の枠が1つへる）', () => {
-  it('その層の最初の1手だけ灯が減らず、2手目からは減る', () => {
-    const run = createRunState([])
-    takeBlessing(run, 'first-bell')
-    const b = new Board(plain(), run)
-    setInert(b)
-    b.at(0, 3)!.piece = { kind: 'harpoon', dir: 'h' }
-    const ev1 = b.tap({ x: 0, y: 3 })
-    expect(run.oxygen).toBe(OXYGEN_START) // 1手目は無料
-    expect(ev1.filter((e) => e.t === 'oxygen-spent').length).toBe(1) // 手を使った事実は出る
-    b.at(0, 5)!.piece = { kind: 'harpoon', dir: 'h' }
-    b.tap({ x: 0, y: 5 })
-    expect(run.oxygen).toBe(OXYGEN_START - 1)
-  })
-
-  it('無料になるのは層ごとに1手だけ（層が変われば作り直した盤面でまた1手ぶん）', () => {
-    const run = createRunState([])
-    takeBlessing(run, 'first-bell')
-    const first = new Board(plain(), run)
-    setInert(first)
-    first.at(0, 3)!.piece = { kind: 'harpoon', dir: 'h' }
-    first.tap({ x: 0, y: 3 })
-    const next = new Board(plain(), run) // 次の層
-    setInert(next)
-    next.at(0, 3)!.piece = { kind: 'harpoon', dir: 'h' }
-    next.tap({ x: 0, y: 3 })
-    expect(run.oxygen).toBe(OXYGEN_START) // 2層ぶん打っても1も減っていない
-  })
-
-  it('知見の枠が8から7になる', () => {
-    const run = createRunState([])
-    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT)
-    takeBlessing(run, 'first-bell')
-    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT - 1)
-    expect(run.slots).toBe(7)
-  })
-})
-
-describe('息を殺す（奪われる灯が3から1／灯が8へる）', () => {
+describe('息を殺す（奪われる灯が3から1／灯が6へる）', () => {
   it('灯喰みの一撃が1になる', () => {
     const run = createRunState([])
     takeBlessing(run, 'held-breath')
@@ -175,10 +157,10 @@ describe('息を殺す（奪われる灯が3から1／灯が8へる）', () => {
     expect(run.oxygen).toBe(before - 1)
   })
 
-  it('受けた瞬間に灯が8へる', () => {
+  it('受けた瞬間に灯が6へる', () => {
     const run = createRunState([])
     takeBlessing(run, 'held-breath')
-    expect(run.oxygen).toBe(OXYGEN_START - 8)
+    expect(run.oxygen).toBe(OXYGEN_START - 6)
   })
 
   it('兆候（予告）も実際に奪われる量で出る＝予告と実測が食い違わない', () => {
@@ -193,8 +175,8 @@ describe('息を殺す（奪われる灯が3から1／灯が8へる）', () => {
   })
 })
 
-describe('忘れ形見（一度だけ灯が12もどる／補給が2へる）', () => {
-  it('灯が尽きた瞬間に遭難せず灯が12もどる。二度目は普通に遭難する', () => {
+describe('忘れ形見（一度だけ灯が16もどる／補給が1へる）', () => {
+  it('灯が尽きた瞬間に遭難せず灯が16もどる。二度目は普通に遭難する', () => {
     const run = createRunState([])
     takeBlessing(run, 'keepsake')
     const b = new Board(plain(), run)
@@ -202,8 +184,8 @@ describe('忘れ形見（一度だけ灯が12もどる／補給が2へる）', (
     const ev: BoardEvent[] = []
     priv(b).resolveEnemyTurn(ev)
     const back = ev.find((e) => e.t === 'last-light')
-    expect(back && back.t === 'last-light' ? back.amount : -1).toBe(12)
-    expect(run.oxygen).toBe(12)
+    expect(back && back.t === 'last-light' ? back.amount : -1).toBe(16)
+    expect(run.oxygen).toBe(16)
     expect(ev.some((e) => e.t === 'run-over')).toBe(false)
 
     run.oxygen = 0
@@ -222,102 +204,213 @@ describe('忘れ形見（一度だけ灯が12もどる／補給が2へる）', (
     expect(ev.filter((e) => e.t === 'run-over').length).toBe(1)
   })
 
-  it('層を出るときの補給が2へる', () => {
+  it('層を出るときの補給が1へる', () => {
     const run = createRunState([])
     takeBlessing(run, 'keepsake')
-    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 2)
+    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 1)
   })
 })
 
-describe('底ゆきの勘（深度5から下は補給+4／深度4までは補給-4）', () => {
-  it('深度で補給が入れ替わる', () => {
+describe('火の脈（層開始時に爆発鉱石5つ／補給が1へる）', () => {
+  it('層開始時、盤に爆発鉱石がちょうど5つ埋まっている（鉱物色のまま）', () => {
     const run = createRunState([])
-    takeBlessing(run, 'deep-diver')
-    expect(refillAt(run, 4)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 4) // 呪い
-    expect(refillAt(run, 5)).toBe(OXYGEN_SUPPLY_PER_FLOOR + 4) // 祝福
-  })
-})
-
-describe('一意専心（課目1つの層は4分の3／課目2つの層は4分の5）', () => {
-  it('課目が1つだけの層は要求が減る', () => {
-    const f1 = applyBlessingsToFloor(FLOORS[0], ['single-minded']) // 深度1：植物32のみ
-    expect(FLOORS[0].goals[0].count).toBe(32)
-    expect(f1.goals[0].count).toBe(24)
+    takeBlessing(run, 'fire-vein')
+    const b = new Board(plain(), run)
+    expect(countPieces(b, (p) => p.kind === 'normal' && p.volatile === true)).toBe(5)
+    expect(countPieces(b, (p) => p.kind === 'normal' && p.volatile === true && p.color === 2)).toBe(5)
+    // ビューが「取った瞬間から画面で分かる」ための実況（special-born）も出る
+    expect(b.initEvents.filter((e) => e.t === 'special-born').length).toBe(5)
   })
 
-  it('課目が2つある層は要求が増える。ただし盤に無い材料までは要求しない', () => {
-    const f9 = applyBlessingsToFloor(FLOORS[8], ['single-minded']) // 深度9：陶片7＋植物50
-    expect(f9.goals[1].count).toBe(63) // 植物は補充で湧くのでそのまま5/4
-    const hako = FLOORS[8].layout.join('').split('').filter((ch) => ch === 'h').length
-    // 陶片は設置数が上限（8.75→9 では詰む）。さらに「全数ちょうど」も避ける＝取りこぼしを1つ許す
-    expect(f9.goals[0].count).toBe(hako - 1)
-    expect(f9.goals[0].count).toBeGreaterThanOrEqual(FLOORS[8].goals[0].count)
-  })
-
-  it('殲滅の課目は編成数と一致していないと詰むので触らない', () => {
-    const f5 = applyBlessingsToFloor(FLOORS[4], ['single-minded']) // 深度5：殲滅1＋植物50
-    expect(f5.goals[0].type).toBe('enemy-kill')
-    expect(f5.goals[0].count).toBe(FLOORS[4].goals[0].count)
-  })
-
-  it('正典（FLOORS）は書き換わらない', () => {
-    applyBlessingsToFloor(FLOORS[0], ['single-minded'])
-    expect(FLOORS[0].goals[0].count).toBe(32)
-  })
-})
-
-describe('早足の測量（課目が2割へる／盤の四隅が欠ける）', () => {
-  it('すべての層で課目の要求が2割へる', () => {
-    expect(applyBlessingsToFloor(FLOORS[0], ['hasty-survey']).goals[0].count).toBe(26) // 32 → 25.6
-    expect(applyBlessingsToFloor(FLOORS[2], ['hasty-survey']).goals[0].count).toBe(6) // 蔦苔8 → 6.4
-  })
-
-  it('盤の四隅が欠ける', () => {
-    const f1 = applyBlessingsToFloor(FLOORS[0], ['hasty-survey'])
-    expect(f1.layout[0]).toBe('#......#')
-    expect(f1.layout[7]).toBe('#......#')
-    expect(f1.layout[3]).toBe('........') // 欠けるのは四隅だけ
-  })
-
-  it('隅に課目の材料が置かれている層では、その隅は欠けさせない（呪いで達成不能にしない）', () => {
-    const f3 = applyBlessingsToFloor(FLOORS[2], ['hasty-survey']) // 深度3：四隅が蔦苔
-    expect(f3.layout[0]).toBe(FLOORS[2].layout[0])
-    expect(f3.layout[7]).toBe(FLOORS[2].layout[7])
-  })
-
-  it('欠けた四隅は盤面から本当に消える', () => {
+  it('層を出るときの補給が1へる', () => {
     const run = createRunState([])
-    takeBlessing(run, 'hasty-survey')
-    const f1 = applyBlessingsToFloor(FLOORS[0], run.blessings)
-    const b = new Board(plain({ layout: f1.layout }), run)
-    expect(b.at(0, 0)).toBeNull()
-    expect(b.at(7, 7)).toBeNull()
-    expect(b.at(1, 0)).not.toBeNull()
+    takeBlessing(run, 'fire-vein')
+    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 1)
   })
 })
 
-describe('10層すべてが祝福つきでも組める', () => {
-  it('どの祝福を受けても、全層が有効手のある盤面として立ち上がる（呪いで詰み層を作らない）', () => {
+describe('置き銛（層開始時に銛2本／灯の器が4せばまる）', () => {
+  it('層開始時、盤に銛がちょうど2本置かれている', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'set-harpoon')
+    const b = new Board(plain(), run)
+    expect(countPieces(b, (p) => p.kind === 'harpoon')).toBe(2)
+  })
+
+  it('層が変われば（＝盤面を作り直せば）また2本置かれる', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'set-harpoon')
+    new Board(plain(), run)
+    const next = new Board(plain({ seed: 43 }), run)
+    expect(countPieces(next, (p) => p.kind === 'harpoon')).toBe(2)
+  })
+
+  it('灯の器が4せばまり、器からあふれた灯はその場で削れる', () => {
+    const run = createRunState([])
+    run.oxygen = run.lampMax // 満タンから受ける＝あふれるケース
+    takeBlessing(run, 'set-harpoon')
+    expect(run.lampMax).toBe(LAMP_MAX_START - 4)
+    expect(run.oxygen).toBe(run.lampMax)
+  })
+})
+
+describe('光の名残（層開始時に光胞子トークン4つ／補給が1へる）', () => {
+  it('層開始時、盤に光胞子トークンがちょうど4つ落ちている', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'spore-trail')
+    const b = new Board(plain(), run)
+    let n = 0
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (b.at(x, y)?.sporeToken) n++
+    expect(n).toBe(4)
+    expect(b.initEvents.filter((e) => e.t === 'token-spawn').length).toBe(4)
+  })
+
+  it('層を出るときの補給が1へる', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'spore-trail')
+    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 1)
+  })
+})
+
+describe('先手の礫（層開始時に全原生種が1の傷／灯の器が4せばまる）', () => {
+  it('層開始時、すべての原生種がHP-1で始まる', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'first-strike')
+    const b = new Board(
+      plain(),
+      run,
+      floorWith([
+        { kind: 'swarm', at: { x: 1, y: 1 } },
+        { kind: 'breathstealer', at: { x: 6, y: 6 } },
+      ]),
+    )
+    for (const e of b.enemies) expect(e.hp, e.kind).toBe(e.maxHp - 1)
+    expect(b.initEvents.filter((e) => e.t === 'enemy-damage').length).toBe(2)
+  })
+
+  it('殻もち（鐘脚）は殻が1枚剥がれて始まる（本体HPはそのまま＝殻の規則を破らない）', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'first-strike')
+    const b = new Board(plain(), run, floorWith([{ kind: 'bellfoot', at: { x: 4, y: 4 } }]))
+    const e = b.enemies[0]
+    expect(e.shell).toBe(1) // BELLFOOT_SHELL_MAX(2) - 1
+    expect(e.hp).toBe(e.maxHp)
+  })
+
+  it('灯の器が4せばまる', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'first-strike')
+    expect(run.lampMax).toBe(LAMP_MAX_START - 4)
+  })
+})
+
+describe('眠りの帳（原生種の目覚めが4手おそい／補給が1へる）', () => {
+  it('灯喰み（周期3）が6手では動かず、7手目に初めて灯を奪う。以後は素の周期に戻る', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'slow-wake')
+    const b = new Board(plain(), run, floorWith([{ kind: 'breathstealer', at: { x: 0, y: 0 } }]))
+    const ev: BoardEvent[] = []
+    for (let i = 0; i < 6; i++) priv(b).resolveEnemyTurn(ev)
+    expect(ev.some((e) => e.t === 'oxygen-drained')).toBe(false) // 6手目まで眠っている
+    priv(b).resolveEnemyTurn(ev) // 7手目＝初回の発火
+    expect(ev.filter((e) => e.t === 'oxygen-drained').length).toBe(1)
+    const ev2: BoardEvent[] = []
+    for (let i = 0; i < 3; i++) priv(b).resolveEnemyTurn(ev2) // 目覚めた後は素の周期3
+    expect(ev2.filter((e) => e.t === 'oxygen-drained').length).toBe(1)
+  })
+
+  it('兆候（残り手数）も遅れた実際の値で出る＝予告と実測が食い違わない', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'slow-wake')
+    const b = new Board(plain(), run, floorWith([{ kind: 'breathstealer', at: { x: 0, y: 0 } }]))
+    expect(turnsUntilAction(b.enemies[0])).toBe(7) // 素の3 + 遅れ4
+  })
+
+  it('層を出るときの補給が1へる', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'slow-wake')
+    expect(refillAt(run, 1)).toBe(OXYGEN_SUPPLY_PER_FLOOR - 1)
+  })
+})
+
+describe('大喰らい（4つ以上そろえるたび灯+1／知見の枠が1つへる）', () => {
+  /** 横一列の4連マッチを1手で作る：y=0 に [c,c,_,c]、(2,1) に c を置いて (2,0)⇄(2,1) をスワップする */
+  function bigMatchBoard(run: ReturnType<typeof createRunState>): Board {
+    const b = new Board(plain(), run)
+    setInert(b)
+    const c: Piece = { kind: 'normal', color: 4 } // 市松（色0〜3）に出ない色で干渉を断つ
+    b.at(0, 0)!.piece = { ...c }
+    b.at(1, 0)!.piece = { ...c }
+    b.at(3, 0)!.piece = { ...c }
+    b.at(2, 1)!.piece = { ...c }
+    return b
+  }
+
+  it('4連を作った手は灯が1ともる（1手の消費-1と相殺して差し引き0）', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'big-catch')
+    run.oxygen = 20
+    const b = bigMatchBoard(run)
+    const ev = b.swap({ x: 2, y: 0 }, { x: 2, y: 1 })
+    const bonus = ev.find((e) => e.t === 'lamp-bonus')
+    expect(bonus && bonus.t === 'lamp-bonus' ? bonus.amount : -1).toBe(1)
+    expect(run.oxygen).toBe(20) // -1（手）+1（大喰らい）
+  })
+
+  it('3個のマッチではともらない', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'big-catch')
+    run.oxygen = 20
+    const b = new Board(plain(), run)
+    setInert(b)
+    const c: Piece = { kind: 'normal', color: 4 }
+    b.at(0, 0)!.piece = { ...c }
+    b.at(1, 0)!.piece = { ...c }
+    b.at(2, 1)!.piece = { ...c }
+    const ev = b.swap({ x: 2, y: 0 }, { x: 2, y: 1 })
+    expect(ev.some((e) => e.t === 'match')).toBe(true)
+    expect(ev.some((e) => e.t === 'lamp-bonus')).toBe(false)
+    expect(run.oxygen).toBe(19)
+  })
+
+  it('灯が満タン（器いっぱい）なら何も出さない＝「+0」の嘘の実況を作らない', () => {
+    const run = createRunState([])
+    takeBlessing(run, 'big-catch')
+    const b = bigMatchBoard(run)
+    run.oxygen = run.lampMax + 1 // スワップの消費-1で満タンちょうどになる
+    const ev = b.swap({ x: 2, y: 0 }, { x: 2, y: 1 })
+    expect(ev.some((e) => e.t === 'lamp-bonus')).toBe(false)
+    expect(run.oxygen).toBe(run.lampMax)
+  })
+
+  it('持っていないランでは4連でも何も起きない', () => {
+    const run = createRunState([])
+    run.oxygen = 20
+    const b = bigMatchBoard(run)
+    const ev = b.swap({ x: 2, y: 0 }, { x: 2, y: 1 })
+    expect(ev.some((e) => e.t === 'lamp-bonus')).toBe(false)
+    expect(run.oxygen).toBe(19)
+  })
+
+  it('知見の枠が8から7になる', () => {
+    const run = createRunState([])
+    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT)
+    takeBlessing(run, 'big-catch')
+    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT - 1)
+  })
+})
+
+describe('全層すべてが祝福つきでも組める', () => {
+  it('どの祝福を受けても、全層が有効手のある盤面として立ち上がる（祝福で詰み層を作らない）', () => {
     for (const bl of BLESSINGS) {
       const run = createRunState([])
       takeBlessing(run, bl.id)
       for (let floor = 1; floor <= FLOORS.length; floor++) {
         run.floor = floor
-        const def = applyBlessingsToFloor(FLOORS[floor - 1], run.blessings)
+        run.oxygen = 40 // 灯の代償で序盤に尽きないよう毎層戻す（見るのは盤面の成立性だけ）
+        const def = FLOORS[floor - 1]
         const b = new Board({ id: floor, seed: 1234 + floor, moves: 9999, colors: 5, goals: def.goals, layout: def.layout }, run, def)
-        expect(b.validMoves().length, `${bl.id} 深度${floor}`).toBeGreaterThan(0)
-        // 課目の要求は、盤に置かれた材料の数を超えない（超えるとその層で永久に足踏みになる）
-        b.goals.forEach((g) => {
-          if (g.type === 'tsutagoke') {
-            const layers = def.layout.join('').split('').reduce((n, ch) => n + (ch === 'g' ? 1 : ch === 'G' ? 2 : 0), 0)
-            expect(g.count, `${bl.id} 深度${floor} 蔦苔`).toBeLessThanOrEqual(layers)
-          }
-          if (g.type === 'touhen') {
-            const hako = def.layout.join('').split('').filter((ch) => ch === 'h').length
-            expect(g.count, `${bl.id} 深度${floor} 陶片`).toBeLessThanOrEqual(hako)
-          }
-          if (g.type === 'enemy-kill') expect(g.count, `${bl.id} 深度${floor} 殲滅`).toBe(b.enemies.length)
-        })
+        expect(b.validMoves().length + b.specialsOnBoard().length, `${bl.id} 深度${floor}`).toBeGreaterThan(0)
       }
     }
   })
@@ -326,16 +419,16 @@ describe('10層すべてが祝福つきでも組める', () => {
 describe('祝福の上限', () => {
   it('同じ祝福は二度受けられない', () => {
     const run = createRunState([])
-    takeBlessing(run, 'first-bell')
-    takeBlessing(run, 'first-bell')
-    expect(run.blessings).toEqual(['first-bell'])
+    takeBlessing(run, 'big-catch')
+    takeBlessing(run, 'big-catch')
+    expect(run.blessings).toEqual(['big-catch'])
     expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT - 1) // 枠が二重に潰れない
   })
 
   it('灯の代償で「受けた瞬間に尽きる」ことはない', () => {
     const run = createRunState([])
     run.oxygen = 3
-    takeBlessing(run, 'held-breath') // -8
+    takeBlessing(run, 'held-breath') // -6
     expect(run.oxygen).toBe(1)
   })
 })

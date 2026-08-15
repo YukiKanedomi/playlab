@@ -4,7 +4,6 @@
 // どの層が悪いかが一目で分かるよう、違反を文字列で集めてから空配列と突き合わせる。
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
-import { applyBlessingsToFloor } from './blessings'
 import { FLOORS, type FloorDef } from './floors'
 import { createRunState } from './run'
 import type { LevelDef, XY } from './types'
@@ -113,23 +112,6 @@ describe('目標と素材の量', () => {
     expect(bad).toEqual([])
   })
 
-  // 祝福の呪い（一意専心＝二課目層の要求1.25倍）を掛けても、盤の材料に余りが残ること。
-  // blessings.ts の materialCap がその課目を知らないと頭打ちが効かず**達成不能な層**になり、
-  // 頭打ちが「全数ちょうど」だと**1つも取りこぼせない層**になる。どちらも灯が尽きるまで終わらない層を生む。
-  // 課目の種類を増やしたら materialCap にも足す、を強制するための防波堤
-  it('呪いで要求が増えても、盤の材料を1つ残らず使う要求にはならない', () => {
-    const bad: string[] = []
-    for (const def of FLOORS) {
-      const scaled = applyBlessingsToFloor(def, ['single-minded'])
-      for (const g of scaled.goals) {
-        if (g.type === 'touhen' && g.count >= countChars(def.layout, 'h')) bad.push(`層${def.floor}: 陶片${g.count}`)
-        if (g.type === 'tsutagoke' && g.count >= countChars(def.layout, 'gG')) bad.push(`層${def.floor}: 蔦苔${g.count}`)
-        if (g.type === 'kokeishi' && g.count >= countChars(def.layout, 'kK')) bad.push(`層${def.floor}: 苔石${g.count}`)
-        if (g.type === 'spore' && g.count >= countChars(def.layout, 's') * 4) bad.push(`層${def.floor}: 光胞子${g.count}`)
-      }
-    }
-    expect(bad).toEqual([])
-  })
 })
 
 describe('初期盤面の成立性', () => {

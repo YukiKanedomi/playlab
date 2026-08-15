@@ -2120,6 +2120,7 @@ export class BoardView {
         case 'oxygen-spent':
         case 'oxygen-refill':
         case 'last-light':
+        case 'lamp-bonus':
         case 'floor-clear':
         case 'run-over':
           break

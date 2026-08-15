@@ -104,10 +104,13 @@ export interface EnemyIntent {
  * 次の定期行動までの残りターン数（可視化第一波：敵インテント表示用）。
  * actionTimerは「行動が発火する瞬間にちょうど周期の倍数になる」決定的カウンタなので、
  * 新規状態を持たずに「周期 - 現在値%周期」として導出できる（board.tsの判定式と対で保つ）。
+ * 眠りの帳（祝福）はカウンタを負から始める＝最初の発火は必ずカウンタが p に達した手なので、
+ * 負の間は「p - 現在値」がそのまま残り手数（board.ts側の「0以下は発火しない」ガードと対）。
  */
 export function turnsUntilAction(e: EnemyInstance): number {
   const p = ENEMY_PERIOD[e.kind]
-  return p <= 0 ? 0 : p - (e.actionTimer % p)
+  if (p <= 0) return 0
+  return e.actionTimer < 0 ? p - e.actionTimer : p - (e.actionTimer % p)
 }
 
 /**
