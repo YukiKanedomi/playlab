@@ -423,6 +423,42 @@ export class BoardView {
     return sp
   }
 
+  // ---- セル占有API（C案移行 Phase2・codex_arch_review.md §3-2）----
+  // Sprite所有権（sprites帳簿への出入り）は makePiece / syncAll と以下の4メソッドだけが触る。
+  // sprites.set / sprites.delete をこの外で直接呼ばないこと（grepで検証する）。
+  // 演出（tween予約）は従来どおり呼び出し側が担う＝このPhaseでは見た目を一切変えない。
+
+  /** 駒を fromK から toK へ移す（落下・片腕スワップ・胞子の単独移動）。行き先の居座りは畳む */
+  private mapMove(fromK: string, toK: string, sp: Sprite): void {
+    this.sprites.delete(fromK)
+    this.foldStaleAt(toK, sp)
+    this.sprites.set(toK, sp)
+    if (DIAG) opLog('map-move', toK, sp, this.moveSeq)
+  }
+
+  /** 2セルの写像を交換する（スワップ・胞子の泡上がり）。両者とも所有が続くので畳みは不要 */
+  private mapSwap(kA: string, kB: string, a: Sprite, b: Sprite): void {
+    this.sprites.set(kA, b)
+    this.sprites.set(kB, a)
+    if (DIAG) {
+      opLog('map-swap', kA, b, this.moveSeq)
+      opLog('map-swap', kB, a, this.moveSeq)
+    }
+  }
+
+  /** 駒を帳簿から外し消滅待ち（doomed台帳）へ移す（ポップ・胞子回収・リロールの旧駒） */
+  private mapRetire(k: string, sp: Sprite): void {
+    this.sprites.delete(k)
+    if (DIAG) opLog('retire', k, sp, this.moveSeq)
+    this.addDoomed(k, sp)
+  }
+
+  /** 写像だけを外す（reconcileの空セル整理など。destroyは呼び出し側の責任） */
+  private mapClear(k: string, sp: Sprite): void {
+    this.sprites.delete(k)
+    if (DIAG) opLog('map-clear', k, sp, this.moveSeq)
+  }
+
   /** 演出用: スプライトの基準スケール */
   private bs(sp: Sprite): number {
     return (sp as unknown as { __base?: number }).__base ?? 1
@@ -2060,8 +2096,7 @@ export class BoardView {
             this.snapPieceForMove(b)
             this.snapDoomedAt(this.key(e.a.x, e.a.y)) // 修正3：両セルのポップ待ち駒があれば先に畳む
             this.snapDoomedAt(this.key(e.b.x, e.b.y))
-            this.sprites.set(this.key(e.a.x, e.a.y), b)
-            this.sprites.set(this.key(e.b.x, e.b.y), a)
+            this.mapSwap(this.key(e.a.x, e.a.y), this.key(e.b.x, e.b.y), a, b)
             const move = (sp: Sprite, to: XY, back: boolean) => {
               // 成立スワップは目標セルをわずかに行き過ぎて戻る（手応えの核。JUICE.md §1）
               tween(sp.position, { x: this.px(to.x), y: this.px(to.y) }, T.swap, { delay: t, ease: easeOutBackSoft })
@@ -2077,8 +2112,7 @@ export class BoardView {
               tween(b.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackGo, { delay: t })
               tween(a.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackReturn, { delay: t + T.swapBackGo })
               tween(b.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackReturn, { delay: t + T.swapBackGo })
-              this.sprites.set(this.key(e.a.x, e.a.y), a)
-              this.sprites.set(this.key(e.b.x, e.b.y), b)
+              this.mapSwap(this.key(e.a.x, e.a.y), this.key(e.b.x, e.b.y), b, a) // 不成立：写像を元へ戻す
               t += T.swapBackGo + T.swapBackReturn
             } else {
               move(a, e.b, false)
@@ -2095,9 +2129,7 @@ export class BoardView {
             this.snapPieceForMove(sp)
             this.snapDoomedAt(this.key(toC.x, toC.y))
             if (!e.illegal) {
-              this.sprites.delete(fromK)
-              this.foldStaleAt(this.key(toC.x, toC.y), sp)
-              this.sprites.set(this.key(toC.x, toC.y), sp)
+              this.mapMove(fromK, this.key(toC.x, toC.y), sp)
               tween(sp.position, { x: this.px(toC.x), y: this.px(toC.y) }, T.swap, { delay: t, ease: easeOutBackSoft })
               t += T.swap
             }
@@ -2294,9 +2326,7 @@ export class BoardView {
           if (sp) {
             this.snapPieceForMove(sp)
             this.snapDoomedAt(this.key(e.to.x, e.to.y)) // 修正3：着地セルにポップ待ち駒が残っていたら先に畳む
-            this.sprites.delete(this.key(e.from.x, e.from.y))
-            this.foldStaleAt(this.key(e.to.x, e.to.y), sp) // 幽霊調査：行き先の居座りを黙って上書きしない
-            this.sprites.set(this.key(e.to.x, e.to.y), sp)
+            this.mapMove(this.key(e.from.x, e.from.y), this.key(e.to.x, e.to.y), sp) // 行き先の居座りは畳む
             // 落下tweenはここでは張らない。同じ列・同じ拍の落下と補充を**同じ遅延・同じ所要時間**で
             // 動かすため（別々のdurationだと落下距離の長い駒が短い駒に途中で追いつき重なる）、
             // 記録だけして play() 末尾の列ドロップ組みでまとめて張る（2026-08-15 幽霊調査の非幽霊2件）
@@ -2317,8 +2347,7 @@ export class BoardView {
             // 「盤の中ほどの駒が突然消えて別の色が降ってくる」＝絵柄一斉変化に見えるため、その場で
             // クロスフェードに差し替える（旧alpha→0／新alpha0→1を各150ms）。通常補充は下の分岐のまま。
             this.snapPieceForMove(already)
-            this.sprites.delete(k)
-            this.addDoomed(k, already) // 修正3：フェードアウト中も台帳に残し、次にこのセルへ触れたら畳めるように
+            this.mapRetire(k, already) // 修正3：フェードアウト中も台帳に残し、次にこのセルへ触れたら畳めるように
             const oldSp = already
             const newSp = this.makePiece(e.at.x, e.at.y, e.piece)
             newSp.alpha = 0
@@ -2363,9 +2392,8 @@ export class BoardView {
           if (sp) {
             this.snapPieceForMove(sp)
             if (other) this.snapPieceForMove(other)
-            this.sprites.set(this.key(e.to.x, e.to.y), sp)
-            if (other) this.sprites.set(this.key(e.from.x, e.from.y), other)
-            else this.sprites.delete(this.key(e.from.x, e.from.y))
+            if (other) this.mapSwap(this.key(e.from.x, e.from.y), this.key(e.to.x, e.to.y), sp, other)
+            else this.mapMove(this.key(e.from.x, e.from.y), this.key(e.to.x, e.to.y), sp)
             tween(sp.position, { y: this.px(e.to.y) }, 300, { delay: t, ease: easeOutCubic })
             if (other) tween(other.position, { y: this.px(e.from.y) }, 300, { delay: t, ease: easeOutCubic })
           }
@@ -2377,10 +2405,9 @@ export class BoardView {
           const sp = this.sprites.get(k)
           if (sp) {
             this.snapPieceForMove(sp)
-            this.sprites.delete(k)
             // Codexレビュー3回目P0：胞子の回収演出（250ms上昇フェード）も doomed 台帳へ載せる。
             // 載せないと同セルへの補充が畳めず、旧胞子×新駒の共存になる（popPieceAtを通らない消し方の穴）
-            this.addDoomed(k, sp)
+            this.mapRetire(k, sp)
             tween(sp, { alpha: 0 }, 250, { delay: t })
             tween(sp.position, { y: sp.position.y - this.S }, 250, {
               delay: t,
@@ -2727,14 +2754,16 @@ export class BoardView {
         const sp = this.sprites.get(k)
         if (!want) {
           if (sp) {
-            this.sprites.delete(k)
+            this.mapClear(k, sp)
             if (!sp.destroyed) sp.destroy()
           }
           continue
         }
         if (!sp || sp.destroyed || (sp as unknown as { __kind: string }).__kind !== pieceKey(want)) {
-          if (sp && !sp.destroyed) sp.destroy()
-          this.sprites.delete(k)
+          if (sp) {
+            this.mapClear(k, sp)
+            if (!sp.destroyed) sp.destroy()
+          }
           this.makePiece(x, y, want)
           corrected++
         } else {
@@ -2921,9 +2950,7 @@ export class BoardView {
     if (!sp) return
     this.snapPieceForMove(sp) // 前の手の移動が残っていても、この駒だけセル定位置へ寄せてから消す
     this.snapDoomedAt(k) // 修正3：同じセルに前回のポップ待ち駒が残っていたら先に畳み切る
-    this.sprites.delete(k)
-    if (DIAG) opLog('pop', k, sp, this.moveSeq)
-    this.addDoomed(k, sp) // 修正3：destroyはonDone任せで先の話になるため、その間もセル台帳に載せておく
+    this.mapRetire(k, sp) // 修正3：destroyはonDone任せで先の話になるため、その間もセル台帳に載せておく
     this.clearVolatileOverlay(p, t) // 可視化第一波③：爆発鉱石の常時発光を破壊タイミングで片付ける
     // 膨張62ms→ホールド28ms→弾け88ms の3段（合計178ms ≤ T.pop）。「溜めてから弾ける」を作る
     const b = this.bs(sp)
