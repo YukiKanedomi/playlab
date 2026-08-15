@@ -48,8 +48,9 @@ const GROWTH_MATCH_RADIUS = 2
  * オーナー観察「落ちてきた駒で連鎖が起きにくいのはもどかしい」への見えない味付け。即マッチの保証はしない
  * （pickColorRefill 参照。初期配置・詰み防止の塗り直しには効かせない＝補充だけ）。
  * 計測比較は runsim の第3引数（1.0/1.3/1.6 で連鎖分布がどう動くかは assets_src/_runsim.txt と工程3報告）。
+ * 2026-08-15 オーナー指示で 1.3 → 1.6（「連鎖は1.6にしてみてもいい」。いろいろなバージョンを試す段階）。
  */
-export let REFILL_BIAS = 1.3
+export let REFILL_BIAS = 1.6
 export function setRefillBias(v: number) {
   REFILL_BIAS = v
 }

@@ -254,15 +254,18 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
         const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
         const options = pickDraftOptions(run.upgrades, makeRng((seed + floor * 104729 + 17) | 0), floor)
         const choice = pickDraftChoice(owned, options, moveRng)
-        // 枠が埋まっていれば「取る＝捨てる」（PHASE2.md §2）
-        let discardedId: string | null = null
-        if (full) {
-          discardedId = pickDiscard(run, firesById)
-          discardUpgrade(run, discardedId)
-          firesById.delete(discardedId) // 採り直したときに新品として扱う（discardUpgrade と同じ扱い）
+        if (choice) {
+          // 枠が埋まっていれば「取る＝捨てる」（PHASE2.md §2）
+          let discardedId: string | null = null
+          if (full) {
+            discardedId = pickDiscard(run, firesById)
+            discardUpgrade(run, discardedId)
+            firesById.delete(discardedId) // 採り直したときに新品として扱う（discardUpgrade と同じ扱い）
+          }
+          drafts.push({ floor, discardedId, action: 'take' })
+          takeUpgrade(run, choice.id) // 灯の器系（工程3）の会計も本編と同じ経路で効かせる
         }
-        drafts.push({ floor, discardedId, action: 'take' })
-        takeUpgrade(run, choice.id) // 灯の器系（工程3）の会計も本編と同じ経路で効かせる
+        // choice が無い＝プール枯渇（枠∞・2026-08-15 で28種を採り尽くした）。本編と同じく採録なしで先へ
       }
     }
   }

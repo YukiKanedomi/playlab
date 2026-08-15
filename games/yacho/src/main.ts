@@ -15,7 +15,6 @@ import { applyDeepen, applyFusion, deepenOptions, fusionOptions, PHASE28_ENABLED
 import { BoardView } from './view/BoardView'
 import { PAL, depthBadgeTexture, loadSprites, spriteTexture, themeForLevel, upgradeIconTexture } from './view/pieces'
 import { loadSave, type SaveData } from './core/save'
-import { FIRST_NOTES, loadSeenNotes, persistSeenNotes } from './core/firstnotes'
 import { BELLFOOT_SHELL_MAX, BOSS_SHELL_COUNT, enemyIntent, ENEMY_PERIOD, OXYGEN_DRAIN, type EnemyInstance } from './core/enemies'
 import { systemOf } from './core/hooks'
 import type { BoardEvent, EnemyKind, Goal, GoalType, LevelDef, XY } from './core/types'
@@ -710,7 +709,6 @@ async function boot() {
   const vh = app.screen.height
   const fs = (r: number) => Math.round(vw * r)
   const save: SaveData = loadSave() // 旧セーブは拠点の装飾（ノード色/星）にのみ流用。ローグ進行では更新しない
-  const seenNotes = loadSeenNotes() // 初遭遇の1行札の既視集合（ラン跨ぎで永続。PHASE2.md：情報は初出時に1行だけ）
 
   const mapRoot = new Container()
   const playRoot = new Container()
@@ -2365,66 +2363,8 @@ async function boot() {
     }
     syncGoalDisplay() // 層開始時の初期化
 
-    // ---------- 初遭遇の1行札（PHASE2.md：情報は初出時に1行だけ。以後は二度と出さない） ----------
-    // 盤面は止めない（inputLockedにしない）。約1.2秒見せて引く＋タップで即閉じ。既視は localStorage でラン跨ぎ永続。
-    // 複数の初出が同時に来たら（層開始の 原生種＋課目 など）1枚ずつ順に出す
-    const noteQueue: string[] = []
-    let noteShowing = false
-    const showNextNote = () => {
-      if (!alive() || noteShowing) return
-      const text = noteQueue.shift()
-      if (!text) return
-      noteShowing = true
-      const plate = new Container()
-      const t = new Text({ text, style: { fill: UI.badgeText, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' } })
-      t.anchor.set(0.5)
-      const maxTextW = vw * 0.84
-      if (t.width > maxTextW) t.scale.set(maxTextW / t.width) // どんな文言でも1行のまま札に収める
-      const w = t.width + fs(0.05)
-      const h = Math.max(t.height + vh * 0.016, vh * 0.042)
-      const g = new Graphics()
-      g.roundRect(-w / 2, -h / 2, w, h, h * 0.32).fill({ color: 0x2a1c10, alpha: 0.93 }).stroke({ width: 2, color: UI.brass, alpha: 0.9 })
-      plate.addChild(g, t)
-      // 目標バーのすぐ上（遭遇帯の裾）。盤面には重ねない＝出ている間も普通に手を打てる
-      plate.position.set(vw / 2, goalBarY - vh * 0.012 - h / 2)
-      plate.alpha = 0
-      plate.eventMode = 'static'
-      plate.hitArea = { contains: (x: number, y: number) => x >= -w / 2 && x <= w / 2 && y >= -h / 2 && y <= h / 2 }
-      playRoot.addChild(plate)
-      let closed = false
-      const close = () => {
-        if (closed) return
-        closed = true
-        tw.tween(plate, { alpha: 0 }, 160, {
-          channel: 'fx', // 盤面チャンネルの全断に巻き込ませない（tween.ts の delay と同じ理由）
-          onDone: () => {
-            if (!plate.destroyed) plate.destroy({ children: true })
-            noteShowing = false
-            showNextNote()
-          },
-        })
-      }
-      plate.on('pointerdown', (e) => {
-        e.stopPropagation() // 札のタップは閉じるだけ。背面の盤面操作へ流さない
-        close()
-      })
-      tw.tween(plate, { alpha: 1 }, 140, { channel: 'fx' }) // 出は速く（JUICE.md §0-5）
-      tw.delay(140 + 1200, close, 'fx')
-    }
-    /** 未見の札だけを列に足す。既視化は列に入れた時点（同じ手に同種が2回来ても1枚で済む） */
-    const enqueueFirstNotes = (ids: string[]) => {
-      let added = false
-      for (const id of ids) {
-        const text = FIRST_NOTES[id]
-        if (!text || seenNotes.has(id)) continue
-        seenNotes.add(id)
-        noteQueue.push(text)
-        added = true
-      }
-      if (!added) return
-      persistSeenNotes(seenNotes)
-      showNextNote()
-    }
+    // 初遭遇の1行札は撤去（2026-08-15 オーナー指示「一瞬表れてよくわからないまま消えていく。これであればないほうがいい」）。
+    // 文言カタログ core/firstnotes.ts は採録帖（図鑑）ページの原稿として温存してある。
 
     // ---------- 入力 ----------
     let downAt: { x: number; y: number } | null = null
@@ -2508,14 +2448,6 @@ async function boot() {
         floorFireCount.set(e.id, (floorFireCount.get(e.id) ?? 0) + 1)
       }
       if (firesThisMove > run.records.maxFiresInOneMove) run.records.maxFiresInOneMove = firesThisMove
-      // 初遭遇の1行札：イベント由来の初出（特殊駒の初生成・灯の初ドレイン）はここで拾う。
-      // special-born の kind==='normal' は蔓ロケットの通常駒供給なので特殊駒の初出には数えない（runsim と同じ規約）
-      const firstIds: string[] = []
-      for (const e of evs) {
-        if (e.t === 'special-born' && e.piece.kind !== 'normal' && e.piece.kind !== 'spore') firstIds.push(`special:${e.piece.kind}`)
-        if (e.t === 'oxygen-drained') firstIds.push('oxygen-drain')
-      }
-      if (firstIds.length) enqueueFirstNotes(firstIds)
       // 酸素を直接奪われた手はゲージ側でも必ず被弾を見せる（軌跡は onOxygenDrained が別に出す）
       for (const e of evs) if (e.t === 'oxygen-drained') oxygenDrainFx(e.amount)
       // 忘れ形見（祝福）で灯が戻った手は、補給と同じ演出でゲージへ入れる（尽きた事実を黙って通さない）
@@ -2820,6 +2752,15 @@ async function boot() {
     // 0-9%タイトル+野帳 / 9-20%所持ストリップ / 20-82%候補カード3枚(各18%・間4%) / 82-96%接続要約+確定 / 96-100%safe area
     const showDraftPanel = () => {
       const options = pickDraftOptionsGraph(run.upgrades, draftRng(floor), floor)
+      // 枠制限の一時停止（run.ts UPGRADE_SLOTS_DEFAULT=Infinity）では知見28種をラン終盤に採り尽くせる。
+      // 候補ゼロの採録画面は確定ボタンが押せず詰むので、採録そのものを飛ばして次の層へ
+      if (options.length === 0) {
+        playRoot.removeAllListeners()
+        playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
+        buildFloorScene(floor + 1)
+        ensureBgm(themeFloorId(floor + 1))
+        return
+      }
       const owned = UPGRADES.filter((u) => run.upgrades.includes(u.id))
       const connections = options.map((opt) => computeConnection(owned, opt))
       const padX = Math.max(20, vw * 0.05)
@@ -2904,7 +2845,8 @@ async function boot() {
       // ---- 9〜20%：所持強化ストリップ（[D]：40pxアイコン横スクロール、左に所持N、右に一覧、系統内訳） ----
       const stripRowY = vh * 0.135
       const stripIconSize = Math.max(30, Math.min(40, fs(0.1)))
-      const ownedLabel = new Text({ text: `手持ち ${owned.length}/${run.slots}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
+      // 枠制限の一時停止中（run.ts）は分母を出さない（「3/Infinity」を出さない）。有限に戻したら分母表示も戻す
+      const ownedLabel = new Text({ text: Number.isFinite(run.slots) ? `手持ち ${owned.length}/${run.slots}` : `手持ち ${owned.length}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
       ownedLabel.anchor.set(0, 0.5)
       ownedLabel.position.set(padX, stripRowY)
       panel.addChild(ownedLabel)
@@ -3615,14 +3557,6 @@ async function boot() {
         })
       })
     }
-
-    // 層開始時の初遭遇（原生種・兆候・課目）。敵編成と課目は Board 構築時に確定し層の途中で増えないので、
-    // 開始時に一度だけ拾えば漏れない（シーン構築の最後＝札がすべてのUIの手前に乗る）
-    const startNoteIds: string[] = []
-    for (const e of board.enemies) startNoteIds.push(`enemy:${e.kind}`)
-    if (board.enemies.some((e) => enemyIntent(e, run.blessings).kind !== 'none')) startNoteIds.push('intent')
-    for (const g of board.goals) startNoteIds.push(g.type === 'system' ? `goal:system:${g.system}` : `goal:${g.type}`)
-    enqueueFirstNotes(startNoteIds)
 
     // QA用フック（既存 __yacho の流儀＝シーン再構築のたびに全体を差し替え）
     ;(window as unknown as Record<string, unknown>).__yacho = {

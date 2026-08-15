@@ -1,30 +1,30 @@
-Lv 1       win=100% avgScore= 2609 movesLeft=31.2
-Lv 2       win=100% avgScore= 2611 movesLeft=29.8
-Lv 3       win=100% avgScore= 2148 movesLeft=27.9
-Lv 4       win=100% avgScore= 2604 movesLeft=26.1
-Lv 5       win=100% avgScore= 3230 movesLeft=18.5
-Lv 6       win=100% avgScore= 3044 movesLeft=27.7
-Lv 7       win=100% avgScore= 3071 movesLeft=23.3
-Lv 8       win=100% avgScore= 2226 movesLeft=24.2
-Lv 9       win=100% avgScore= 2101 movesLeft=22.7
-Lv10 HARD  win= 13% avgScore= 2610 movesLeft=4.5
-Lv11       win=100% avgScore= 1514 movesLeft=16.6
-Lv12       win= 94% avgScore= 2181 movesLeft=8.9
-Lv13       win=100% avgScore= 2278 movesLeft=11.0
-Lv14       win=100% avgScore= 1773 movesLeft=11.8
-Lv15 HARD  win= 38% avgScore= 1825 movesLeft=2.5
-Lv16       win=100% avgScore= 1611 movesLeft=16.7
-Lv17       win= 94% avgScore= 1728 movesLeft=9.4
-Lv18       win=100% avgScore= 1756 movesLeft=18.8
-Lv19       win= 94% avgScore= 1522 movesLeft=11.5
-Lv20 HARD  win= 31% avgScore= 1716 movesLeft=2.6
-Lv21       win= 69% avgScore= 2937 movesLeft=9.6
-Lv22       win= 88% avgScore= 2957 movesLeft=6.1
-Lv23       win= 75% avgScore= 2583 movesLeft=4.0
-Lv24       win= 88% avgScore= 2526 movesLeft=4.8
-Lv25 HARD  win= 38% avgScore= 2450 movesLeft=1.3
-Lv26       win=100% avgScore= 2316 movesLeft=9.3
-Lv27       win= 63% avgScore= 2427 movesLeft=4.1
-Lv28       win= 94% avgScore= 2189 movesLeft=7.4
-Lv29 SUPER win= 38% avgScore= 1766 movesLeft=3.7
-Lv30 SUPER win= 44% avgScore= 2346 movesLeft=3.0
+Lv 1       win=100% avgScore= 2738 movesLeft=31.9
+Lv 2       win=100% avgScore= 2373 movesLeft=30.5
+Lv 3       win=100% avgScore= 2240 movesLeft=28.4
+Lv 4       win=100% avgScore= 2488 movesLeft=25.0
+Lv 5       win=100% avgScore= 3366 movesLeft=19.3
+Lv 6       win=100% avgScore= 3324 movesLeft=29.9
+Lv 7       win=100% avgScore= 4445 movesLeft=27.4
+Lv 8       win=100% avgScore= 2497 movesLeft=26.1
+Lv 9       win=100% avgScore= 2587 movesLeft=23.5
+Lv10 HARD  win= 31% avgScore= 3305 movesLeft=3.8
+Lv11       win=100% avgScore= 2209 movesLeft=16.6
+Lv12       win=100% avgScore= 3011 movesLeft=8.9
+Lv13       win=100% avgScore= 2385 movesLeft=13.1
+Lv14       win=100% avgScore= 2437 movesLeft=11.8
+Lv15 HARD  win= 69% avgScore= 2474 movesLeft=5.1
+Lv16       win=100% avgScore= 2429 movesLeft=17.7
+Lv17       win=100% avgScore= 2656 movesLeft=15.2
+Lv18       win=100% avgScore= 1944 movesLeft=20.1
+Lv19       win= 94% avgScore= 1899 movesLeft=12.5
+Lv20 HARD  win= 31% avgScore= 2394 movesLeft=4.4
+Lv21       win= 69% avgScore= 4153 movesLeft=8.1
+Lv22       win= 81% avgScore= 4643 movesLeft=7.6
+Lv23       win= 69% avgScore= 4074 movesLeft=4.5
+Lv24       win= 69% avgScore= 3749 movesLeft=6.4
+Lv25 HARD  win= 63% avgScore= 3261 movesLeft=7.8
+Lv26       win=100% avgScore= 2551 movesLeft=8.2
+Lv27       win= 88% avgScore= 3347 movesLeft=7.9
+Lv28       win= 94% avgScore= 2360 movesLeft=6.6
+Lv29 SUPER win= 88% avgScore= 2533 movesLeft=4.1
+Lv30 SUPER win= 94% avgScore= 2734 movesLeft=6.5

@@ -11,7 +11,7 @@ import {
   pickBlessingOptions,
   takeBlessing,
 } from './blessings'
-import { createRunState, LAMP_MAX_START, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR, UPGRADE_SLOTS_DEFAULT } from './run'
+import { createRunState, LAMP_MAX_START, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR } from './run'
 import { enemyIntent, turnsUntilAction } from './enemies'
 import { FLOORS, type FloorDef } from './floors'
 import { makeRng } from './rng'
@@ -395,11 +395,10 @@ describe('大喰らい（4つ以上そろえるたび灯+1／知見の枠が1つ
     expect(run.oxygen).toBe(19)
   })
 
-  it('知見の枠が8から7になる', () => {
+  it('呪い＝層を出るときの補給が1へる（旧「枠が1つへる」は枠制限の一時停止で差し替え 2026-08-15）', () => {
     const run = createRunState([])
-    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT)
     takeBlessing(run, 'big-catch')
-    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT - 1)
+    expect(blessingSupply(run.blessings, 1)).toBe(blessingSupply([], 1) - 1)
   })
 })
 
@@ -425,7 +424,7 @@ describe('祝福の上限', () => {
     takeBlessing(run, 'big-catch')
     takeBlessing(run, 'big-catch')
     expect(run.blessings).toEqual(['big-catch'])
-    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT - 1) // 枠が二重に潰れない
+    expect(blessingSupply(run.blessings, 1)).toBe(blessingSupply([], 1) - 1) // 呪いが二重にかからない
   })
 
   it('灯の代償で「受けた瞬間に尽きる」ことはない', () => {

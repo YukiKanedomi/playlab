@@ -3,7 +3,7 @@
 // ③合成の知見は採録に出ない ④深化は枠を動かさず、発動条件だけがゆるむ（盤面で実際に効く）
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
-import { createRunState, discardUpgrade } from './run'
+import { createRunState, discardUpgrade, UPGRADE_SLOTS_DEFAULT } from './run'
 import { applyDeepen, applyFusion, deepenOptions, fusionOptions } from './fusion'
 import { pickDraftOptions } from './draft'
 import { RESOURCES, UPGRADES } from './upgrades'
@@ -38,7 +38,7 @@ describe('合成（PHASE2.md §2.8）', () => {
     const before = run.upgrades.length
     applyFusion(run, fusionOptions(run.upgrades)[0])
     expect(run.upgrades.length).toBe(before - 1) // 枠は動かさず、埋まっている数だけが減る
-    expect(run.slots).toBe(8)
+    expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT)
     expect(run.upgrades).toEqual(['ring-of-spores'])
   })
 

@@ -18,11 +18,11 @@ const plain = (): LevelDef => ({
 })
 
 describe('知見の枠', () => {
-  it('ラン開始時は8枠で、スターター知見が1枠を消費している', () => {
+  it('枠制限は一時停止中（2026-08-15 オーナー指示）＝上限なしで、スターター知見を1つ持って始まる', () => {
     const run = createRunState(undefined, makeRng(7))
     expect(run.slots).toBe(UPGRADE_SLOTS_DEFAULT)
-    expect(UPGRADE_SLOTS_DEFAULT).toBe(8)
-    expect(run.upgrades.length).toBe(1) // この1つも枠を食う（残り7枠）
+    expect(UPGRADE_SLOTS_DEFAULT).toBe(Infinity) // 有限に戻したらこのテストごと8枠制の記述へ戻す
+    expect(run.upgrades.length).toBe(1)
   })
 
   it('手放した知見は upgrades から消え、盤面の効果もその場で失われる', () => {

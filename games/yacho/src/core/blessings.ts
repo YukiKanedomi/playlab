@@ -11,7 +11,7 @@
 //          毎マッチ反応する知見の領分を侵さない（唯一の例外は大喰らい＝4つ以上のまとめ消しで灯+1。これは
 //          盤面を動かさない会計への還元なので、フックではなく早鐘方式のフラグ1つで board.ts が扱う）
 // 呪いを別アイテムとして増やさず、必ず祝福と同じ1枚に書くのは「隠しデメリットを作らない」ため。
-import { gainLamp, supplyForFloor, UPGRADE_SLOTS_DEFAULT, type RunState } from './run'
+import { gainLamp, supplyForFloor, type RunState } from './run'
 import { randInt, type Rng } from './rng'
 
 export interface BlessingDef {
@@ -128,9 +128,11 @@ export const BLESSINGS: BlessingDef[] = [
     id: 'big-catch',
     name: '大喰らい',
     boon: '4つ以上そろえるたび、灯が1ともる',
-    curse: `知見の枠が1つへる（${UPGRADE_SLOTS_DEFAULT} → ${UPGRADE_SLOTS_DEFAULT - 1}）`,
+    // 旧呪い「知見の枠が1つへる」は枠制限の一時停止（run.ts UPGRADE_SLOTS_DEFAULT=Infinity）で無意味になったため
+    // 補給-1へ差し替え（2026-08-15）。枠制に戻すときに呪いも戻すか判断する
+    curse: '層を出るときの補給が1へる',
     bigMatchLamp: 1,
-    slots: -1,
+    supply: () => -1,
   },
 ]
 
