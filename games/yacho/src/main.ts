@@ -2434,11 +2434,23 @@ async function boot() {
       }
       return moves[0] // 優先2：先頭の手
     }
+    // 静止時ヒーラー（2026-08-15）：終端の reconcile は「最後の手の予約1回」しか走らないため、どの経路かで
+    // 取り残された駒（alpha=0のまま等）が静止後も残り続けていた（層5実測：静止中に21セル残留）。
+    // 静止中は壊せる演出が存在しない＝reconcile は定義上安全なので、静止2秒ごとに必ず回して自己修復を保証する。
+    // 根本の設計見直し（即時解決エンジン×予約再生の構造）は別途 Codex と進行中
+    let idleHealMs = 0
     const idleHintTick = (t: { deltaMS: number }) => {
       if (!alive()) {
         app.ticker.remove(idleHintTick)
         return
       }
+      if (view.isQuiet()) {
+        idleHealMs += t.deltaMS
+        if (idleHealMs >= 2000) {
+          idleHealMs = 0
+          view.reconcile()
+        }
+      } else idleHealMs = 0
       // inputLocked中・盤面演出中はアイドル判定を進めない（演出が終わった瞬間から4秒を数え直す）
       if (inputLocked || !view.isQuiet()) {
         hintIdleMs = 0
