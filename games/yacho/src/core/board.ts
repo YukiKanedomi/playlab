@@ -17,7 +17,7 @@ import {
   UPGRADES,
   VINE_ROCKET_ID,
 } from './upgrades'
-import type { RunState } from './run'
+import { gainLamp, type RunState } from './run'
 import { blessingDrain, blessingLastLight, blessingSupply, hasFreeFirstMove } from './blessings'
 import {
   BELLFOOT_SHELL_MAX,
@@ -1000,8 +1000,9 @@ export class Board {
     ev.push({ t: 'floor-clear' })
     // 補給量は祝福・呪いで動く（深度で変わるものもあるので run.floor を渡す）
     const supply = blessingSupply(this.run.blessings, this.run.floor)
-    this.run.oxygen += supply // 上限クランプを書かないこと（貯金＝急ぐ動機）
-    ev.push({ t: 'oxygen-refill', amount: supply, left: this.run.oxygen })
+    // 器（lampMax）でクランプ。amount は「実際に増えた量」＝ HUD の「灯 +N」も runsim の補給前復元（left-amount）も嘘にならない
+    const gained = gainLamp(this.run, supply)
+    ev.push({ t: 'oxygen-refill', amount: gained, left: this.run.oxygen })
   }
   /**
    * 勝利シーケンス：残手数を特殊駒（銛/歯車爆弾）に変換して全自動起爆（RM実測の再現）。
@@ -1803,7 +1804,7 @@ export class Board {
     const amount = blessingLastLight(this.run.blessings)
     if (amount <= 0) return false
     this.run.lastLightUsed = true
-    this.run.oxygen = amount // 尽きた地点（0以下）からの復帰なので、加算ではなくこの値に戻す
+    this.run.oxygen = Math.min(amount, this.run.lampMax) // 尽きた地点（0以下）からの復帰なので、加算ではなくこの値に戻す（器は超えない）
     ev.push({ t: 'last-light', amount, left: this.run.oxygen })
     return true
   }

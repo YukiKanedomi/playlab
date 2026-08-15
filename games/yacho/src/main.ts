@@ -3,7 +3,7 @@
 import { Application, Container, Graphics, Point, Sprite, Text, Texture } from 'pixi.js'
 import { Board, W, H } from './core/board'
 import { LEVELS30 as LEVELS } from './core/levels30'
-import { createRunState, discardUpgrade, OXYGEN_GAUGE_FULL, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
+import { createRunState, discardUpgrade, OXYGEN_LOW, OXYGEN_CRITICAL, OXYGEN_SUPPLY_PER_FLOOR, type RunState } from './core/run'
 import { applyBlessingsToFloor, isBlessingFloor, pickBlessingOptions, takeBlessing } from './core/blessings'
 import { FLOORS, type FloorDef } from './core/floors'
 import { RESOURCE_LABEL, UPGRADES, type UpgradeDef } from './core/upgrades'
@@ -2038,9 +2038,6 @@ async function boot() {
     ui.addChild(menuBtn)
 
     /** 遭遇帯の更新：残敵/ボス情報＋次行動の要約、強奪予告の合計酸素を返す（酸素ゲージへ渡す） */
-    // ゲージの分母＝「その層のタンク容量」。層の途中では動かさない（動かすと1手ぶんの減りが見えなくなる）。
-    // 補給で貯金が乗ったぶんだけ層クリア時に広がり、使い切れば自動的に既定容量へ戻る。
-    let gaugeFull = Math.max(OXYGEN_GAUGE_FULL, run.oxygen)
     const refreshEncounter = (): number => {
       const info = computeEncounterInfo(board)
       if (!enemyChip || !actionChip) return 0 // 敵ゼロの層はチップ自体が無い
@@ -2078,10 +2075,12 @@ async function boot() {
       return info.pendingOxygen
     }
 
-    /** oxygenOverride：補給前の値でゲージを描きたいとき（層クリアの+7は演出で見せるため即時反映しない） */
+    /** oxygenOverride：補給前の値でゲージを描きたいとき（層クリアの補給は演出で見せるため即時反映しない） */
+    // ゲージの分母＝灯の器（lampMax）。灯は器を超えないので、貯金しても常に満タンに見える嘘がなくなった。
+    // 器が広がる（祝福・知見）と分母もその場で広がる＝塗りが少し下がって「余白ができた」が見える。
     const refreshFloorHud = (oxygenOverride?: number) => {
       const pendingDrain = refreshEncounter()
-      drawGauge(Math.max(0, oxygenOverride ?? run.oxygen), gaugeFull, pendingDrain)
+      drawGauge(Math.max(0, oxygenOverride ?? run.oxygen), run.lampMax, pendingDrain)
     }
     refreshFloorHud()
 
@@ -2490,11 +2489,12 @@ async function boot() {
     }
 
     /**
-     * 層クリアの採録帯（codex_strategy_v2 [D]）。通常層は**1.8秒・入力待ちなし**でドラフトの前に挟む。
+     * 層クリアの採録帯（codex_strategy_v2 [D]）。ドラフトの前に挟む。
      *   0.00〜0.35 盤面が一段暗くなる（最後の収集物が課目へ飛ぶのは、この手のタイムラインが既に担っている）
      *   0.25〜0.95 細い採録帯が下から出る。`深度N 踏破`
-     *   0.55〜1.45 酸素がゲージへ入り、同時に手数と最多発火知見だけを出す
-     *   1.45〜1.80 採録帯が上へ抜け、採録（ドラフト）へつなぐ
+     *   0.55〜1.05 酸素がゲージへ入り、同時に手数と最多発火知見だけを出す
+     *   以降はタップ待ち（自動では消えない。本人指示 2026-08-15「読む前に消える」の廃止）。
+     *   出そろう前のタップは早送り（全文を即出し）、出そろった後のタップで採録（ドラフト）へ。
      * 出すのはこの3つだけ。全知見の発火一覧・総破壊数・星・スコア・評価語は出さない（[D]§3）。
      */
     const showFloorRecordBand = () => {
@@ -2509,6 +2509,9 @@ async function boot() {
       const bandH = vh * 0.19
       const bandTop = vh * 0.46
       const band = new Container()
+      // タップは全部 dim で受ける。帯を素通しにしないと「帯の上のタップ」だけが黙って無視される
+      // （playRoot が interactive なので子の帯がヒットテストに掛かる。旧実装では自動送りがこの欠陥を隠していた。実測 2026-08-15）
+      band.eventMode = 'none'
       const bandBg = new Graphics()
       bandBg.rect(0, 0, vw, bandH).fill({ color: UI.paper, alpha: 0.97 })
       bandBg.moveTo(0, 1).lineTo(vw, 1).moveTo(0, bandH - 1).lineTo(vw, bandH - 1).stroke({ width: 2, color: UI.brass, alpha: 0.95 })
@@ -2546,12 +2549,38 @@ async function boot() {
 
       let refilled = false
       let exited = false
+      let ready = false // 3行が出そろってタップ待ちに入ったか
       // 補給はゲージ側で見せる（handleFloorResult が補給前の値で描いてあるので、ここで実値へ確定する）
       const doRefill = () => {
         if (refilled || !alive()) return
         refilled = true
-        gaugeFull = Math.max(OXYGEN_GAUGE_FULL, run.oxygen) // 分母が変わるのは補給演出の瞬間だけ（層途中でバーが後戻りしない）
         oxygenRefillFx(refillAmount)
+      }
+      // タップ待ちの誘導。帯の中は3行と競るので、帯のすぐ下・画面中央に小さく置いてゆっくり明滅させる
+      const hint = new Text({
+        text: 'タップで次へ',
+        // 盤面の駒の上に乗るので、ゲージの増減表示と同じ縁取りで浮かせる（実測で無縁取りは埋もれた）
+        style: { fill: 0xf4e8cf, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x2a1c10, width: 3 } },
+      })
+      hint.anchor.set(0.5)
+      hint.position.set(vw / 2, bandTop + bandH + vh * 0.045)
+      hint.alpha = 0
+      hint.eventMode = 'none' // 帯と同じ理由（タップはdimで受ける）
+      playRoot.addChild(hint)
+      const hintPulse = () => {
+        if (hint.destroyed || exited) return
+        tw.tween(hint, { alpha: 0.4 }, 700, {
+          onDone: () => {
+            if (hint.destroyed || exited) return
+            tw.tween(hint, { alpha: 0.9 }, 700, { onDone: hintPulse })
+          },
+        })
+      }
+      const becomeReady = () => {
+        if (ready || exited || !alive()) return
+        ready = true
+        hint.alpha = 0.9
+        hintPulse()
       }
       const doExit = () => {
         if (exited || !alive()) return
@@ -2561,6 +2590,11 @@ async function boot() {
           ease: tw.easeInCubic,
           onDone: () => {
             if (!band.destroyed) band.destroy({ children: true })
+          },
+        })
+        tw.tween(hint, { alpha: 0 }, 200, {
+          onDone: () => {
+            if (!hint.destroyed) hint.destroy()
           },
         })
         tw.tween(dim, { alpha: 0 }, 300, {
@@ -2579,24 +2613,22 @@ async function boot() {
         tw.tween(movesT, { alpha: 1 }, 260)
         tw.tween(oxyT, { alpha: 1 }, 300, { delay: 60 })
         if (bestT) tw.tween(bestT, { alpha: 1 }, 300, { delay: 160 })
+        tw.delay(500, becomeReady) // 3行が出そろったらタップ待ちへ
       })
-      tw.delay(1450, doExit) // ④
 
-      // 早送り：0.35秒地点から1.45秒地点へ飛ばす。0秒スキップにはしない（補給が起きた事実は必ず350ms見せる）
-      const t0 = performance.now()
-      let skipPending = false
+      // タップ遷移（本人指示 2026-08-15）：1.45秒の自動送りを廃止。
+      // 出そろう前のタップ＝早送り（全文を即出し）／出そろった後のタップ＝採録へ。
       const skipNow = () => {
         if (exited || !alive()) return
-        tw.snap(band.position) // 出のトゥイーンを終端（bandTop）へ飛ばしてから抜けへ繋ぐ
+        tw.snap(band.position) // 出のトゥイーンを終端（bandTop）へ飛ばす
         for (const t of laterLines) if (!t.destroyed) t.alpha = 1
-        doExit()
+        doRefill()
+        becomeReady()
       }
       dim.on('pointertap', () => {
-        if (skipPending || exited) return
-        const dt = performance.now() - t0
-        skipPending = true
-        if (dt >= 350) skipNow()
-        else tw.delay(350 - dt, skipNow)
+        if (exited || !alive()) return
+        if (ready) doExit()
+        else skipNow()
       })
     }
 
@@ -3568,7 +3600,7 @@ async function boot() {
       },
       setOxygen: (n: number) => {
         if (runState) {
-          runState.oxygen = n
+          runState.oxygen = Math.min(n, runState.lampMax) // QA用でも器の不変条件（oxygen ≦ lampMax）は守る
           refreshFloorHud()
         }
       },

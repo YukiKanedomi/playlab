@@ -241,6 +241,7 @@ describe('層クリア判定', () => {
     priv(b).resolveEnemyTurn(ev) // 発火口は checkFloorClear のみ（dealEnemyDamage からは出ない）
     expect(ev.some((x) => x.t === 'floor-clear')).toBe(false) // e2がまだ残っている
     ev = []
+    run.oxygen = 20 // 器（lampMax）から離しておく＝補給の素の量だけを見る（クランプはoxygen.test.tsが見る）
     const before = run.oxygen
     priv(b).dealEnemyDamage(e2.id, 5, ev)
     priv(b).resolveEnemyTurn(ev)

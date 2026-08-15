@@ -11,7 +11,7 @@ import {
   pickBlessingOptions,
   takeBlessing,
 } from './blessings'
-import { createRunState, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR, UPGRADE_SLOTS_DEFAULT } from './run'
+import { createRunState, LAMP_MAX_START, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR, UPGRADE_SLOTS_DEFAULT } from './run'
 import { enemyIntent } from './enemies'
 import { FLOORS } from './floors'
 import { makeRng } from './rng'
@@ -53,9 +53,11 @@ const refillOf = (ev: BoardEvent[]) => {
   return e && e.t === 'oxygen-refill' ? e.amount : -1
 }
 
-/** 層クリアを起こして補給量を取る（補給は checkFloorClear の中でしか起きない） */
+/** 層クリアを起こして補給量を取る（補給は checkFloorClear の中でしか起きない）。
+ *  灯は器（lampMax）から離しておく＝ここで見るのは祝福による補給の増減だけで、クランプは oxygen.test.ts が見る */
 function refillAt(run: ReturnType<typeof createRunState>, floor: number): number {
   run.floor = floor
+  run.oxygen = 20
   const b = new Board(plain({ goals: [{ type: 'color', color: 0, count: 1 }] }), run)
   b.goalDone[0] = 1
   const ev: BoardEvent[] = []
@@ -104,11 +106,12 @@ describe('祝福の枠組み', () => {
   })
 })
 
-describe('大きな肺（灯が12ふえる／補給が半分）', () => {
-  it('受けた瞬間に灯が12ふえる', () => {
+describe('大きな肺（灯の器が12ひろがり灯も12ふえる／補給が半分）', () => {
+  it('受けた瞬間に器（lampMax）が12ひろがり、灯も12ふえる（広がった器は超えない）', () => {
     const run = createRunState([])
     takeBlessing(run, 'great-lung')
-    expect(run.oxygen).toBe(OXYGEN_START + 12)
+    expect(run.lampMax).toBe(LAMP_MAX_START + 12)
+    expect(run.oxygen).toBe(Math.min(OXYGEN_START + 12, run.lampMax))
   })
 
   it('層を出るときの補給が半分になる', () => {

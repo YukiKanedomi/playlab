@@ -5,7 +5,7 @@
 //   祝福 … 灯・課目・深度・盤面形状というランの会計と規則だけを変える。最大3つ・同名重複なし
 // したがってここには Hook が1つも無い（盤面のイベントには一切触らない）。新しい資源も作らない。
 // 呪いを別アイテムとして増やさず、必ず祝福と同じ1枚に書くのは「隠しデメリットを作らない」ため。
-import { supplyForFloor, UPGRADE_SLOTS_DEFAULT, type RunState } from './run'
+import { gainLamp, supplyForFloor, UPGRADE_SLOTS_DEFAULT, type RunState } from './run'
 import { randInt, type Rng } from './rng'
 import type { FloorDef } from './floors'
 import type { Goal, GoalType } from './types'
@@ -17,8 +17,10 @@ export interface BlessingDef {
   boon: string
   /** 呪いの代償（1行）。隠しデメリットは作らない */
   curse: string
-  /** 採った瞬間の灯の増減（一度きり） */
+  /** 採った瞬間の灯の増減（一度きり）。増える側は器（lampMax）でクランプされる */
   light?: number
+  /** 採った瞬間の器（lampMax）の増減（一度きり）。工程2の知見側と同じく「最大値上昇」の入口 */
+  lampMax?: number
   /** 層を出るときの補給の増減。深度で変わるものがあるので深度を受け取る */
   supply?: (floor: number) => number
   /** 知見の枠の増減（一度きり） */
@@ -43,9 +45,11 @@ export const BLESSINGS: BlessingDef[] = [
   {
     id: 'great-lung',
     name: '大きな肺',
-    boon: '灯が12ふえる',
+    // 灯に器（lampMax）が入ったので「+12」は器ごと広げる。器を広げないと満タン時に何も起きない死んだ祝福になる
+    boon: '灯の器が12ひろがり、灯も12ふえる',
     curse: '層を出るときの補給が半分になる',
     light: 12,
+    lampMax: 12,
     supply: (floor) => -Math.floor(supplyForFloor(floor) / 2),
   },
   {
@@ -114,8 +118,12 @@ export function takeBlessing(run: RunState, id: string) {
   if (!d || run.blessings.includes(id)) return // 同名重複なし
   run.blessings.push(id)
   run.slots += d.slots ?? 0
-  // 灯の代償で即座に尽きると「選んだ瞬間にランが終わる」ので1だけ残す
-  if (d.light) run.oxygen = Math.max(1, run.oxygen + d.light)
+  run.lampMax += d.lampMax ?? 0 // 器の増減は灯より先（大きな肺＝広げた器に注ぐ）
+  // 増える側は器でクランプ（gainLamp）。灯の代償で即座に尽きると「選んだ瞬間にランが終わる」ので1だけ残す
+  if (d.light) {
+    if (d.light > 0) gainLamp(run, d.light)
+    else run.oxygen = Math.max(1, run.oxygen + d.light)
+  }
 }
 
 /** その深度で層を出るときの補給（基準値に祝福・呪いを足したもの） */

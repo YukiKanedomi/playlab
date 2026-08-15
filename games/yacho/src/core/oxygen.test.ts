@@ -1,8 +1,8 @@
 // 酸素＝唯一の資源（SPEC_OXYGEN.md §1.1 / §9.4）のエンジン層テスト。
-// 「1手＝-1」「不正手は0」「クリアで+7（上限なし）」「0で遭難」の4点だけを見る。
+// 「1手＝-1」「不正手は0」「クリアで補給（器＝lampMaxを超えない）」「0で遭難」の4点だけを見る。
 import { describe, expect, it } from 'vitest'
 import { Board, H, W } from './board'
-import { createRunState, OXYGEN_GAUGE_FULL, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR } from './run'
+import { createRunState, LAMP_MAX_START, OXYGEN_START, OXYGEN_SUPPLY_PER_FLOOR } from './run'
 import type { BoardEvent, LevelDef, Piece } from './types'
 
 const plain = (over: Partial<LevelDef> = {}): LevelDef => ({
@@ -114,8 +114,9 @@ describe('遭難（run-over）', () => {
 })
 
 describe('層クリアの補給', () => {
-  it('目標達成でfloor-clearとoxygen-refill{amount:7}が対で出て、酸素が+7される', () => {
+  it('目標達成でfloor-clearとoxygen-refillが対で出て、酸素が補給ぶん増える', () => {
     const run = createRunState([])
+    run.oxygen = 20 // 器（lampMax）から十分に離しておく＝この検証では補給の素の量だけを見る
     const b = boardWithColorMatch(run, [{ type: 'color', color: 0, count: 3 }])
     const ev = b.swap({ x: 0, y: 0 }, { x: 1, y: 0 })
     expect(ev.filter((e) => e.t === 'floor-clear').length).toBe(1)
@@ -123,21 +124,24 @@ describe('層クリアの補給', () => {
     expect(refills.length).toBe(1)
     const r = refills[0]
     expect(r.t === 'oxygen-refill' ? r.amount : -1).toBe(OXYGEN_SUPPLY_PER_FLOOR)
-    // 1手ぶんの消費(-1)のあとに補給(+7)が乗る
-    expect(run.oxygen).toBe(OXYGEN_START - 1 + OXYGEN_SUPPLY_PER_FLOOR)
+    // 1手ぶんの消費(-1)のあとに補給(+12)が乗る
+    expect(run.oxygen).toBe(20 - 1 + OXYGEN_SUPPLY_PER_FLOOR)
     expect(r.t === 'oxygen-refill' ? r.left : -1).toBe(run.oxygen)
   })
 
-  it('補給に上限クランプが無い（貯金がそのまま次の層へ持ち越される）', () => {
+  it('補給は器（lampMax）でクランプされ、amountは実際に増えた量になる', () => {
     const run = createRunState([])
     const b = new Board(plain({ goals: [{ type: 'color', color: 0, count: 1 }] }), run)
-    // 「満タン目前で層クリアすると満タンを超える」を較正値に依存せず見る（OXYGEN_START は runsim 較正で動く）
-    run.oxygen = OXYGEN_GAUGE_FULL - 2
+    // 満タン目前で層クリアしても器は超えない。イベントのamountは「本当に増えた量」＝HUDの「灯 +N」が嘘をつかない
+    run.oxygen = run.lampMax - 2
     b.goalDone[0] = 1
     const ev: BoardEvent[] = []
     priv(b).checkFloorClear(ev)
-    expect(run.oxygen).toBe(OXYGEN_GAUGE_FULL - 2 + OXYGEN_SUPPLY_PER_FLOOR)
-    expect(run.oxygen).toBeGreaterThan(OXYGEN_GAUGE_FULL) // 満タン基準を超えても丸められない
+    expect(run.oxygen).toBe(run.lampMax)
+    expect(run.lampMax).toBe(LAMP_MAX_START)
+    const r = ev.find((e) => e.t === 'oxygen-refill')
+    expect(r && r.t === 'oxygen-refill' ? r.amount : -1).toBe(2)
+    expect(r && r.t === 'oxygen-refill' ? r.left : -1).toBe(run.lampMax)
   })
 })
 

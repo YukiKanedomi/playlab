@@ -11,7 +11,15 @@ import { AUTONOMOUS_MECHANISM_ID, PREHEAT_ID, RELIC_RESONANCE_ID, RING_OF_RESONA
  */
 export const OXYGEN_START = 44
 /**
- * 層クリアの補給の基準値（＝第一幕の値）。上限は設けない＝早く終えた残りがそのまま次層への貯金になる。
+ * 灯の器（lampMax）の初期値。補給・回復はすべてこの器でクランプされる（gainLamp）。
+ * OXYGEN_START と切り離してあるのは較正のため：上限を開始値(44)に寄せるほど早解きの貯金が頭打ちになり、
+ * 深層の生存が細る。120シードの実測（2026-08-15、深度25以上の遭難率）：
+ *   器52=25.8% / 56=29.2% / 64=32.5% / 72=36.7%（目標35%以上。無制限時代の基準は37.5%）
+ * → 9指標がすべて維持できる最小の72に置いた（assets_src/_runsim.txt）。知見・祝福はここを増やせる。
+ */
+export const LAMP_MAX_START = 72
+/**
+ * 層クリアの補給の基準値（＝第一幕の値）。早く終えた残りは次層への貯金になるが、器（lampMax）は超えない。
  * 実際に使う値は深度で変わるので、必ず supplyForFloor() / blessingSupply() を通すこと。
  */
 export const OXYGEN_SUPPLY_PER_FLOOR = 12
@@ -29,8 +37,6 @@ export const SUPPLY_BY_ACT = [12, 10, 3]
 export function supplyForFloor(floor: number): number {
   return SUPPLY_BY_ACT[Math.min(SUPPLY_BY_ACT.length - 1, Math.max(0, Math.floor((floor - 1) / 10)))]
 }
-/** HUD塗りの満タン基準（表示専用。貯金で超えたら満タンに丸める） */
-export const OXYGEN_GAUGE_FULL = OXYGEN_START
 /** 警告（炎ゆらぎ＋数字の朱化）。絶対量で判定する */
 export const OXYGEN_LOW = 8
 /** 最終警告（1手ごとに数字が脈打つ） */
@@ -87,8 +93,10 @@ export interface RunState {
   /** 忘れ形見（祝福）の使用済みフラグ。ランに一度だけ灯が戻る */
   lastLightUsed: boolean
   gearCharge: number // ギア起動カウンタ（自律機構/機械庭園/遺物共鳴の判定に使用）
-  /** 唯一の資源（PLAN_LOOP.md §1.4）。1手で-1、0で遭難。層クリアで +OXYGEN_SUPPLY_PER_FLOOR（上限なし） */
+  /** 唯一の資源（PLAN_LOOP.md §1.4）。1手で-1、0で遭難。層クリアで補給されるが lampMax を超えない */
   oxygen: number
+  /** 灯の器＝oxygen の上限。HUDゲージの分母もこれ。知見・祝福が増やせる（gainLamp が回復をここでクランプする） */
+  lampMax: number
   floor: number
   records: RunRecords
   /** 遺物共鳴(#13)が次の遺物マッチ効果を2倍にするための一時フラグ。消費で false に戻る。
@@ -118,12 +126,24 @@ export function createRunState(upgrades?: string[], rng: Rng = makeRng(Date.now(
     lastLightUsed: false,
     gearCharge: 0,
     oxygen: OXYGEN_START,
+    lampMax: LAMP_MAX_START,
     floor: 1,
     records: { maxChain: 0, maxDestroyed: 0, effectFires: 0, maxFiresInOneMove: 0, critical: false, swarmPropagationKills: 0 },
     relicBoostNext: false,
     progress: {},
     startersApplied: [],
   }
+}
+
+/**
+ * 灯の回復の唯一の入口。器（lampMax）を超えないようクランプし、実際に増えた量を返す
+ * （補給演出・採録帯の「灯 +N」は嘘をつかず、この戻り値＝本当に増えた量を出すこと）。
+ * 消費（-1）や強奪はクランプと無関係なので通さない。
+ */
+export function gainLamp(run: RunState, amount: number): number {
+  const before = run.oxygen
+  run.oxygen = Math.min(run.lampMax, run.oxygen + amount)
+  return run.oxygen - before
 }
 
 /**
