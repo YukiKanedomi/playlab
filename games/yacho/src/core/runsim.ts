@@ -10,7 +10,7 @@
 //   node <tmp>/runsim.mjs [seeds] > games/yacho/assets_src/_runsim.txt
 // （seeds省略時は120。このファイル自体はNode専用ツールで、main.ts/viewからは一切importされない）
 import { pathToFileURL } from 'node:url'
-import { Board, H, W } from './board'
+import { Board, H, REFILL_BIAS, setRefillBias, W } from './board'
 import { createRunState, discardUpgrade, takeUpgrade, type RunState } from './run'
 import { blessingSupply, isBlessingFloor, pickBlessingOptions, takeBlessing } from './blessings'
 import { FLOORS, type FloorDef } from './floors'
@@ -120,6 +120,8 @@ export interface MoveSample {
   fires: number // 強化発火数（upgrade-fireイベント数）
   chain: number // この手で到達した最大連鎖
   destroyed: number // この手の破壊駒数
+  specialsBorn: number // この手で生成された特殊駒の数（special-born のうち kind!=='normal'。蔓ロケットの通常駒供給は除く）
+  combos: number // 特殊駒どうしの合体（comboイベント）数。スワップ1手につき高々1
   swarmPropKills: number // このうちswarm伝播（propagateSwarmDefeat）による撃破数
   buildKills: number // 撃破総数からswarm伝播ぶんを除いたもの（＝ビルド由来）
 }
@@ -209,6 +211,8 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
         fires: evs.filter((e) => e.t === 'upgrade-fire').length,
         chain: board.chain,
         destroyed: board.resolveDestroyCount,
+        specialsBorn: evs.filter((e) => e.t === 'special-born' && e.piece.kind !== 'normal').length,
+        combos: evs.filter((e) => e.t === 'combo').length,
         swarmPropKills,
         buildKills: Math.max(0, totalDefeated - swarmPropKills),
       })
@@ -301,7 +305,11 @@ export interface FloorAgg {
   maxFires: number
   avgChain: number
   maxChain: number
+  p50Chain: number // 連鎖分布の中央値（工程3：連鎖傾斜の比較指標）
   p80Chain: number // この値以上が「上位20%の手」の目安（分布の80パーセンタイル）
+  p95Chain: number // 分布の裾（工程3：「たまに大連鎖」がどれだけ持ち上がったか）
+  noCascadePct: number // 無連鎖の手の割合(%)＝連鎖1以下（落ちてきた駒が1度も追撃しなかった手）
+  avgSpecialsBorn: number // 特殊駒の生成数/手
   avgDestroyed: number
   maxDestroyed: number
   avgSwarmPropKills: number
@@ -330,7 +338,11 @@ export function aggregate(results: SeedResult[]): FloorAgg[] {
       maxFires: moves.length ? Math.max(...moves.map((m) => m.fires)) : 0,
       avgChain: avg(moves.map((m) => m.chain)),
       maxChain: chainsAsc.length ? chainsAsc[chainsAsc.length - 1] : 0,
+      p50Chain: percentile(chainsAsc, 0.5),
       p80Chain: percentile(chainsAsc, 0.8),
+      p95Chain: percentile(chainsAsc, 0.95),
+      noCascadePct: moves.length ? (moves.filter((m) => m.chain <= 1).length / moves.length) * 100 : 0,
+      avgSpecialsBorn: avg(moves.map((m) => m.specialsBorn)),
       avgDestroyed: avg(moves.map((m) => m.destroyed)),
       maxDestroyed: moves.length ? Math.max(...moves.map((m) => m.destroyed)) : 0,
       avgSwarmPropKills: avg(moves.map((m) => m.swarmPropKills)),
@@ -484,6 +496,18 @@ export function formatReport(results: SeedResult[]): string {
   lines.push(`シード数: ${total}　深度30クリア率: ${(winRate * 100).toFixed(1)}%　ソルバー行き詰まり: ${stuckCount}件`)
   const totalMoves = results.map((r) => r.moves.length).sort((a, b) => a - b)
   lines.push(`総手数: 平均 ${avg(totalMoves).toFixed(1)} / 中央値 ${percentile(totalMoves, 0.5)}`)
+  // 連鎖・特殊駒の全体分布（工程3：補充の連鎖傾斜 REFILL_BIAS の比較指標）
+  const allMoves = results.flatMap((r) => r.moves)
+  const allChains = allMoves.map((m) => m.chain).sort((a, b) => a - b)
+  const noCasc = allMoves.length ? (allMoves.filter((m) => m.chain <= 1).length / allMoves.length) * 100 : 0
+  lines.push(
+    `連鎖分布(全手): p50 ${percentile(allChains, 0.5)} / p80 ${percentile(allChains, 0.8)} / p95 ${percentile(allChains, 0.95)}　` +
+      `無連鎖(連鎖≤1)の手: ${noCasc.toFixed(1)}%　補充傾斜 REFILL_BIAS=${REFILL_BIAS}`,
+  )
+  lines.push(
+    `特殊駒: 生成 ${avg(allMoves.map((m) => m.specialsBorn)).toFixed(3)}個/手　` +
+      `合体(コンボ) 平均 ${avg(results.map((r) => r.moves.reduce((s, m) => s + m.combos, 0))).toFixed(2)}回/ラン`,
+  )
   // どこで酸素が尽きたか＝較正の主情報（クリア率だけでは「どの層が重いか」が分からない）
   const deaths = new Map<number, number>()
   for (const r of results) if (r.deathFloor !== null) deaths.set(r.deathFloor, (deaths.get(r.deathFloor) ?? 0) + 1)
@@ -519,7 +543,11 @@ export function formatReport(results: SeedResult[]): string {
       pad('発火最大', 8),
       pad('連鎖平均', 8),
       pad('連鎖最大', 8),
+      pad('連鎖p50', 8),
       pad('連鎖p80', 8),
+      pad('連鎖p95', 8),
+      pad('無連鎖%', 8),
+      pad('特殊/手', 8),
       pad('破壊/手平均', 11),
       pad('破壊最大', 8),
       pad('swarm伝播/手', 12),
@@ -541,7 +569,11 @@ export function formatReport(results: SeedResult[]): string {
         pad(a.maxFires, 8),
         pad(a.avgChain.toFixed(2), 8),
         pad(a.maxChain, 8),
+        pad(a.p50Chain, 8),
         pad(a.p80Chain, 8),
+        pad(a.p95Chain, 8),
+        pad(a.noCascadePct.toFixed(1), 8),
+        pad(a.avgSpecialsBorn.toFixed(2), 8),
         pad(a.avgDestroyed.toFixed(2), 11),
         pad(a.maxDestroyed, 8),
         pad(a.avgSwarmPropKills.toFixed(2), 12),
@@ -561,6 +593,9 @@ function main() {
   // 較正だけ入りの数字を測ることになり、出荷する状態と報告がずれる
   const mode = process.argv[3] ?? (PHASE28_ENABLED ? 'on' : 'off')
   const opts: SimOptions = { fusion: mode === 'on' || mode === 'fuse', deepen: mode === 'on' || mode === 'deep' }
+  // 第3引数：補充の連鎖傾斜（工程3）。省略時は本編の既定値（board.ts の REFILL_BIAS）のまま測る
+  const biasArg = Number(process.argv[4])
+  if (Number.isFinite(biasArg) && biasArg > 0) setRefillBias(biasArg)
   const results: SeedResult[] = []
   for (let i = 0; i < seeds; i++) results.push(simulateSeed(1000 + i * 7919, opts))
   process.stdout.write(`合成・深化（PHASE2 §2.8）: 合成${opts.fusion ? '有' : '無'}・深化${opts.deepen ? '有' : '無'}\n` + formatReport(results) + '\n')

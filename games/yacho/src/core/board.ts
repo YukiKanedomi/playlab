@@ -43,6 +43,18 @@ export const H = 8
 const GROWTH_MATCH_RADIUS = 2
 
 /**
+ * 補充の連鎖傾斜（工程3）。落下補充で湧く駒の色を「着地点の周囲に既にある色」へやや寄せる重み。
+ * 1.0=無傾斜（完全ランダム）。周囲の同色1つにつき重みが REFILL_BIAS 倍される（2つ隣接なら二乗）。
+ * オーナー観察「落ちてきた駒で連鎖が起きにくいのはもどかしい」への見えない味付け。即マッチの保証はしない
+ * （pickColorRefill 参照。初期配置・詰み防止の塗り直しには効かせない＝補充だけ）。
+ * 計測比較は runsim の第3引数（1.0/1.3/1.6 で連鎖分布がどう動くかは assets_src/_runsim.txt と工程3報告）。
+ */
+export let REFILL_BIAS = 1.3
+export function setRefillBias(v: number) {
+  REFILL_BIAS = v
+}
+
+/**
  * 模倣の粘菌(#14)が再現するフック発火の「入力スナップショット」（夜間監査[C]1）。
  * 以前は関数(クロージャ)を保存していたため、発生時の古い ev / ctx を握ったまま別の手で再発動すると
  * 現在のイベント列に結果が書き込まれない不具合があった（見かけ上の空振り・演出/記録の同期崩れ）。
@@ -166,6 +178,12 @@ export class Board {
   }
 
   private pickColorNoMatch(x: number, y: number): Color {
+    const pool = this.matchSafePool(x, y)
+    return pool[randInt(this.rng, pool.length)]
+  }
+
+  /** 左2連・上2連との即マッチを作らない色の候補（pickColorNoMatch / pickColorRefill 共通の規則） */
+  private matchSafePool(x: number, y: number): Color[] {
     const bad = new Set<Color>()
     const cw = (dx: number, dy: number) => {
       const c = this.at(x + dx, y + dy)?.piece
@@ -174,8 +192,37 @@ export class Board {
     // 左2連・上2連と同色は避ける（初期即マッチ防止）
     if (cw(-1, 0) !== null && cw(-1, 0) === cw(-2, 0)) bad.add(cw(-1, 0)!)
     if (cw(0, -1) !== null && cw(0, -1) === cw(0, -2)) bad.add(cw(0, -1)!)
-    const pool = this.colors.filter((c) => !bad.has(c))
-    return pool[randInt(this.rng, pool.length)]
+    return this.colors.filter((c) => !bad.has(c))
+  }
+
+  /**
+   * 補充専用の色選び（工程3）。即マッチ回避は pickColorNoMatch と同じ規則のまま、
+   * 着地点の上下左右に既にある通常駒の色へ REFILL_BIAS 倍だけ重みを寄せる（同色2つ隣接なら二乗）。
+   * 見た目に規則が読める強さにはしない＝あくまで確率の裾を持ち上げるだけ。マッチの保証はどこにも無い。
+   * REFILL_BIAS=1.0 のときは乱数消費まで従来と同一（randInt 1回）＝無傾斜の挙動が正確に再現できる。
+   */
+  private pickColorRefill(x: number, y: number): Color {
+    const pool = this.matchSafePool(x, y)
+    if (REFILL_BIAS === 1 || pool.length <= 1) return pool[randInt(this.rng, pool.length)]
+    const counts = new Map<Color, number>()
+    for (const [dx, dy] of [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      const p = this.at(x + dx, y + dy)?.piece
+      if (p?.kind === 'normal') counts.set(p.color, (counts.get(p.color) ?? 0) + 1)
+    }
+    const weights = pool.map((c) => Math.pow(REFILL_BIAS, counts.get(c) ?? 0))
+    let total = 0
+    for (const w of weights) total += w
+    let r = this.rng() * total
+    for (let i = 0; i < pool.length; i++) {
+      r -= weights[i]
+      if (r < 0) return pool[i]
+    }
+    return pool[pool.length - 1] // 浮動小数の端数で稀にここへ落ちる保険
   }
 
   private rerollSomePieces(ev?: BoardEvent[]) {
@@ -919,7 +966,7 @@ export class Board {
           }
         }
         if (blocked) continue
-        const piece: Piece = { kind: 'normal', color: this.pickColorNoMatch(x, y) }
+        const piece: Piece = { kind: 'normal', color: this.pickColorRefill(x, y) } // 補充だけ連鎖傾斜（工程3）
         c.piece = piece
         ev.push({ t: 'refill', at: { x, y }, piece })
       }
