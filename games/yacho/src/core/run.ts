@@ -93,7 +93,7 @@ export interface RunState {
   /** 深化ずみの知見のID（PHASE2.md §2.8）。枠は消費しない＝upgrades と重複して持つ。
    *  Board は構築時に、ここに入っている知見のフックだけを UpgradeDef.deepen.apply へ通す */
   deepened: string[]
-  /** 受けた祝福のID（blessings.ts の BlessingDef.id）。ラン開始1つ＋深度10/20の幕主後に各1つで最大3つ。
+  /** 受けた祝福のID（blessings.ts の BlessingDef.id）。深度10/20/30の幕主後に各1つで最大3つ（開始時の祝福は廃止）。
    *  呪いは別の入れ物を作らず祝福と同じ1枚に書いてあるので、この配列だけで利点と代償の両方が決まる */
   blessings: string[]
   /** 忘れ形見（祝福）の使用済みフラグ。ランに一度だけ灯が戻る */

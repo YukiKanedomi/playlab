@@ -134,8 +134,9 @@ export const BLESSINGS: BlessingDef[] = [
   },
 ]
 
-/** 幕主のあとに祝福を1つ選ぶ深度（PHASE2.md §3）。深度20は30層化のときにそのまま繋がる */
-export const BLESSING_FLOORS = [10, 20]
+/** 幕主のあとに祝福を1つ選ぶ深度（PHASE2.md「祝福の回数と時機」）。開始時の祝福は廃止＝この3回だけ。
+ *  深度30は幕主後＝終幕（31）の前なので、3つ目は終幕でだけ働く授かりものになる */
+export const BLESSING_FLOORS = [10, 20, 30]
 export const isBlessingFloor = (floor: number) => BLESSING_FLOORS.includes(floor)
 
 const byId = (ids: string[]) => BLESSINGS.filter((b) => ids.includes(b.id))

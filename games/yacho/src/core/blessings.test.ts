@@ -101,10 +101,13 @@ describe('祝福の枠組み', () => {
     }
   })
 
-  it('幕主の深度10・20の後だけ祝福を選ぶ', () => {
+  it('幕主の深度10・20・30の後だけ祝福を選ぶ（開始時の祝福は廃止）', () => {
     expect(isBlessingFloor(10)).toBe(true)
     expect(isBlessingFloor(20)).toBe(true)
+    expect(isBlessingFloor(30)).toBe(true)
+    expect(isBlessingFloor(1)).toBe(false)
     expect(isBlessingFloor(9)).toBe(false)
+    expect(isBlessingFloor(31)).toBe(false)
   })
 
   it('候補に所持済みは出ない（同名重複なし）', () => {

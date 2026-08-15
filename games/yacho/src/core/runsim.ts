@@ -161,14 +161,13 @@ export interface SeedResult {
 /** 1シードぶん、FLOORS の全層（30層＋終幕）を通しで自動プレイする */
 export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
   const run = createRunState(undefined, makeRng(seed))
-  // 祝福はラン開始時に1つ、深度10/20の幕主のあとに各1つ（PHASE2.md §3）。main.ts と同じ規則をここでも通す
-  // ＝祝福を計測に入れないと、補給・灯の器・層開始の盤面が実プレイと違う値のまま較正することになる
+  // 祝福は深度10/20/30の幕主のあとに各1つ（PHASE2.md「祝福の回数と時機」。開始時の祝福は廃止）。
+  // main.ts と同じ規則をここでも通す＝祝福を計測に入れないと、補給・灯の器・層開始の盤面が実プレイと違う値のまま較正することになる
   const blessRng = makeRng((seed ^ 0x9e3779b9) >>> 0)
   const takeOneBlessing = () => {
     const opts = pickBlessingOptions(run.blessings, blessRng, 3)
     if (opts.length) takeBlessing(run, opts[randInt(blessRng, opts.length)].id)
   }
-  takeOneBlessing()
   const moves: MoveSample[] = []
   const drafts: DraftSample[] = []
   // 知見ごとの発火回数（ラン通算）。捨てる1つを決める規則がこれだけを見る
@@ -227,7 +226,7 @@ export function simulateSeed(seed: number, opts: SimOptions = {}): SeedResult {
     }
     clearedFloors.push(floor)
     endOxygenByFloor.set(floor, run.oxygen) // 資源はHPから酸素へ一本化（PLAN_LOOP.md §1.4）。補給を含んだ値
-    if (isBlessingFloor(floor)) takeOneBlessing() // 幕主のあとに祝福を1つ（深度10/20）
+    if (isBlessingFloor(floor)) takeOneBlessing() // 幕主のあとに祝福を1つ（深度10/20/30）
     if (floor < FLOORS.length) {
       // 採録の3つの行為（PHASE2.md §2.8）。ソルバーの規則は「枠が埋まるまでは採るのが一番強い」を前提に、
       //   枠が埋まっている & 合成できる → 合成（捨てずに済み、枠も1つ空く）

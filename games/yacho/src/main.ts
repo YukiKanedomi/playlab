@@ -1277,7 +1277,8 @@ async function boot() {
   }
 
   /**
-   * 祝福をひとつ受ける画面（PHASE2.md §3）。ラン開始時と、深度10/20の幕主を仕留めた後に開く。
+   * 祝福をひとつ受ける画面（PHASE2.md §3）。深度10/20/30の幕主を仕留めた後に開く
+   * （開始時の祝福は廃止＝PHASE2.md「祝福の回数と時機」。ランは潜るだけで始まる）。
    * **利点（祝福）と代償（呪い）を同じ大きさで並べる**のがこの画面の要件で、隠しデメリットは作らない。
    * ビジュアルの方向が決まるまでの繋ぎなので、採録画面の作法（暗幕・紙色の面・下部の確定ボタン）を
    * そのまま踏襲した最小限にとどめる（凝らない。あとで採録画面ごと作り直す前提）。
@@ -1403,11 +1404,9 @@ async function boot() {
     playRoot.visible = true
     playRoot.removeAllListeners()
     playRoot.removeChildren().forEach((c) => c.destroy({ children: true }))
-    // 祝福はランの規則（灯・補給・層開始の盤面）を書き換えるので、決めてから最初の盤面を組む
-    showBlessingPanel(() => {
-      buildFloorScene(1)
-      ensureBgm(themeFloorId(1))
-    })
+    // ランは潜るだけで始まる。祝福は深度10/20/30の幕主後（PHASE2.md「祝福の回数と時機」）
+    buildFloorScene(1)
+    ensureBgm(themeFloorId(1))
   }
 
   const buildFloorScene = (floor: number) => {
@@ -2483,9 +2482,8 @@ async function boot() {
       // ボス層クリア＝ラン勝利（ROGUE.md §6）。深度20/30は層が増えたときにそのまま繋がる
       const lastFloor = floor >= FLOORS.length
       const next = lastFloor ? () => showRunResult(true) : showFloorRecordBand
-      // 幕主を仕留めた者に祝福を1つ（PHASE2.md §3。深度10/20）。
+      // 幕主を仕留めた者に祝福を1つ（PHASE2.md「祝福の回数と時機」。深度10/20/30）。
       // ただし最終層はここでランが終わるので、受けた祝福が一度も働かない＝選ばせない
-      // （30層化して深度10が最終層でなくなれば、この条件は自然に外れて祝福が出る）
       if (isBlessingFloor(floor) && !lastFloor) showBlessingPanel(next)
       else next()
     }
