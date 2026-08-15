@@ -1,0 +1,85 @@
+A naturalist's field-note page from an expedition journal: one undescribed
+cave animal drawn as an observational study on aged paper. At least forty
+percent of the page is bare paper. The animal is a flattened salamander-like
+tetrapod, about the length of a human forearm, wedge-shaped and pressed flat
+from back to belly, hardest at the head and softer toward the tail, with a
+short triangular shovel-shaped tail. Exactly one organ system is grafted
+from another group: the forelimbs alone are enormous crustacean-style
+digging shovels, one and a half times wider than the body, their rims
+chalky and their tips worn and chipped. The hind limbs are reduced and
+short — front and rear limbs are shaped completely differently because they
+do different jobs. It has no eyes: a thin translucent membrane is stretched
+where the sockets would be, with a vestigial dark eyespot faintly showing
+through from beneath. Two stiff sensory whiskers project forward from the
+sides of the mouth, soft and swollen only in the last few centimetres. The
+mouth is on the underside of the head, invisible from above, toothless,
+with two keratin rasping plates inside. Vent pores run from the crown down
+the back — four pairs on the left and three on the right, counted
+differently on each side while the outer silhouette stays bilaterally
+symmetric.
+
+Three textures coexist on the one body: dry chalky calcareous armour with
+scratch marks, chips and healed old scars over the head and forelimbs; a
+wet mucous membrane holding a thin film of water over the rear body; and a
+single row of very short cilia along the seam between them. It is drawn
+mid-action, low to the ground with its forelimbs planted and both whiskers
+touching the floor as it measures — never in a neutral upright display
+pose. Rock dust is packed into its skin folds and a fan of pale powder has
+settled on the ground beneath it.
+
+Colour: a desaturated rock-dust body from #9A8E7C to #7C7264 at about 19
+percent saturation, shadows pushed to blue-green #4A5A55, highlights in
+aged-paper cream #E3D6B8 rather than white and covering under a tenth of
+the surface, a single oxidised rust accent #A8613C around the vent rims
+covering under three percent of the surface. The animal emits no light of
+its own.
+
+Composition: the full body in three-quarter view at the centre, two small
+margin studies of a single organ beside it, a same-scale reference object
+in frame — a gloved human finger, or a fist-sized lump of ore — and a light
+pencil scale bar in the margin. Flat observational lighting. Layout is
+asymmetric and top-heavy, never centred; a single fine warm grey-brown rule
+separates the margin study from the main figure; no boxed frames. The paper
+is #EFE6D4 to #DCCFB6 with visible fibre and a few faded foxing spots, a
+little browner and darker toward the outer edge as old paper fades inward
+from its edge.
+
+Transparent watercolour washes over a fine ink line, on cold-press paper.
+The brightest passages are bare unpainted paper — warm cream, not white —
+and highlights stay between 15 and 22 percent saturation. Saturation peaks
+in the midtones around 28 to 36 percent and falls away toward the light.
+The darkest passage keeps 20 to 35 percent saturation and never drops below
+luminance 22: there is no black and no neutral grey anywhere.
+Shadows leave the hue of the light. Lit surfaces sit in warm ochre around
+hue 35 to 45 degrees, and shadow falls to a single destination chosen for
+the setting: olive around hue 65 to 85 for vegetation, blue-green around
+hue 150 to 170 for wet stone and oxidised metal, slate blue around hue 210
+to 230 for cold interiors.
+The contour is a fine, slightly wobbly warm charcoal line near #2F2922 at
+about 27 percent saturation — a near-neutral warm grey, not a saturated
+brown. It swells on the underside and at overlaps and thins away to nothing
+along the top-lit edge, and pigment pools in a hairline just inside it, no
+wider than the contour itself, so the edge reads darker than the body.
+Every form carries two kinds of edge at once: a hard dry edge where a wash
+stops abruptly against the ink line, and one or two soft wet-in-wet blooms
+inside the form.
+The tooth of the cold-press paper and the granulation of the pigment stay
+visible across every flat area, interface panels included; no surface is
+perfectly smooth.
+Where no wash is laid, darkening is done by drawn line: fine parallel
+hatching and stipple in recesses and under overhangs.
+
+Avoid: airbrushed continuous gradients and smooth digital shading; a
+uniform drop-shadow effect; a continuous bevel-and-specular metal render;
+additive gaussian bloom or a glow halo around light sources; blur, fog or
+depth-of-field used to push things back; pure black #000000 and pure white
+#FFFFFF; saturated highlights above 50 percent saturation; a saturated
+brown contour; uniform-width outline strokes; rounded-rectangle cards with
+even padding and an even gold hairline; dotted underlines; perfectly
+mirrored ornament and evenly spaced rivets; a flawless untouched surface;
+rainbow or violet gradients; lens flare, rim light and dramatic backlight;
+emoji; any lettering, numerals, logos or name plates.
+
+Output: one page, portrait, roughly 3 to 4 in aspect. No text, no
+handwriting, no captions, no name plate, no scale numbers — all lettering
+is composited later in code.

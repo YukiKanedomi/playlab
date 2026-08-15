@@ -133,7 +133,8 @@ export class BoardView {
   private moveTouched = new WeakSet<object>() // この手でsnap済みの駒（1手内の二重snap＝自分のトゥイーン破壊を防ぐ）
   private timelineEndAbs = 0 // 並走中の全タイムラインの終端（tween内部時計 now() 基準。修正2）。終端reconcileは最長の尻尾に合わせる
   // ---- アイドルヒント（RM/Candy式・控えめ） ----
-  private hintSprites: Sprite[] = [] // 現在パルス中のスプライト（clearHintで確実に止めるため保持）
+  /** 現在パルス中の駒と復帰先（clearHintで位置・スケールを確実に定位置へ戻すため保持） */
+  private hintSprites: { sp: Sprite; base: number; hx: number; hy: number }[] = []
   private hintGlows: Graphics[] = [] // 駒の下の光輪（clearHintで破棄）
 
   // ---- ローグライク拡張（ROGUE.md §5）：敵・環境オーバーレイの帳簿 ----
@@ -198,6 +199,14 @@ export class BoardView {
       this.overFxLayer,
       this.uiFxLayer,
     )
+    // 駒レイヤーだけ盤矩形でマスクする（2026-08-15 重なり調査）：補充の待機列は盤の上空に並ぶ設計に
+    // したので、枠の外では見えず「枠の奥から降ってくる」ことにする（王道3マッチの標準）。
+    // 破片・飛翔・数字は over/uiFx レイヤーなのでマスクの影響を受けない。左右と下は着地バウンス・
+    // 潰れの食み出しぶんだけ余裕を持たせる
+    const pieceMask = new Graphics()
+    pieceMask.rect(-this.S * 0.3, -this.S * 0.06, W * this.S + this.S * 0.6, H * this.S + this.S * 0.4).fill(0xffffff)
+    this.root.addChild(pieceMask)
+    this.pieceLayer.mask = pieceMask
     this.drawStatic()
     this.syncAll()
   }
@@ -1762,34 +1771,49 @@ export class BoardView {
     return now() >= this.timelineEndAbs
   }
 
-  /** アイドルヒント：対象2駒を1.0→1.10→1.0で2回パルス＋駒の下に灯色の淡い光輪（計600ms、'fx'チャンネル・音なし）。
-   *  帳簿に無い/destroy済みの駒は黙って無視する（消えかけの駒を揺らして事故る方が悪い）。
-   *  1.06＋揺れのみでは気づかれなかった（2026-08-15 オーナー「もうちょいわかりやすくてもいい」）ため光輪を足した */
+  /** アイドルヒント（RM式）：対象2駒が**入れ替える方向へ寄って戻る**（0.11S、160ms×往復×2）＋
+   *  拡大1.08＋駒の下に灯色の光輪。'fx'チャンネル・音なし。RMのヒントは駒自身が交換方向へずれる
+   *  シマーで「どの手か」だけでなく「どう動かすか」まで伝える——揺れ/光だけの旧実装より一段説明的
+   *  （2026-08-15 オーナー「もう少しアニメーションを使ってるイメージ」への対応）。
+   *  帳簿に無い/destroy済みの駒は黙って無視する（消えかけの駒を揺らして事故る方が悪い） */
   showHint(a: XY, b: XY): void {
     this.clearHint()
-    for (const p of [a, b]) {
+    const pair: [XY, XY][] = [
+      [a, b],
+      [b, a],
+    ]
+    for (const [p, toward] of pair) {
       const sp = this.sprites.get(this.key(p.x, p.y))
       if (!sp || sp.destroyed) continue
       const base = this.bs(sp)
-      this.hintSprites.push(sp)
+      const hx = this.px(p.x)
+      const hy = this.px(p.y)
+      // 交換相手の方向へ寄る変位（0.11S＝1マスの1割強。読めるが動きすぎない）
+      const nx = hx + Math.sign(this.px(toward.x) - hx) * this.S * 0.11
+      const ny = hy + Math.sign(this.px(toward.y) - hy) * this.S * 0.11
+      this.hintSprites.push({ sp, base, hx, hy })
       // 光輪（駒の下・underFxLayer）。灯と同じ真鍮系の色＝「おすすめ」の色をこれで固定する
       const glow = new Graphics()
       glow.circle(0, 0, this.S * 0.56).fill({ color: 0xf1d189, alpha: 0.5 })
       glow.circle(0, 0, this.S * 0.44).fill({ color: 0xfff3cf, alpha: 0.45 })
-      glow.position.set(this.px(p.x), this.px(p.y))
+      glow.position.set(hx, hy)
       glow.alpha = 0
       this.underFxLayer.addChild(glow)
       this.hintGlows.push(glow)
       const pulse = (times: number) => {
         if (sp.destroyed) return
-        tween(sp.scale, { x: base * 1.1, y: base * 1.1 }, 150, { ease: easeOutCubic, channel: 'fx' })
-        if (!glow.destroyed) tween(glow, { alpha: 1 }, 150, { ease: easeOutCubic, channel: 'fx' })
+        tween(sp.scale, { x: base * 1.08, y: base * 1.08 }, 160, { ease: easeOutCubic, channel: 'fx' })
+        tween(sp.position, { x: nx, y: ny }, 160, { ease: easeOutCubic, channel: 'fx' })
+        if (!glow.destroyed) tween(glow, { alpha: 1 }, 160, { ease: easeOutCubic, channel: 'fx' })
         delay(
-          150,
+          160,
           () => {
-            if (!sp.destroyed) tween(sp.scale, { x: base, y: base }, 150, { ease: easeOutCubic, channel: 'fx' })
-            if (!glow.destroyed) tween(glow, { alpha: 0 }, 150, { ease: easeOutCubic, channel: 'fx' })
-            if (times > 1) delay(150, () => pulse(times - 1), 'fx')
+            if (!sp.destroyed) {
+              tween(sp.scale, { x: base, y: base }, 160, { ease: easeOutCubic, channel: 'fx' })
+              tween(sp.position, { x: hx, y: hy }, 160, { ease: easeOutCubic, channel: 'fx' })
+            }
+            if (!glow.destroyed) tween(glow, { alpha: 0 }, 160, { ease: easeOutCubic, channel: 'fx' })
+            if (times > 1) delay(200, () => pulse(times - 1), 'fx')
           },
           'fx',
         )
@@ -1798,13 +1822,14 @@ export class BoardView {
     }
   }
 
-  /** アイドルヒントの揺れを止め、基準スケールへ戻す */
+  /** アイドルヒントの動きを止め、定位置・基準スケールへ戻す */
   clearHint(): void {
-    for (const sp of this.hintSprites) {
-      if (sp.destroyed) continue
-      cancel(sp.scale)
-      const base = this.bs(sp)
-      sp.scale.set(base)
+    for (const e of this.hintSprites) {
+      if (e.sp.destroyed) continue
+      cancel(e.sp.scale)
+      cancel(e.sp.position)
+      e.sp.scale.set(e.base)
+      e.sp.position.set(e.hx, e.hy)
     }
     this.hintSprites = []
     for (const g of this.hintGlows) {
@@ -1834,6 +1859,9 @@ export class BoardView {
     let disruptLabelCount = 0 // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
     let goalFxCount = 0 // 目標収集：この手で何本目の飛翔か（破片4件・飛翔6件で打ち止める）
     const hitstop = new HitstopBudget() // 600ms窓で最大80msに制限するヒットストップ予算（codex_consult [D]-2/4）
+    // 補充のトレイン（2026-08-15）：同じ拍・同じ列の補充駒を「上空に1マス間隔で整列→一斉落下」させる
+    // ための収集器。キーは `${拍t}|${列x}`。実際の湧き位置・落下tweenはイベント走査の後で組む
+    const refillTrains = new Map<string, { sp: Sprite; row: number; col: number; t: number }[]>()
     const swarmChain = this.classifySwarmChain(evs) // swarm連鎖ドミノの段階付け（codex_consult [D]-4）
     // 10連鎖以上を含む手は「暴走時」扱いにし、粒子の同時上限を80→120へ緩める（codex_consult [D]-6）
     this.rampageActive = evs.some((ev) => ev.t === 'match' && ev.chain >= 10)
@@ -2078,15 +2106,18 @@ export class BoardView {
             break
           }
           this.snapDoomedAt(k) // 修正3：通常補充でも、このセルにポップ待ち駒が残っていたら先に畳む
+          // 補充の駒はここでは湧き位置を決めない。同じ列・同じ拍の補充を「上空に1マス間隔で整列した
+          // 剛体トレイン」として一斉に落とすため、いったん記録だけして play() 末尾で位置と落下を組む
+          // （2026-08-15 重なり調査：旧実装は全駒が同一点 y=-0.8S に湧き、行あたり14msずらしの個別落下で
+          // 列内の密着・追い越し・湧き点のスタックが起きていた＝「補充の駒がきて重なる」の正体）。
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
-          sp.position.y = -this.S * 0.8
+          sp.position.y = -this.S * 1.2 // 仮置き（マスクの外）。実位置は末尾のトレイン組みで決まる
           sp.alpha = 0
-          tween(sp, { alpha: 1 }, 80, { delay: t + T.pop })
-          // 補充も落下と同じ加速。ただし着地バウンスは付けない（画面上端から次々降ってくるので跳ねると騒がしい）
-          tween(sp.position, { y: this.px(e.at.y) }, Math.min(FALL_MAX, FALL_COEF * Math.sqrt(e.at.y + 1)), {
-            delay: t + T.pop + e.at.y * 14,
-            ease: easeInQuad,
-          })
+          const trainKey = `${t}|${e.at.x}`
+          const train = refillTrains.get(trainKey)
+          const item = { sp, row: e.at.y, col: e.at.x, t }
+          if (train) train.push(item)
+          else refillTrains.set(trainKey, [item])
           break
         }
         case 'spore-born': {
@@ -2338,6 +2369,23 @@ export class BoardView {
         case 'floor-clear':
         case 'run-over':
           break
+      }
+    }
+    // 補充トレインの組み立て（case 'refill' の収集の続き）：同じ拍・同じ列の補充駒を、着地行の並びを
+    // そのまま保った1マス間隔で盤の上空に整列させ、同じ遅延・同じ所要時間で一斉に落とす（剛体トレイン）。
+    // 全駒が同速・同時刻で動くので、列内の密着・追い越し・湧き点のスタックが構造的に起きない。
+    // 上空の待機列は pieceLayer のマスクで隠れ、「枠の奥から降ってくる」に見える（王道3マッチの標準）
+    for (const train of refillTrains.values()) {
+      train.sort((a, b) => a.row - b.row)
+      const maxRow = train[train.length - 1].row
+      const dropRows = maxRow + 1.8 // 最下段の駒の落下距離（マス数）。全駒同じだけ落ちる＝間隔が保たれる
+      const dur = Math.min(FALL_MAX, FALL_COEF * Math.sqrt(dropRows))
+      for (const it of train) {
+        const colStagger = ((it.col * 5) % 4) * 9 // fall と同じ列ごとの決定的スタッガー
+        const startAt = it.t + T.pop + colStagger
+        it.sp.position.y = this.px(it.row) - dropRows * this.S
+        tween(it.sp, { alpha: 1 }, 80, { delay: startAt })
+        tween(it.sp.position, { y: this.px(it.row) }, dur, { delay: startAt, ease: easeInQuad })
       }
     }
     const total = t + T.pop + T.fall

@@ -2544,18 +2544,25 @@ async function boot() {
       }
       const cleared = evs.some((e) => e.t === 'floor-clear')
       const over = evs.some((e) => e.t === 'run-over')
+      // 決着の画面は**盤面の演出が本当に終わってから**出す（2026-08-15 オーナー「連鎖が続いているのに
+      // 勝利ページが出てくる」）。旧実装の Math.min(dur, 1200) は長い連鎖・勝利連射の途中で被せていた。
+      // dur は「この手」のタイムラインだが、並行続行では前の手の尻尾も残りうるので isQuiet() で締める
+      const whenBoardQuiet = (fn: () => void) => {
+        const poll = () => {
+          if (!alive()) return
+          if (view.isQuiet()) fn()
+          else tw.delay(180, poll)
+        }
+        tw.delay(dur + 250, poll)
+      }
       if (cleared) {
         inputLocked = true
-        tw.delay(Math.min(dur, 1200), () => {
-          if (alive()) onFloorClear()
-        })
+        whenBoardQuiet(onFloorClear)
       } else if (over) {
         inputLocked = true
         // 灯が尽きた層も推移の最後の点として残す（負の値は「尽きた」と同じ事実なので0に丸める）
         lightSeries.push({ floor, light: Math.max(0, run.oxygen) })
-        tw.delay(Math.min(dur, 900), () => {
-          if (alive()) showRunResult(false)
-        })
+        whenBoardQuiet(() => showRunResult(false))
       }
     }
 

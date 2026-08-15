@@ -57,8 +57,13 @@ const spawn = (kind: EnemyKind, p: XY): FloorEnemySpawn => ({ kind, at: p })
 const FLAT: string[] = Array(8).fill('........')
 /** 敵の殲滅目標。編成をそのまま撃破数にする（層10ではボス1体＝クリア条件と一致） */
 const wipeGoal = (es: FloorEnemySpawn[]): Goal => ({ type: 'enemy-kill', count: es.length })
-/** 植物系（色1と色4の両方が進む）の収集目標 */
-const plantGoal = (n: number): Goal => ({ type: 'system', system: 'plant', count: n })
+/** 植物系（色1と色4の両方が進む）の収集目標。
+ *  PLANT_GOAL_SCALE：2026-08-15 オーナー「連鎖しやすくなった代わりに目標の値を高くして、一つの層で
+ *  もう少し遊べるように」。収集系で唯一**在庫が無限**の植物課目だけを一括で引き上げる（蔦苔・匣・苔石・
+ *  光胞子は盤面在庫に縛られるため、上げるならレイアウトごと変える必要がある）。定義中の数字は
+ *  傾斜1.0時代の較正値のまま残す＝戻すときはこの係数を1にするだけ */
+const PLANT_GOAL_SCALE = 1.5
+const plantGoal = (n: number): Goal => ({ type: 'system', system: 'plant', count: Math.round(n * PLANT_GOAL_SCALE) })
 /** 光胞子の搬送（第二幕の新課目）。巣灯を叩いて生まれた胞子が上端まで浮上すると1進む */
 const sporeGoal = (n: number): Goal => ({ type: 'spore', count: n })
 /** 苔石の除去（第三幕の新課目）。'K' は2回叩かないと壊れないが、進むのは壊れた個体数 */
