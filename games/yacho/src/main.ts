@@ -840,6 +840,9 @@ async function boot() {
     c.hitArea = { contains: (x: number, y: number) => x >= -width / 2 && x <= width / 2 && y >= -h / 2 && y <= h / 2 }
     return c
   }
+  // 小ボタン（採録帖タブ等）のラベルサイズ（§3.5：小ボタンのラベルは12〜14px）。
+  // 盤面ドックとドラフト側の2箇所で同じ値を使う（P2-3「同じボタン素材、同じラベルサイズ」）
+  const SMALL_BTN_LABEL = Math.max(12, Math.min(14, fs(0.032)))
 
   // =============== 拠点シーン（旧・縦断面図マップを流用） ===============
   const MAP_H = vh * 4.2 // ノード密度を上げる（背景の縦解像度と両立する上限）
@@ -1130,13 +1133,14 @@ async function boot() {
     const fn = fieldNote
     fieldNote = null
     inputLocked = fieldNotePrevInputLocked
-    tw.tween(fn.panel.position, { y: vh }, 180, {
+    // P2-3：開くときの逆再生＝12px下降＋フェードで閉じる（全面スライドで消さない）
+    tw.tween(fn.panel.position, { y: fn.baseY + 12 }, 160, {
       ease: tw.easeInCubic,
       onDone: () => {
         if (!fn.root.destroyed) fn.root.destroy({ children: true })
       },
     })
-    tw.tween(fn.root, { alpha: 0 }, 180)
+    tw.tween(fn.root, { alpha: 0 }, 160)
   }
 
   /** 強化/特殊駒/敵/用語の本文を、シート幅に合わせてレイアウトする（[C]表：各表面共通の描画部） */
@@ -1156,13 +1160,15 @@ async function boot() {
     const contentX = padX + labelW
     const rowGap = bodyFont * 0.9
     const usedTerms = new Set<string>() // 「1つの本文で同じ用語は最初の1回だけ」＝シート1枚を1本文として共有
+    // P2-3：革の地に置いた白文字ではなく古紙(paper)の地に墨(ink)文字。用語リンクは brass（§3.2）
     let y = 0
     for (const b of blocks) {
       if (b.kind === 'text') {
-        y = layoutRichText(host, measurer, tokenizeRich(b.text, usedTerms), padX, y, width - padX * 2, bodyFont, 0xf4e8cf, 0xd8b855, onTermTap)
+        y = layoutRichText(host, measurer, tokenizeRich(b.text, usedTerms), padX, y, width - padX * 2, bodyFont, UI.ink, UI.brass, onTermTap)
         y += rowGap
       } else if (b.kind === 'row') {
-        const label = new Text({ text: b.label, style: { fill: 0xcbb98a, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
+        const label = new Text({ text: b.label, style: { fill: UI.ink, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
+        label.alpha = 0.72
         label.position.set(padX, y)
         host.addChild(label)
         const contentBottom = layoutRichText(
@@ -1173,8 +1179,8 @@ async function boot() {
           y,
           width - padX - contentX,
           bodyFont,
-          0xf4e8cf,
-          0xd8b855,
+          UI.ink,
+          UI.brass,
           onTermTap,
         )
         y = Math.max(y + label.height, contentBottom) + rowGap
@@ -1185,7 +1191,7 @@ async function boot() {
           icon.position.set(padX + iconSize / 2, y + iconSize / 2)
           host.addChild(icon)
           const titleX = padX + iconSize + fs(0.02)
-          const title = new Text({ text: item.title, style: { fill: 0xf4e8cf, fontSize: bodyFont * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+          const title = new Text({ text: item.title, style: { fill: UI.ink, fontSize: bodyFont * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
           title.position.set(titleX, y)
           host.addChild(title)
           const textY = y + title.height + fs(0.006)
@@ -1197,8 +1203,8 @@ async function boot() {
             textY,
             width - padX - titleX,
             bodyFont,
-            0xe8d9b0,
-            0xd8b855,
+            UI.ink,
+            UI.brass,
             onTermTap,
           )
           y = Math.max(y + iconSize, textBottom) + rowGap
@@ -1227,12 +1233,12 @@ async function boot() {
 
     const root = new Container()
     const scrim = new Graphics()
-    scrim.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 1 })
+    scrim.rect(0, 0, vw, vh).fill({ color: UI.abyss, alpha: 1 })
     scrim.alpha = 0
     scrim.eventMode = 'static'
     scrim.on('pointertap', () => closeFieldNote())
     root.addChild(scrim)
-    tw.tween(scrim, { alpha: 0.42 }, 160)
+    tw.tween(scrim, { alpha: 0.58 }, 160) // P2-3：革表紙ボトムシート共通仕様（§2.6/§4.3）＝暗幕0.58
 
     const panelW = vw
     const padX = Math.max(24, vw * 0.05)
@@ -1253,21 +1259,24 @@ async function boot() {
     const sheetH = Math.min(sheetMax, Math.max(sheetMin, needed))
     const viewH = Math.max(fs(0.1), sheetH - headerH - padTop - padBottom)
 
-    // 背景：コード描画の地＋brass枠＋四隅の小さな鋲飾り（[C]：一枚絵の引き伸ばし禁止への対応）
+    // 背景：P2-3（§2.6/§4.3）共通「革表紙＋古紙」。上端8〜12pxだけ革の見返しを見せ、残りは古紙の紙面にする
     const corner = fs(0.032)
+    const leatherTopH = Math.max(10, Math.min(14, fs(0.028)))
     const bg = new Graphics()
-    bg.roundRect(0, 0, panelW, sheetH, corner).fill({ color: 0x241a10, alpha: 0.98 })
-    bg.roundRect(1.5, 1.5, panelW - 3, sheetH - 3, corner).stroke({ width: 2.4, color: UI.brass, alpha: 0.9 })
-    panel.addChild(bg)
+    bg.roundRect(0, 0, panelW, sheetH, corner).fill({ color: UI.leather, alpha: 0.98 })
+    const paperBg = new Graphics()
+    paperBg.roundRect(0, leatherTopH, panelW, sheetH - leatherTopH, corner * 0.6).fill({ color: UI.paper, alpha: 0.98 })
+    paperBg.roundRect(1, leatherTopH + 1, panelW - 2, sheetH - leatherTopH - 2, corner * 0.6).stroke({ width: 1.5, color: UI.ink, alpha: 0.3 }) // §3.4：紙の外周線は1本だけ
+    panel.addChild(bg, paperBg)
     const studR = fs(0.007)
     for (const sx of [corner * 0.7, panelW - corner * 0.7]) {
       const stud = new Graphics()
-      stud.circle(sx, corner * 0.7, studR).fill({ color: UI.brass, alpha: 0.85 })
+      stud.circle(sx, leatherTopH * 0.55, studR).fill({ color: UI.brass, alpha: 0.85 })
       panel.addChild(stud)
     }
-    // つまみ（掴んで下スワイプできることを示す短いバー）
+    // つまみ（掴んで下スワイプできることを示す短いバー。革の見返しの上に置く）
     const grabber = new Graphics()
-    grabber.roundRect(panelW / 2 - fs(0.06), fs(0.01), fs(0.12), fs(0.006), fs(0.003)).fill({ color: UI.brass, alpha: 0.6 })
+    grabber.roundRect(panelW / 2 - fs(0.06), leatherTopH * 0.42, fs(0.12), fs(0.006), fs(0.003)).fill({ color: UI.brass, alpha: 0.7 })
     panel.addChild(grabber)
 
     // ヘッダー：アイコン＋名前＋種別ラベル、右上×
@@ -1276,20 +1285,22 @@ async function boot() {
     panel.addChild(icon)
     const titleT = new Text({
       text: entry.title,
-      style: { fill: 0xf4e8cf, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
+      style: { fill: UI.ink, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
     })
     titleT.position.set(padX + headerIconSize + fs(0.025), padTop + headerIconSize * 0.1)
     panel.addChild(titleT)
-    const kindT = new Text({ text: entry.kindLabel, style: { fill: 0xcbb98a, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' } })
+    const kindT = new Text({ text: entry.kindLabel, style: { fill: UI.ink, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' } })
+    kindT.alpha = 0.72
     kindT.position.set(padX + headerIconSize + fs(0.025), padTop + headerIconSize * 0.1 + titleT.height + fs(0.004))
     panel.addChild(kindT)
-    const closeR = fs(0.026)
+    // 閉じるタブ：革の見返しに重ねて置く固定の「真鍮タブ」（P2-3）。ヒット領域44×44px以上を確保（§3.5/§6）
+    const closeR = Math.max(15, fs(0.026))
     const closeBtn = new Container()
-    closeBtn.position.set(panelW - padX - closeR, padTop + closeR * 0.7)
+    closeBtn.position.set(panelW - padX - closeR, leatherTopH)
     const closeBg = new Graphics()
-    closeBg.circle(0, 0, closeR).fill({ color: 0x2a1c10, alpha: 0.85 }).stroke({ width: 1.5, color: UI.brass })
+    closeBg.circle(0, 0, closeR).fill({ color: UI.leather, alpha: 0.95 }).stroke({ width: 1.5, color: UI.brass })
     closeBtn.addChild(closeBg)
-    const closeX = new Text({ text: '×', style: { fill: 0xf4e8cf, fontSize: closeR * 1.1, fontFamily: FONT, fontWeight: 'bold' } })
+    const closeX = new Text({ text: '×', style: { fill: UI.paper, fontSize: closeR * 1.1, fontFamily: FONT, fontWeight: 'bold' } })
     closeX.anchor.set(0.5)
     closeBtn.addChild(closeX)
     closeBtn.eventMode = 'static'
@@ -1316,8 +1327,11 @@ async function boot() {
     playRoot.addChild(root) // 常に最後尾＝最前面（ドラフトパネルより上に出す）
 
     const baseY = vh - sheetH
-    panel.position.set(0, vh)
+    // P2-3：全面スライドではなく12px上昇＋フェードで開く（showFloorRecordBandと同じ作法）
+    panel.position.set(0, baseY + 12)
+    panel.alpha = 0
     tw.tween(panel.position, { y: baseY }, 200, { ease: tw.easeOutCubic })
+    tw.tween(panel, { alpha: 1 }, 200)
 
     const state = {
       key: entry.noteKey,
@@ -1389,60 +1403,79 @@ async function boot() {
     const padX = Math.max(20, vw * 0.05)
 
     const panel = new Container()
+    // P2-1（§2.7/§4.3）：完全黒(alpha1)を廃止。直前のプレイ背景（playRootに残ったまま）を abyss 0.62 で沈めるだけにする
     const dimG = new Graphics()
-    dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 1 }) // 背面の盤面を透かさない
+    dimG.rect(0, 0, vw, vh).fill({ color: UI.abyss, alpha: 0.62 })
     dimG.eventMode = 'static'
     panel.addChild(dimG)
     playRoot.addChild(panel)
 
     const title = new Text({
       text: '祝福をひとつ受ける',
-      style: { fill: 0xf4e8cf, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
+      style: { fill: UI.paper, fontSize: fs(0.036), fontFamily: FONT, fontWeight: 'bold' },
     })
     title.anchor.set(0, 0.5)
-    title.position.set(padX, vh * 0.05)
+    // ランHUD（深度バッジ／油槽／メニュー、hudTop〜hudBottom＝vh*0.03〜0.12）と重なっていたため、その下へ移す
+    title.position.set(padX, vh * 0.15)
     panel.addChild(title)
 
     const sub = new Text({
       text: `${run.blessings.length + 1}つめ　利点と代償は対になっている`,
-      style: { fill: 0x9a8968, fontSize: fs(0.024), fontFamily: FONT },
+      style: { fill: 0xcbb98a, fontSize: fs(0.024), fontFamily: FONT },
     })
     sub.anchor.set(0, 0.5)
-    sub.position.set(padX, vh * 0.095)
+    sub.position.set(padX, vh * 0.183)
     panel.addChild(sub)
 
-    const rowW = Math.min(vw - padX * 2, vh * 0.62 - 32)
-    const rowX = (vw - rowW) / 2
-    const rowH = vh * 0.19
-    const rowGap = vh * 0.02
-    const rowTop = vh * 0.14
-    const inset = Math.max(rowW * 0.05, 12)
+    // P2-1：3枚の独立クリームカードを廃止し、blessing_folio 1枚の見開き上へ3本の契約欄を描く
+    const folioTex = spriteTexture('blessing_folio')
+    const areaTop = vh * 0.205
+    const areaBottom = vh * 0.87
+    const S = Math.min(vw * 0.94, areaBottom - areaTop) // 見開きは正方形素材。縦が足りなければ縦基準に落ちる
+    const px0 = (vw - S) / 2
+    const py0 = areaTop + Math.max(0, (areaBottom - areaTop - S) / 2)
+    if (folioTex) {
+      const sp = new Sprite(folioTex)
+      sp.position.set(px0, py0)
+      sp.width = S
+      sp.height = S
+      panel.addChild(sp)
+    } else {
+      const g = new Graphics()
+      g.roundRect(px0, py0, S, S, S * 0.02).fill({ color: UI.paper, alpha: 0.96 }).stroke({ width: 3, color: UI.leather })
+      panel.addChild(g)
+    }
+
+    // 3行の帯（折り紐・留め具を避けた見開き内の安全域）
+    const rowTopPad = S * 0.055
+    const rowBottomPad = S * 0.06
+    const rowGapV = S * 0.02
+    const rowH = (S - rowTopPad - rowBottomPad - rowGapV * 2) / 3
+    const rowTop = (i: number) => py0 + rowTopPad + i * (rowH + rowGapV)
+    const sealR = Math.max(fs(0.024), rowH * 0.17)
+    // blessing_folio.png（1024×1024）の焼き込み円を実測した中心比率。rowTop/rowHの均等割りとは微妙にズレるため、
+    // 印はここから直接置く（そうしないと素材の円とコード描画の円が二重に見える）
+    const sealCenterYFrac = [0.181, 0.474, 0.767]
+    const sealXFracBoon = 0.142
+    const sealXFracCurse = 0.855
+    const textX0 = px0 + S * 0.21
+    const textX1 = px0 + S * 0.79
+    const textW = textX1 - textX0
+
     let selected: number | null = null
-    const rowBgs: Graphics[] = []
+    const rowLifts: Container[] = []
+    const clasps: Graphics[] = []
 
     const btnHost = new Container()
     panel.addChild(btnHost)
     const renderBtn = () => {
       btnHost.removeChildren().forEach((c) => c.destroy({ children: true }))
-      const btnW = Math.min(rowW, vw * 0.7)
-      const btnH = vh * 0.062
       const enabled = selected !== null
-      const btn = new Container()
-      const bg = new Graphics()
-      if (enabled) bg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill(UI.wood).stroke({ width: 2.5, color: UI.brass })
-      else bg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill({ color: 0x33291c, alpha: 0.75 }).stroke({ width: 2, color: 0x6b5f45 })
-      btn.addChild(bg)
-      const label = new Text({
-        text: enabled ? 'この祝福を受ける' : '祝福を選ぶ',
-        style: { fill: enabled ? 0xf4e8cf : 0x8a8270, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
-      })
-      label.anchor.set(0.5)
-      btn.addChild(label)
-      btn.position.set(vw / 2, vh * 0.93)
+      // P2-1：確定ボタンは共通主要ボタン（makePrimaryButton）を使い、選択欄の直下へ寄せる
+      const btn = makePrimaryButton(enabled ? 'この祝福を受ける' : '祝福を選ぶ', Math.min(S * 0.76, vw * 0.72), { disabled: !enabled })
+      const belowY = enabled ? rowTop(selected!) + rowH + fs(0.032) : py0 + S + fs(0.032)
+      btn.position.set(vw / 2, Math.min(belowY, vh * 0.94))
       if (enabled) {
-        btn.eventMode = 'static'
-        btn.cursor = 'pointer'
-        btn.hitArea = { contains: (x: number, y: number) => x >= -btnW / 2 && x <= btnW / 2 && y >= -btnH / 2 && y <= btnH / 2 }
         btn.on('pointertap', () => {
           takeBlessing(run, options[selected!].id)
           panel.destroy({ children: true })
@@ -1452,42 +1485,69 @@ async function boot() {
       btnHost.addChild(btn)
     }
 
-    // 帯の中は羊皮紙なので墨色で書く。長い行は折り返さず縮める（showFloorRecordBand と同じ作法）
-    const mk = (parent: Container, text: string, size: number, y: number, fill: number, bold: boolean) => {
-      const t = new Text({ text, style: { fill, fontSize: size, fontFamily: FONT, fontWeight: bold ? 'bold' : 'normal' } })
-      t.anchor.set(0, 0.5)
-      t.position.set(inset, y)
-      const maxW = rowW - inset * 2
-      if (t.width > maxW) t.scale.set(maxW / t.width)
-      parent.addChild(t)
-    }
-
     options.forEach((b, i) => {
-      const row = new Container()
-      row.position.set(rowX, rowTop + i * (rowH + rowGap))
-      const bg = new Graphics()
-      bg.roundRect(0, 0, rowW, rowH, rowH * 0.12).fill({ color: UI.paper, alpha: 0.96 }).stroke({ width: 2, color: UI.brass, alpha: 0.7 })
-      row.addChild(bg)
-      rowBgs.push(bg)
-      mk(row, b.name, fs(0.032), rowH * 0.24, UI.paperInk, true)
-      // 利点と代償は同じ文字の大きさで並べる（PHASE2.md §3。差は色と頭の1字だけ）
-      const lineSize = fs(0.025)
-      mk(row, `祝　${b.boon}`, lineSize, rowH * 0.56, 0x2f6b4f, false)
-      mk(row, `呪　${b.curse}`, lineSize, rowH * 0.82, 0x9c3b2c, false)
-      row.eventMode = 'static'
-      row.cursor = 'pointer'
-      row.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= rowW && y >= 0 && y <= rowH }
-      row.on('pointertap', () => {
+      const lift = new Container()
+      lift.position.set(0, rowTop(i))
+      panel.addChild(lift)
+      rowLifts.push(lift)
+
+      // 左に緑青の「祝」印、右に朱の「呪」印。同じ大きさのコード描画（P2-1：文字色だけの区別をやめる）
+      // 印の座標は素材の焼き込み円の実測中心（sealCenterYFrac等）を使う。lift はrowTop(i)へ位置しているので、
+      // ここではその分を差し引いたローカルyへ変換する
+      const boonX = px0 + S * sealXFracBoon
+      const curseX = px0 + S * sealXFracCurse
+      const sealY = py0 + S * sealCenterYFrac[i] - rowTop(i)
+      const boonSeal = new Graphics()
+      boonSeal.circle(boonX, sealY, sealR).fill({ color: UI.verdigris, alpha: 0.92 }).stroke({ width: 2, color: 0xcfe0d6, alpha: 0.5 })
+      lift.addChild(boonSeal)
+      const boonSealT = new Text({ text: '祝', style: { fill: 0xeaf3ee, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+      boonSealT.anchor.set(0.5)
+      boonSealT.position.set(boonX, sealY)
+      lift.addChild(boonSealT)
+
+      const curseSeal = new Graphics()
+      curseSeal.circle(curseX, sealY, sealR).fill({ color: UI.cinnabar, alpha: 0.92 }).stroke({ width: 2, color: 0xe6c9c2, alpha: 0.5 })
+      lift.addChild(curseSeal)
+      const curseSealT = new Text({ text: '呪', style: { fill: 0xf5e6e0, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+      curseSealT.anchor.set(0.5)
+      curseSealT.position.set(curseX, sealY)
+      lift.addChild(curseSealT)
+
+      // 本文は左揃え（§3.6）。利点と代償は同サイズ・同重量を維持する（色を分けて意味の差を作らない）
+      const nameT = new Text({ text: b.name, style: { fill: UI.ink, fontSize: Math.max(15, fs(0.03)), fontFamily: FONT, fontWeight: 'bold' } })
+      nameT.position.set(textX0, rowH * 0.06)
+      if (nameT.width > textW) nameT.scale.set(textW / nameT.width)
+      lift.addChild(nameT)
+
+      const lineSize = Math.max(13, fs(0.024))
+      const mkLine = (text: string, y: number) => {
+        const t = new Text({ text, style: { fill: UI.ink, fontSize: lineSize, fontFamily: FONT, fontWeight: 'bold' } })
+        t.position.set(textX0, y)
+        if (t.width > textW) t.scale.set(textW / t.width)
+        lift.addChild(t)
+      }
+      mkLine(`祝　${b.boon}`, rowH * 0.42)
+      mkLine(`呪　${b.curse}`, rowH * 0.68)
+
+      // 選択時：真鍮の留め具（本文の下・折り紐の位置＝欄の下端）＋紙の持ち上がり（y-4）。金枠4pxは廃止（P2-1）
+      const clasp = new Graphics()
+      clasp
+        .roundRect(px0 + S / 2 - fs(0.022), rowH - fs(0.013), fs(0.044), fs(0.026), fs(0.007))
+        .fill({ color: UI.brassBright, alpha: 0.95 })
+        .stroke({ width: 1.5, color: 0x5a4018 })
+      clasp.visible = false
+      lift.addChild(clasp)
+      clasps.push(clasp)
+
+      lift.eventMode = 'static'
+      lift.cursor = 'pointer'
+      lift.hitArea = { contains: (x: number, y: number) => x >= px0 && x <= px0 + S && y >= 0 && y <= rowH }
+      lift.on('pointertap', () => {
         selected = selected === i ? null : i // 再タップで解除（採録カードと同じ作法）
-        rowBgs.forEach((g, idx) => {
-          g.clear()
-            .roundRect(0, 0, rowW, rowH, rowH * 0.12)
-            .fill({ color: UI.paper, alpha: idx === selected ? 1 : 0.96 })
-            .stroke({ width: idx === selected ? 4 : 2, color: idx === selected ? 0xf2d98a : UI.brass, alpha: idx === selected ? 0.95 : 0.7 })
-        })
+        rowLifts.forEach((l, idx) => (l.position.y = idx === selected ? rowTop(idx) - 4 : rowTop(idx)))
+        clasps.forEach((c, idx) => (c.visible = idx === selected))
         renderBtn()
       })
-      panel.addChild(row)
     })
 
     renderBtn()
@@ -2238,6 +2298,16 @@ async function boot() {
     const iconSpacing = Math.min(vw * 0.19, iconAreaW / Math.max(1, ownedUpgrades.length))
     const iconR = Math.min(vw * 0.055, iconSpacing * 0.4)
     const iconAreaCenterX = vw * 0.04 + iconAreaW / 2
+    // P2-3（§2.6/§4.3）：所持知見アイコン＋採録帖ボタンを薄い革帯のドックでまとめる（単独浮遊の解消）
+    const dockBand = new Graphics()
+    const dockBandH = Math.max(iconR * 2.2, fs(0.095))
+    const dockBandW = vw * 0.92
+    dockBand
+      .roundRect(-dockBandW / 2, -dockBandH / 2, dockBandW, dockBandH, dockBandH * 0.22)
+      .fill({ color: UI.leather, alpha: 0.5 })
+      .stroke({ width: 1.5, color: UI.brass, alpha: 0.32 })
+    dockBand.position.set(vw / 2, 0) // boosterBar自体はx=0なので、ここで画面中央へ明示的に置く
+    boosterBar.addChild(dockBand) // 最背面：アイコン列・野帳ボタンより先に足す
     // 強化説明・特殊駒・敵・用語は共通「野帳シート」に統合済み（showFieldNote。旧ここにあった個別ポップアップ実装は撤去）
     // 可視化第二波④：強化アイコンの回数条件バッジ（run.progress は並行実装中。無ければ何も描かない）
     type UpgradeProgress = Record<string, { cur: number; max: number }>
@@ -2319,11 +2389,12 @@ async function boot() {
     // 「野帳」ボタン（ビルドドック右端。[C]特殊駒の主導線＝タップで4種＋効果の一覧シート）
     const noteBtn = new Container()
     const noteBtnW = Math.min(dockNoteBtnW, vw * 0.2)
-    const noteBtnH = Math.max(iconR * 2.1, fs(0.09))
+    const noteBtnH = Math.max(44, iconR * 2.1, fs(0.09)) // §3.5：小ボタンの最小ヒット領域44×44px
     const noteBg = new Graphics()
-    noteBg.roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.28).fill({ color: 0x2a1c10, alpha: 0.9 }).stroke({ width: 2, color: UI.brass })
+    noteBg.roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.28).fill({ color: UI.leather, alpha: 0.9 }).stroke({ width: 2, color: UI.brass })
     noteBtn.addChild(noteBg)
-    const noteLabel = new Text({ text: '採録帖', style: { fill: 0xf4e8cf, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' } })
+    // P2-3：ドラフト側の draftNoteBtn と同じラベルサイズ（SMALL_BTN_LABEL）に揃える
+    const noteLabel = new Text({ text: '採録帖', style: { fill: UI.paper, fontSize: SMALL_BTN_LABEL, fontFamily: FONT, fontWeight: 'bold' } })
     noteLabel.anchor.set(0.5)
     noteBtn.addChild(noteLabel)
     noteBtn.position.set(vw * 0.96 - noteBtnW / 2, 0)
@@ -3244,7 +3315,7 @@ async function boot() {
       // ---- 0〜9%：タイトル＋野帳ボタン ----
       const titleY = vh * 0.045
       const noteBtnW = Math.min(vw * 0.22, fs(0.24))
-      const noteBtnH = fs(0.075)
+      const noteBtnH = Math.max(40, fs(0.075)) // §3.5：小ボタンの最小ヒット領域44×44pxへ近づける（0〜9%帯の高さ内で収まる範囲）
       // タイトルと採録帖ボタンが衝突しないよう、最大幅を明示して縮める（P1-4コード変更欄）
       const titleMaxW = vw - padX * 2 - noteBtnW - fs(0.03)
       const title = new Text({
@@ -3258,12 +3329,13 @@ async function boot() {
 
       const draftNoteBtn = new Container()
       const draftNoteBg = new Graphics()
+      // P2-3：盤面ドックの noteBtn と同じ革地・角丸比率・ラベルサイズに揃える（同じボタン素材）
       draftNoteBg
-        .roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.3)
-        .fill({ color: 0x2a1c10, alpha: 0.9 })
+        .roundRect(-noteBtnW / 2, -noteBtnH / 2, noteBtnW, noteBtnH, noteBtnH * 0.28)
+        .fill({ color: UI.leather, alpha: 0.9 })
         .stroke({ width: 2, color: UI.brass })
       draftNoteBtn.addChild(draftNoteBg)
-      const draftNoteLabel = new Text({ text: '採録帖', style: { fill: 0xf4e8cf, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
+      const draftNoteLabel = new Text({ text: '採録帖', style: { fill: UI.paper, fontSize: SMALL_BTN_LABEL, fontFamily: FONT, fontWeight: 'bold' } })
       draftNoteLabel.anchor.set(0.5)
       draftNoteBtn.addChild(draftNoteLabel)
       draftNoteBtn.position.set(vw - padX - noteBtnW / 2, titleY)
@@ -3760,246 +3832,285 @@ async function boot() {
       dim.rect(0, 0, vw, vh).fill({ color: 0x1a130c, alpha: 0.16 })
       panel.addChild(dim)
 
-      const pw = vw * 0.9
-      const panelTex = spriteTexture('ui_panel') ?? spriteTexture('ui_parchment')
-      const ph = panelTex ? Math.min(vh * 0.8, (pw / panelTex.width) * panelTex.height) : vh * 0.7
+      // P2-2（§2.8/§4.3）：ui_panel（重い木枠）を result_report_v6（薄い革の携行フォルダ＋紙）へ交換。
+      // 高さ優先（phは最大vh*0.84）で確保し、幅で収まらなければ幅基準へ折り返す
+      const panelTex = spriteTexture('result_report_v6') ?? spriteTexture('ui_panel') ?? spriteTexture('ui_parchment')
+      let ph = vh * 0.84
+      let pw = panelTex ? (ph / panelTex.height) * panelTex.width : vh * 0.7 * 0.68
+      if (pw > vw * 0.94) {
+        pw = vw * 0.94
+        ph = panelTex ? (pw / panelTex.width) * panelTex.height : ph
+      }
       const px0 = (vw - pw) / 2
-      const py0 = Math.max(vh * 0.03, (vh - ph) / 2)
+      const py0 = Math.max(vh * 0.02, (vh - ph) / 2)
       if (panelTex) {
         const sp = new Sprite(panelTex)
-        const s = Math.min(pw / panelTex.width, ph / panelTex.height)
-        sp.scale.set(s)
-        sp.position.set((vw - panelTex.width * s) / 2, py0)
+        sp.width = pw
+        sp.height = ph
+        sp.position.set(px0, py0)
         panel.addChild(sp)
-      }
-
-      // 1) 見出し：勝利=バナー帯＋コード描画の見出し、敗北=コード描画の見出し（「ボス撃破○×」は削り見出し自体で勝敗を示す）
-      // テーマ別バナー画像（ribbon_forest/machine/crystal）とui_ribbon_clearは「探索完了/成功！」の文字が
-      // 焼き込み済みのため使わない（「探索」の語をやめ「踏破」へ統一）。帯の意匠だけは無地のui_ribbonを流用し、
-      // 見出しはコード描画で乗せる
-      if (victory) {
-        const ribbonTex = spriteTexture('ui_ribbon')
-        if (ribbonTex) {
-          const rb = new Sprite(ribbonTex)
-          rb.anchor.set(0.5)
-          rb.scale.set((pw * 0.78) / ribbonTex.width)
-          rb.position.set(vw / 2, py0 + ph * 0.1)
-          panel.addChild(rb)
-        }
-        const winT = new Text({
-          text: '全深度　踏破',
-          style: { fill: 0xf4e8cf, fontSize: fs(0.052), fontFamily: FONT, fontWeight: 'bold', stroke: { color: 0x3a1410, width: 4 } },
-        })
-        winT.anchor.set(0.5)
-        winT.position.set(vw / 2, py0 + ph * 0.1)
-        panel.addChild(winT)
       } else {
-        const t0 = new Text({
-          text: `野帳　深度${reached} まで`,
-          style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold' },
-        })
-        t0.anchor.set(0.5)
-        t0.position.set(vw / 2, py0 + ph * 0.1)
-        panel.addChild(t0)
+        const g = new Graphics()
+        g.roundRect(px0, py0, pw, ph, pw * 0.02).fill({ color: UI.paper, alpha: 0.97 }).stroke({ width: 2, color: UI.leather })
+        panel.addChild(g)
+      }
+      // 紙面の安全域（左の革台紙・右の紐タブを避ける。result_report_v6の実測比率）
+      const bx0 = px0 + pw * 0.17
+      const bx1 = px0 + pw * 0.87
+      const contentW = bx1 - bx0
+
+      // この画面専用の文字階層（§3.6の実機サイズ表に沿う）
+      const SZ = {
+        headline: Math.max(26, Math.min(30, fs(0.075))),
+        title: Math.max(18, Math.min(20, fs(0.05))),
+        cardName: Math.max(16, Math.min(18, fs(0.044))),
+        body: Math.max(13, Math.min(14, fs(0.035))),
+        meta: Math.max(11, Math.min(12, fs(0.03))),
+        micro: Math.max(10, Math.min(11, fs(0.027))),
+      }
+      const fitText = (t: Text, maxW: number) => {
+        if (t.width > maxW) t.scale.set(maxW / t.width)
       }
 
-      // 2) ビルド名：白文字は羊皮紙上で読めないため濃い墨色に変更（[C]7）
+      let y = py0 + ph * 0.06
+
+      // 1) 結果印：短い墨／朱の押印（§2.8最終階層①。見出しは中央揃え可＝§3.6）
+      const stampText = victory ? '全深度　踏破' : `深度${reached}　まで`
+      const stampColor = victory ? UI.cinnabar : UI.ink
+      const stampT = new Text({
+        text: stampText,
+        style: { fill: stampColor, fontSize: SZ.headline, fontFamily: FONT, fontWeight: '800', letterSpacing: SZ.headline * 0.08 },
+      })
+      stampT.anchor.set(0.5)
+      const stampPadX = SZ.headline * 0.55
+      const stampPadY = SZ.headline * 0.3
+      const stampW = stampT.width + stampPadX * 2
+      const stampH = stampT.height + stampPadY * 2
+      const stampBg = new Graphics()
+      stampBg.roundRect(-stampW / 2, -stampH / 2, stampW, stampH, stampH * 0.16).stroke({ width: 2.2, color: stampColor, alpha: 0.8 })
+      stampBg.roundRect(-stampW / 2 + 4, -stampH / 2 + 4, stampW - 8, stampH - 8, stampH * 0.1).stroke({ width: 1, color: stampColor, alpha: 0.45 })
+      const stampC = new Container()
+      stampC.addChild(stampBg, stampT)
+      stampC.rotation = victory ? -0.025 : 0.02
+      stampC.position.set(vw / 2, y + stampH / 2)
+      panel.addChild(stampC)
+      y += stampH + fs(0.016)
+
+      // 2) ラン名（画面タイトル。§2.8最終階層②）
       const nameT = new Text({
         text: name,
-        style: { fill: UI.paperInk, fontSize: fs(0.05), fontFamily: FONT, fontWeight: 'bold', breakWords: true },
+        style: { fill: UI.ink, fontSize: SZ.title, fontFamily: FONT, fontWeight: '800', align: 'center', wordWrap: true, wordWrapWidth: contentW * 0.94, breakWords: true },
       })
-      nameT.anchor.set(0.5)
-      nameT.position.set(vw / 2, py0 + ph * 0.2)
+      nameT.anchor.set(0.5, 0)
+      nameT.position.set(vw / 2, y)
       panel.addChild(nameT)
+      y += nameT.height + fs(0.018)
 
-      // 3) 主記録：最大同時発火数を昇格
-      // 表記は「帰還した探窟家が後続者へ残す実地記録」の文体に統一する（PHASE2.md §3 の register）。
-      // 旧「とうたつ深度／さいだい連鎖」は仮名と漢字が混ざり、記録体と衝突していたため漢字へ寄せた。
-      const records = [
-        // 敗北時は見出しが「野帳　深度N まで」と同じ数字を出しているので、記録行では重ねない
-        ...(victory ? [`到達深度　${reached}`] : []),
-        `1手の最大発火数　${run.records.maxFiresInOneMove}`,
-        `最大連鎖　${run.records.maxChain}`,
-        `1手の最大破壊　${run.records.maxDestroyed}`,
+      // 3) 主役知見：大アイコン＋名称＋発火回数を上半分へ（§2.8最終階層③。旧実装はグラフ下にあり発見が遅かった）
+      const owned = run.upgrades.map((id) => UPGRADES.find((u) => u.id === id)).filter((u): u is UpgradeDef => !!u)
+      let heroDef: UpgradeDef | undefined
+      let bestFires = 0
+      if (owned.length > 0) {
+        let bestId = owned[0].id
+        for (const def of owned) {
+          const c = upgradeFireCount.get(def.id) ?? 0
+          if (c > bestFires) {
+            bestFires = c
+            bestId = def.id
+          }
+        }
+        heroDef = owned.find((u) => u.id === bestId)
+      }
+      if (heroDef) {
+        const capLine = bestFires > 0 ? '最も働いた知見' : 'この探窟の起点'
+        const cap = new Text({ text: capLine, style: { fill: UI.ink, fontSize: SZ.meta, fontFamily: FONT, fontWeight: '600' } })
+        cap.anchor.set(0.5, 0)
+        cap.alpha = 0.75
+        cap.position.set(vw / 2, y)
+        fitText(cap, contentW * 0.7)
+        panel.addChild(cap)
+        y += cap.height + fs(0.008)
+
+        const heroR = Math.max(fs(0.048), Math.min(fs(0.09), contentW * 0.15))
+        const heroNode = new Container()
+        const heroBg = new Graphics()
+        heroBg.circle(0, 0, heroR).fill({ color: 0x241a10, alpha: 0.94 }).stroke({ width: Math.max(2, fs(0.005)), color: UI.brassBright, alpha: 0.95 })
+        heroNode.addChild(heroBg)
+        heroNode.addChild(makeUniqueUpgradeIcon(heroDef.id, heroR * 1.3))
+        heroNode.position.set(vw / 2, y + heroR)
+        panel.addChild(heroNode)
+        y += heroR * 2 + fs(0.008)
+
+        const heroName = new Text({ text: heroDef.name, style: { fill: UI.ink, fontSize: SZ.cardName, fontFamily: FONT, fontWeight: '800' } })
+        heroName.anchor.set(0.5, 0)
+        heroName.position.set(vw / 2, y)
+        fitText(heroName, contentW * 0.9)
+        panel.addChild(heroName)
+        y += heroName.height
+
+        if (bestFires > 0) {
+          const fireT = new Text({ text: `発火 ${bestFires}回`, style: { fill: UI.ink, fontSize: SZ.meta, fontFamily: FONT, fontWeight: '600' } })
+          fireT.anchor.set(0.5, 0)
+          fireT.alpha = 0.8
+          fireT.position.set(vw / 2, y + fs(0.004))
+          fitText(fireT, contentW * 0.7)
+          panel.addChild(fireT)
+          y += fireT.height + fs(0.004)
+        }
+        y += fs(0.018)
+      }
+
+      // 4) 主要記録：最大発火／最大連鎖／最大破壊を横3列（§2.8最終階層④）
+      const recordCols = [
+        { label: '1手の最大発火', value: String(run.records.maxFiresInOneMove) },
+        { label: '最大連鎖', value: String(run.records.maxChain) },
+        { label: '1手の最大破壊', value: String(run.records.maxDestroyed) },
       ]
-      // 灯の折れ線が下に入ったぶん、記録欄を上へ寄せる（ビルド名の下に空いていた余白をそのまま図に回す）
-      const recordsTop = py0 + ph * 0.25
-      const recordLineH = fs(0.048)
-      records.forEach((line, i) => {
-        const t = new Text({
-          text: line,
-          style: { fill: UI.paperInk, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
-        })
-        t.anchor.set(0.5)
-        t.position.set(vw / 2, recordsTop + i * recordLineH)
-        panel.addChild(t)
+      const colW = contentW / 3
+      let recordsBottom = y
+      recordCols.forEach((c, i) => {
+        const cx = bx0 + colW * i + colW / 2
+        const lab = new Text({ text: c.label, style: { fill: UI.ink, fontSize: SZ.micro, fontFamily: FONT, fontWeight: '600' } })
+        lab.anchor.set(0.5, 0)
+        lab.alpha = 0.72
+        lab.position.set(cx, y)
+        if (lab.width > colW * 0.94) lab.scale.set((colW * 0.94) / lab.width)
+        panel.addChild(lab)
+        const val = new Text({ text: c.value, style: { fill: UI.ink, fontSize: SZ.cardName, fontFamily: FONT, fontWeight: '800' } })
+        val.anchor.set(0.5, 0)
+        val.position.set(cx, y + lab.height + fs(0.004))
+        panel.addChild(val)
+        recordsBottom = Math.max(recordsBottom, val.position.y + val.height)
       })
-      const recordsBottom = recordsTop + (records.length - 1) * recordLineH + recordLineH * 0.6
-      const buttonY = py0 + ph * 0.9
+      y = recordsBottom + fs(0.02)
 
-      // 3.4) 灯の推移（折れ線）。旧実装は「36 44 52 …」の数列で、30層になれば紙幅に収まらず読めもしない。
-      //      横軸=深度／縦軸=層を出るときの残灯。紙面の余白がないので方眼も軸ラベルも引かず、
-      //      y目盛は最大値と0の2つだけを線の左に、深度の範囲は見出しに畳む。
-      //      灯が細り始めた深度（thinningFloor）に朱の輪を置き、下の「深度Nから灯が細り始めた」の一行と対で読ませる。
-      const chartTop = recordsBottom + fs(0.014)
-      let chartBottom = recordsBottom
+      // 5) 灯の推移（折れ線）：横幅pw*0.72・高さfs(0.085)前後＝旧比おおよそ1.35倍・1.6倍（§4.3 P2-2）
+      const chartTop = y
+      let chartBottom = y
       if (lightSeries.length >= 2) {
         const first = lightSeries[0].floor
         const last = lightSeries[lightSeries.length - 1].floor
-        const tickStyle = { fill: UI.paperInk, fontSize: fs(0.021), fontFamily: FONT, fontWeight: 'bold' as const }
-        const cap = new Text({ text: `層を出るときの灯　深度${first}〜${last}`, style: { ...tickStyle, fontSize: fs(0.022) } })
+        const tickStyle = { fill: UI.ink, fontSize: SZ.micro, fontFamily: FONT, fontWeight: '600' as const }
+        const cap = new Text({ text: `層を出るときの灯　深度${first}〜${last}`, style: { ...tickStyle, fontSize: SZ.meta } })
         cap.anchor.set(0.5, 0)
-        cap.alpha = 0.82
+        cap.alpha = 0.8
         cap.position.set(vw / 2, chartTop)
         panel.addChild(cap)
 
-        const plotW = pw * 0.58
-        const plotX0 = (vw - plotW) / 2 + fs(0.018) // 左のy目盛ぶんだけ作図域を右へ寄せて、全体を紙面の中央に置く
-        const plotTop = chartTop + cap.height + fs(0.008)
-        const plotH = fs(0.055)
+        const plotW = pw * 0.72
+        const plotX0 = (vw - plotW) / 2 + fs(0.02) // 左のy目盛ぶんだけ作図域を右へ寄せて、全体を紙面の中央に置く
+        const plotTop = chartTop + cap.height + fs(0.01)
+        const plotH = fs(0.085)
         const top = Math.max(...lightSeries.map((s) => s.light), 1)
         const px = (i: number) => plotX0 + (plotW * i) / (lightSeries.length - 1)
         const py = (v: number) => plotTop + plotH * (1 - v / top)
 
         const g = new Graphics()
-        g.moveTo(plotX0, plotTop).lineTo(plotX0 + plotW, plotTop).stroke({ width: 1, color: UI.paperInk, alpha: 0.22 })
-        g.moveTo(plotX0, plotTop + plotH).lineTo(plotX0 + plotW, plotTop + plotH).stroke({ width: 1, color: UI.paperInk, alpha: 0.4 })
+        g.moveTo(plotX0, plotTop).lineTo(plotX0 + plotW, plotTop).stroke({ width: 1, color: UI.ink, alpha: 0.22 })
+        g.moveTo(plotX0, plotTop + plotH).lineTo(plotX0 + plotW, plotTop + plotH).stroke({ width: 1, color: UI.ink, alpha: 0.4 })
         lightSeries.forEach((s, i) => (i === 0 ? g.moveTo(px(i), py(s.light)) : g.lineTo(px(i), py(s.light))))
-        g.stroke({ width: Math.max(2, fs(0.006)), color: 0x2f6f96 }) // 灯＝青い液（PHASE2.md §2.7）
-        lightSeries.forEach((s, i) => g.circle(px(i), py(s.light), Math.max(1.8, fs(0.005))).fill(0x2f6f96))
+        g.stroke({ width: Math.max(2, fs(0.006)), color: UI.amber }) // 灯の線は正典パレットの琥珀色に統一（§3.2）
+        lightSeries.forEach((s, i) => g.circle(px(i), py(s.light), Math.max(1.8, fs(0.005))).fill(UI.amber))
         const thin = thinningFloor(lightSeries)
         const ti = thin === null ? -1 : lightSeries.findIndex((s) => s.floor === thin)
         if (ti >= 0) g.circle(px(ti), py(lightSeries[ti].light), Math.max(4, fs(0.012))).stroke({ width: Math.max(2, fs(0.005)), color: 0x9c3b2c })
         panel.addChild(g)
 
-        for (const [v, y] of [
+        for (const [v, vy] of [
           [top, plotTop],
           [0, plotTop + plotH],
         ]) {
           const t = new Text({ text: String(v), style: tickStyle })
           t.anchor.set(1, 0.5)
           t.alpha = 0.6
-          t.position.set(plotX0 - fs(0.012), y)
+          // 右揃えのまま紙の左端(bx0)より内側に収める（食い込み対策）
+          t.position.set(Math.max(bx0 + t.width, plotX0 - fs(0.012)), vy)
           panel.addChild(t)
         }
-        chartBottom = plotTop + plotH + fs(0.008)
+        chartBottom = plotTop + plotH + fs(0.014)
       }
+      y = chartBottom
 
-      // 3.5) 「なぜ細ったか」と「あと一つ」（PHASE2.md §2.5②③）。
-      //      見た目は既存の記録行の作法そのまま（墨色・中央揃え・はみ出したら縮める）。因果図には最低限の高さを残し、
-      //      入りきらないときは行の高さと字を詰める＝この欄が下の図に重ならないことを構造で保証する。
+      // 6) 振り返り：最大3行・左揃え（§2.8最終階層⑥。本文は13px未満にしない＝§3.6必達）
       const pm = buildPostmortem(lightSeries, drainLog, run.upgrades)
-      const pmLines = [...pm.light, ...(pm.missing ? [pm.missing.title, ...pm.missing.lines] : [])]
-      const pmTop = chartBottom + fs(0.014)
-      let pmBottom = chartBottom
+      const pmAll = [...pm.light, ...(pm.missing ? [pm.missing.title, ...pm.missing.lines] : [])]
+      const pmLines = pmAll.slice(0, 3)
+      const pmTop = y + fs(0.016)
+      let pmBottom = y
+      // 呼応図が紙面下半分を確保できるよう、振り返りはそこへ食い込む前で打ち切る（最低1件は出す＝存在しない場合は行ごと消す作法）
+      const pmBudgetBottom = py0 + ph * 0.5 - fs(0.02)
       if (pmLines.length) {
-        // fs(0.3) は因果図に必ず残す高さ（見出し＋「最も働いた知見」＋アイコン列。灯の折れ線が入って紙面が詰まったので、
-        // 足りないときは主役の1枚を消すのではなく、この欄の行を詰めるほうを選ぶ）
-        const pmRoom = buttonY - fs(0.09) - fs(0.3) - pmTop
-        const lineH = Math.min(fs(0.036), pmRoom / pmLines.length)
-        if (lineH > 0) {
-          const size = Math.min(fs(0.026), lineH * 0.74)
-          const missingFrom = pm.light.length // ここから下が「あと一つ」欄（見出しだけ少し濃く出す）
-          pmLines.forEach((line, i) => {
-            const t = new Text({
-              text: line,
-              style: { fill: UI.paperInk, fontSize: size, fontFamily: FONT, fontWeight: 'bold' },
-            })
-            t.anchor.set(0.5, 0)
-            t.alpha = i === missingFrom ? 1 : 0.82 // 見出し以外は記録より一段落として、主記録と競らせない
-            t.position.set(vw / 2, pmTop + i * lineH)
-            if (t.width > pw * 0.84) t.scale.set((pw * 0.84) / t.width)
-            panel.addChild(t)
+        // 行によっては折り返して2行以上になる（あと一つ理由文など）。固定行高だと折り返し分が次の行と重なるため、
+        // 実測した高さぶんだけ次の行へ進める（本ファイル内の他の動的レイアウトと同じ作法）
+        let cy = pmTop
+        for (let i = 0; i < pmLines.length; i++) {
+          const t = new Text({
+            text: pmLines[i],
+            style: { fill: UI.ink, fontSize: SZ.body, fontFamily: FONT, fontWeight: '600', wordWrap: true, wordWrapWidth: contentW, breakWords: true, lineHeight: SZ.body * 1.4 },
           })
-          pmBottom = pmTop + pmLines.length * lineH
+          if (i > 0 && cy + t.height > pmBudgetBottom) {
+            t.destroy()
+            break
+          }
+          t.alpha = i === 0 ? 1 : 0.86
+          t.position.set(bx0, cy)
+          panel.addChild(t)
+          cy += t.height + SZ.body * 0.35
         }
+        pmBottom = cy
       }
+      y = pmBottom
 
-      // 4) ビルドの因果図：所持強化を固有アイコンで横一列に並べ、consumes/produces が繋がるアイコン同士を線で結ぶ。
-      //    閉じた輪（サイクル）に含まれる辺は太く強調する。
-      const graphTop = pmBottom + fs(0.02)
-      const graphBottom = buttonY - fs(0.09)
+      // 7)+8) 呼応図／その他の所持知見：紙面下半分へ独立させる（§2.8最終階層⑦⑧）。
+      //      アイコンは最低24px径を確保し、収まらなければ横スクロールへ（縮め続けない）
+      const buttonY = py0 + ph * 0.955
+      const btnHalfH = Math.round(Math.min(60, Math.max(52, vw * 0.148))) / 2 // makePrimaryButtonと同じ高さ計算
+      const graphTop = Math.max(y + fs(0.02), py0 + ph * 0.5)
+      // ノードの半径ぶん（最大fs(0.05)）を見込んでボタンの上に食い込ませない
+      const graphBottom = buttonY - btnHalfH - fs(0.05) - fs(0.015)
       const graphH = Math.max(fs(0.16), graphBottom - graphTop)
-      const owned = run.upgrades.map((id) => UPGRADES.find((u) => u.id === id)).filter((u): u is UpgradeDef => !!u)
       if (owned.length > 0) {
-        const graphLabel = new Text({
-          text: '知見の呼応',
-          // 羊皮紙の上で薄すぎたため墨色に（見出しとして読めること優先）
-          style: { fill: UI.paperInk, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' },
-        })
+        const graphLabel = new Text({ text: '知見の呼応', style: { fill: UI.ink, fontSize: SZ.meta, fontFamily: FONT, fontWeight: '800' } })
         graphLabel.anchor.set(0.5, 0)
         graphLabel.position.set(vw / 2, graphTop)
         panel.addChild(graphLabel)
 
         const n = owned.length
-        // 紙の木枠を突き抜けないよう、まず幅からアイコン半径を解き、「中心」ではなく「外周」で内寸に収める。
-        // 紙面の内側は横12%〜88%なので安全域を14%〜86%に取り、その内側に外周ごと入れる
-        const avail = pw * 0.72
-        const iconR = Math.min(fs(0.058), avail / (n * 2.2))
-        const gLeft = px0 + pw * 0.14 + iconR
-        const gRight = px0 + pw * 0.86 - iconR
-        const rowY = graphBottom - iconR
-        const nodeX = (i: number) => (n > 1 ? gLeft + ((gRight - gLeft) / (n - 1)) * i : (gLeft + gRight) / 2)
+        const rowY = graphBottom
+        const minIconR = 12 // §4.3 P2-2：知見アイコンの径は最低24px
+        const idealR = Math.min(fs(0.05), contentW / (n * 2.4))
+        const iconR = Math.max(minIconR, idealR)
+        const rowW = n * iconR * 2.4
+        const needsScroll = rowW > contentW
+        const nodeX = (i: number) => (n > 1 ? iconR * 1.2 + (i * (rowW - iconR * 2.4)) / (n - 1) : rowW / 2)
 
-        // 主役1枚：小メダルを10個並べても「何のビルドだったか」は読めないので、
-        // いちばん働いた強化を大きく1枚出し、小メダル列は「他に持っていたもの」の脇役に降ろす。
-        // （発火数が1件も無いランでは嘘をつかず「この探索の起点＝最初に選んだ強化」に見出しごと切り替える）
-        const heroTop = graphTop + graphLabel.height + fs(0.012)
-        let heroBottom = heroTop
-        const heroBand = rowY - iconR - fs(0.024) - heroTop
-        if (heroBand >= fs(0.11)) {
-          let bestId: string | null = null
-          let bestFires = 0
-          for (const def of owned) {
-            const c = upgradeFireCount.get(def.id) ?? 0
-            if (c > bestFires) {
-              bestFires = c
-              bestId = def.id
-            }
-          }
-          const heroDef = owned.find((u) => u.id === bestId) ?? owned[0]
-          const capLine = bestFires > 0 ? '最も働いた知見' : 'この探窟の起点'
-          const fitText = (t: Text, maxW: number) => {
-            if (t.width > maxW) t.scale.set(maxW / t.width)
-          }
-          const cap = new Text({ text: capLine, style: { fill: UI.paperInk, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' } })
-          cap.anchor.set(0.5, 0)
-          cap.alpha = 0.75
-          cap.position.set(vw / 2, heroTop)
-          fitText(cap, pw * 0.7)
-          panel.addChild(cap)
-          const textBudget = fs(0.03) * 1.35 + (bestFires > 0 ? fs(0.026) * 1.35 : 0) + fs(0.008)
-          const heroR = Math.max(fs(0.032), Math.min(fs(0.075), (heroBand - cap.height - textBudget) / 2))
-          const heroCy = heroTop + cap.height + fs(0.006) + heroR
-          const heroNode = new Container()
-          const heroBg = new Graphics()
-          heroBg.circle(0, 0, heroR).fill({ color: 0x241a10, alpha: 0.94 }).stroke({ width: Math.max(2, fs(0.005)), color: 0xf2c14e, alpha: 0.95 })
-          heroNode.addChild(heroBg)
-          heroNode.addChild(makeUniqueUpgradeIcon(heroDef.id, heroR * 1.3))
-          heroNode.position.set(vw / 2, heroCy)
-          panel.addChild(heroNode)
-          const heroName = new Text({
-            text: heroDef.name,
-            style: { fill: UI.paperInk, fontSize: fs(0.03), fontFamily: FONT, fontWeight: 'bold' },
+        const rowHost = new Container()
+        rowHost.position.set(needsScroll ? bx0 : vw / 2 - rowW / 2, 0)
+        if (needsScroll) {
+          const maskH = graphBottom - graphTop + iconR * 1.3
+          const mask = new Graphics()
+          mask.rect(bx0, graphTop, contentW, maskH).fill(0xffffff)
+          panel.addChild(mask)
+          rowHost.mask = mask
+          rowHost.eventMode = 'static'
+          rowHost.hitArea = { contains: (x: number, y2: number) => x >= -4 && x <= rowW + 4 && y2 >= graphTop - 4 && y2 <= graphTop + maskH + 4 }
+          const minX = contentW - rowW
+          let dragStartX: number | null = null
+          let dragStartHostX = 0
+          rowHost.on('pointerdown', (e) => {
+            dragStartX = e.global.x
+            dragStartHostX = rowHost.position.x
           })
-          heroName.anchor.set(0.5, 0)
-          heroName.position.set(vw / 2, heroCy + heroR + fs(0.008))
-          fitText(heroName, pw * 0.72) // 強化名は可変長。紙面内に必ず収める
-          panel.addChild(heroName)
-          heroBottom = heroName.position.y + heroName.height
-          if (bestFires > 0) {
-            const fireT = new Text({
-              text: `発火 ${bestFires}回`,
-              style: { fill: UI.paperInk, fontSize: fs(0.026), fontFamily: FONT, fontWeight: 'bold' },
-            })
-            fireT.anchor.set(0.5, 0)
-            fireT.alpha = 0.8
-            fireT.position.set(vw / 2, heroBottom + fs(0.004))
-            fitText(fireT, pw * 0.7)
-            panel.addChild(fireT)
-            heroBottom = fireT.position.y + fireT.height
-          }
+          rowHost.on('pointermove', (e) => {
+            if (dragStartX === null) return
+            const dx = e.global.x - dragStartX
+            rowHost.position.x = Math.max(bx0 + minX, Math.min(bx0, dragStartHostX + dx))
+          })
+          const endDrag = () => (dragStartX = null)
+          rowHost.on('pointerup', endDrag)
+          rowHost.on('pointerupoutside', endDrag)
         }
+        panel.addChild(rowHost)
 
         // 辺の抽出：produces(a)とconsumes(b)が1つでも重なればa→b（アイコン同士。自己ループは対象外）
         const edges: { from: number; to: number }[] = []
@@ -4021,15 +4132,12 @@ async function boot() {
           for (let i = 0; i < n; i++) if (reach[i][k]) for (let j = 0; j < n; j++) if (reach[k][j]) reach[i][j] = true
 
         const lineLayer = new Container() // 線をアイコンより奥に描く
-        panel.addChild(lineLayer)
+        rowHost.addChild(lineLayer)
         for (const e of edges) {
           const inLoop = reach[e.to][e.from]
           const x1 = nodeX(e.from)
           const x2 = nodeX(e.to)
-          // 隣接する辺がメダルに埋もれて「何と何が繋がっているか」読めなくなるため、弧の高さに下限を置く。
-          // 上限は主役ブロックに触れない範囲まで（弧が名前や発火数の上に乗らない）
-          const arcCap = Math.max(iconR * 1.9, Math.min(graphH * 0.42, rowY - heroBottom - fs(0.012)))
-          const arc = Math.min(arcCap, Math.max(iconR * 1.8, Math.abs(x2 - x1) * 0.35 + fs(0.02)))
+          const arc = Math.min(graphH * 0.4, Math.max(iconR * 1.8, Math.abs(x2 - x1) * 0.32 + fs(0.02)))
           const midX = (x1 + x2) / 2
           const g = new Graphics()
           g.moveTo(x1, rowY).quadraticCurveTo(midX, rowY - arc, x2, rowY)
@@ -4040,16 +4148,17 @@ async function boot() {
 
         owned.forEach((def, i) => {
           const node = new Container()
+          const isHero = def.id === heroDef?.id
           const bg = new Graphics()
-          bg.circle(0, 0, iconR).fill({ color: 0x241a10, alpha: 0.92 }).stroke({ width: 1.5, color: UI.brass, alpha: 0.9 })
+          bg.circle(0, 0, iconR).fill({ color: 0x241a10, alpha: 0.92 }).stroke({ width: isHero ? 2.4 : 1.5, color: isHero ? 0xf2c14e : UI.brass, alpha: 0.9 })
           node.addChild(bg)
           node.addChild(makeUniqueUpgradeIcon(def.id, iconR * 1.3))
           node.position.set(nodeX(i), rowY)
-          panel.addChild(node)
+          rowHost.addChild(node)
         })
       }
 
-      // 5) もういちど
+      // 9) もういちど（共通主要ボタン。§2.8最終階層⑨）
       const btn = makePrimaryButton('もう一度潜る', pw * 0.6)
       btn.position.set(vw / 2, buttonY)
       btn.on('pointertap', () => {
@@ -4106,6 +4215,8 @@ async function boot() {
       openSpecialNote: () => showFieldNote(buildSpecialPieceEntry()),
       /** QA専用：結果画面を直接開く（10層まで自動で進める検証は不安定なため） */
       forceRunEnd: (victory: boolean) => showRunResult(victory),
+      /** QA専用：祝福パネルを直接開く（深度10まで自動で進める検証は不安定なため） */
+      openBlessing: () => showBlessingPanel(() => {}),
       openEnemyNote: () => {
         const e = board.enemies.find((en) => en.hp > 0)
         if (e) showFieldNote(buildEnemyEntry(e, run.blessings))
