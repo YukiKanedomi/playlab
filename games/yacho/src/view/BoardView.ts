@@ -151,6 +151,39 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+/** C案移行 Phase4 Stage A（codex_c_phase46_plan.md §7.2）：play()冒頭でローカル宣言していた
+ *  「1手ぶんの状態」を1オブジェクトへ集約したもの。beginMove()が生成し、scheduleEvents()/
+ *  buildDropTrains()/finishMove()の間で使い回す（純リファクタ＝挙動・tween時刻は変えない）。 */
+interface MoveCtx {
+  t: number // 主時計
+  chainSeen: number
+  chainStartT: number // 連鎖セグメントの開始時刻（ビートはここから加速カーブで刻む＝落下完了を待つ）
+  upgradeFireCounts: Map<string, number> // 可視化第一波②：このタイムライン内での強化ごとの発動回数
+  disruptLabelCount: number // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
+  goalFxCount: number // 目標収集：この手で何本目の飛翔か（破片4件・飛翔6件で打ち止める）
+  hitstop: HitstopBudget // 600ms窓で最大80msに制限するヒットストップ予算（codex_consult [D]-2/4）
+  // ---- タイムライン予算（codex_timeline_review.md §4-3/4-5）：special-fireのセグメント内サブ拍 ----
+  fireSegOffset: number // 現在の連鎖セグメント内でspecial-fireが主時計へ足した量（FIRE_SEGMENT_CAPで頭打ち）
+  fireGlobalBudget: number // play()全体でspecial-fireが主時計へ足せる残り予算（セグメント数に関わらず総和を保証）
+  lastFireSfxT: number // 直近にSEを鳴らしたfire拍のt（同拍への多重SEを防ぐ＝「同拍1音まで」）
+  visibleFireCount: number // このplay()全体を通したspecial-fireの通し番号（品質3段階の判定に使う）
+  aggregateFireCounts: Map<string, number> // 集約域（25発以降）：kind別の間引き件数
+  aggregateFireAt: Map<string, XY> // 集約域：最後に発火した位置（×N表示の置き場所）
+  // ---- win-drain（勝利ドレイン）のタイミング予算（codex_timeline_review.md §3・実装項目6） ----
+  winDrainCount: number
+  winDrainTotal: number
+  // 補充のトレイン（2026-08-15）：同じ拍・同じ列の補充駒を「上空に1マス間隔で整列→一斉落下」させる
+  // ための収集器。キーは `${拍t}|${列x}`。実際の湧き位置・落下tweenはイベント走査の後で組む
+  refillTrains: Map<string, { sp: Sprite; row: number; col: number; t: number }[]>
+  // 盤内の落下も同じキーで収集する。同列・同拍の落下と補充は**同じ遅延・同じ所要時間**で動かす
+  // （距離ごとに別durationだと長距離の駒が短距離の駒に追いつき交差する。列内は剛体でしか動かさない）
+  columnFalls: Map<string, { sp: Sprite; toX: number; toY: number; dist: number }[]>
+  builtDropKeys: Set<string> // トレイン構築済みキーの記録（後続セグメント再生で未構築ぶんだけ構築するため）
+  swarmChain: Map<number, { pos: number; total: number; nextCells?: XY[] }> // swarm連鎖ドミノの段階付け
+  mvDrop: number // 計器：着地コールバックの世代（codex_arch_review.md §1-6）
+  eventIndex: number // DIAGタグ用の通しイベント番号
+}
+
 export class BoardView {
   root = new Container()
   cellLayer = new Container()
@@ -2023,8 +2056,9 @@ export class BoardView {
     this.hintGlows = []
   }
 
-  /** イベント列をアニメ予約。所要合計msを返す */
-  play(evs: BoardEvent[]): number {
+  /** 1手ぶんのローカル状態を生成する前処理（C案移行 Phase4 Stage A：旧play()冒頭の逐語移設）。
+   *  evsを見ない部分だけをここで済ませ、evs依存のswarmChain/rampageActiveはscheduleEvents()側で行う */
+  private beginMove(): MoveCtx {
     // rm_tempo.md §7(b)/§8 P3：割込で前の演出を切らない（RM実測 §4「並行続行」）。
     // 旧実装の completeChannel('board') 全断は ①移動中の駒のテレポート ②未消化予約の同一フレーム一斉発火
     // ③WebAudio絶対時刻予約（sfx）とのズレ を生んでいた。現在はこの手が触る駒だけを snapPieceForMove() で
@@ -2049,32 +2083,43 @@ export class BoardView {
     this.fxSeed = (this.fxSeed * 48271 + 12345) % 0x7fffffff || 1
     this.fxRand = mulberry32(this.fxSeed)
     resetMoveBudget() // 1手あたりの振動回数の予算をここで戻す（JUICE.md §1③）
-    let t = 0
-    let chainSeen = 0
-    let chainStartT = 0 // 連鎖セグメントの開始時刻（ビートはここから加速カーブで刻む＝落下完了を待つ）
-    const upgradeFireCounts = new Map<string, number>() // 可視化第一波②：このタイムライン内での強化ごとの発動回数
-    let disruptLabelCount = 0 // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
-    let goalFxCount = 0 // 目標収集：この手で何本目の飛翔か（破片4件・飛翔6件で打ち止める）
-    const hitstop = new HitstopBudget() // 600ms窓で最大80msに制限するヒットストップ予算（codex_consult [D]-2/4）
-    // ---- タイムライン予算（codex_timeline_review.md §4-3/4-5）：special-fireのセグメント内サブ拍 ----
-    let fireSegOffset = 0 // 現在の連鎖セグメント内でspecial-fireが主時計へ足した量（FIRE_SEGMENT_CAPで頭打ち）
-    let fireGlobalBudget = FIRE_GLOBAL_BUDGET // play()全体でspecial-fireが主時計へ足せる残り予算（セグメント数に関わらず総和を保証）
-    let lastFireSfxT = -1 // 直近にSEを鳴らしたfire拍のt（同拍への多重SEを防ぐ＝「同拍1音まで」）
-    let visibleFireCount = 0 // このplay()全体を通したspecial-fireの通し番号（品質3段階の判定に使う）
-    const aggregateFireCounts = new Map<string, number>() // 集約域（25発以降）：kind別の間引き件数
-    const aggregateFireAt = new Map<string, XY>() // 集約域：最後に発火した位置（×N表示の置き場所）
-    // ---- win-drain（勝利ドレイン）のタイミング予算（codex_timeline_review.md §3・実装項目6） ----
-    let winDrainCount = 0
-    let winDrainTotal = 0
-    // 補充のトレイン（2026-08-15）：同じ拍・同じ列の補充駒を「上空に1マス間隔で整列→一斉落下」させる
-    // ための収集器。キーは `${拍t}|${列x}`。実際の湧き位置・落下tweenはイベント走査の後で組む
-    const refillTrains = new Map<string, { sp: Sprite; row: number; col: number; t: number }[]>()
-    // 盤内の落下も同じキーで収集する。同列・同拍の落下と補充は**同じ遅延・同じ所要時間**で動かす
-    // （距離ごとに別durationだと長距離の駒が短距離の駒に追いつき交差する。列内は剛体でしか動かさない）
-    const columnFalls = new Map<string, { sp: Sprite; toX: number; toY: number; dist: number }[]>()
-    const swarmChain = this.classifySwarmChain(evs) // swarm連鎖ドミノの段階付け（codex_consult [D]-4）
+    return {
+      t: 0,
+      chainSeen: 0,
+      chainStartT: 0, // 連鎖セグメントの開始時刻（ビートはここから加速カーブで刻む＝落下完了を待つ）
+      upgradeFireCounts: new Map<string, number>(), // 可視化第一波②：このタイムライン内での強化ごとの発動回数
+      disruptLabelCount: 0, // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
+      goalFxCount: 0, // 目標収集：この手で何本目の飛翔か（破片4件・飛翔6件で打ち止める）
+      hitstop: new HitstopBudget(), // 600ms窓で最大80msに制限するヒットストップ予算（codex_consult [D]-2/4）
+      // ---- タイムライン予算（codex_timeline_review.md §4-3/4-5）：special-fireのセグメント内サブ拍 ----
+      fireSegOffset: 0, // 現在の連鎖セグメント内でspecial-fireが主時計へ足した量（FIRE_SEGMENT_CAPで頭打ち）
+      fireGlobalBudget: FIRE_GLOBAL_BUDGET, // play()全体でspecial-fireが主時計へ足せる残り予算（セグメント数に関わらず総和を保証）
+      lastFireSfxT: -1, // 直近にSEを鳴らしたfire拍のt（同拍への多重SEを防ぐ＝「同拍1音まで」）
+      visibleFireCount: 0, // このplay()全体を通したspecial-fireの通し番号（品質3段階の判定に使う）
+      aggregateFireCounts: new Map<string, number>(), // 集約域（25発以降）：kind別の間引き件数
+      aggregateFireAt: new Map<string, XY>(), // 集約域：最後に発火した位置（×N表示の置き場所）
+      // ---- win-drain（勝利ドレイン）のタイミング予算（codex_timeline_review.md §3・実装項目6） ----
+      winDrainCount: 0,
+      winDrainTotal: 0,
+      // 補充のトレイン（2026-08-15）：同じ拍・同じ列の補充駒を「上空に1マス間隔で整列→一斉落下」させる
+      // ための収集器。キーは `${拍t}|${列x}`。実際の湧き位置・落下tweenはイベント走査の後で組む
+      refillTrains: new Map<string, { sp: Sprite; row: number; col: number; t: number }[]>(),
+      // 盤内の落下も同じキーで収集する。同列・同拍の落下と補充は**同じ遅延・同じ所要時間**で動かす
+      // （距離ごとに別durationだと長距離の駒が短距離の駒に追いつき交差する。列内は剛体でしか動かさない）
+      columnFalls: new Map<string, { sp: Sprite; toX: number; toY: number; dist: number }[]>(),
+      builtDropKeys: new Set<string>(), // トレイン構築済みキーの記録（後続セグメント再生で未構築ぶんだけ構築するため）
+      swarmChain: new Map(), // scheduleEvents()冒頭でclassifySwarmChain(evs)の結果に差し替える
+      mvDrop: this.moveSeq, // 計器：着地コールバックの世代（codex_arch_review.md §1-6）
+      eventIndex: 0, // DIAGタグ用の通しイベント番号
+    }
+  }
+
+  /** イベント列を主時計に沿って予約する（旧play()のswitchループを逐語移設）。beginMove()で作った
+   *  ctxを書き換えながら進む。swarmChain分類とrampageActive判定はevsに依存するためここで行う */
+  private scheduleEvents(ctx: MoveCtx, evs: BoardEvent[]): void {
+    ctx.swarmChain = this.classifySwarmChain(evs) // swarm連鎖ドミノの段階付け（codex_consult [D]-4）
     // 10連鎖以上を含む手は「暴走時」扱いにし、粒子の同時上限を80→120へ緩める（codex_consult [D]-6）
-    this.rampageActive = evs.some((ev) => ev.t === 'match' && ev.chain >= 10)
+    this.rampageActive ||= evs.some((ev) => ev.t === 'match' && ev.chain >= 10)
     // 論理は確定済みなので、描画用に「イベント時点のスプライト対応」を移動しながら追う
     // 全イベント共有のハード予算（2026-08-15 実測）：連鎖拍とspecial-fireの予算だけでは足りず、
     // 敵撃破(200ms)・爆発(200ms+ヒットストップ)・特殊駒誕生(35ms)・block-hit等の積み増しが敵の多い層で
@@ -2085,8 +2130,8 @@ export class BoardView {
     const T_HARD_CAP = 5200
     for (let ei = 0; ei < evs.length; ei++) {
       const e = evs[ei]
-      if (DIAG) setTweenCtx(`m${this.moveSeq}/e${ei}/${e.t}`) // 計器：この予約の発注元をtweenへ焼き込む
-      if (t > T_HARD_CAP) t = T_HARD_CAP
+      if (DIAG) setTweenCtx(`m${this.moveSeq}/e${ctx.eventIndex++}/${e.t}`) // 計器：この予約の発注元をtweenへ焼き込む
+      if (ctx.t > T_HARD_CAP) ctx.t = T_HARD_CAP
       switch (e.t) {
         case 'swap': {
           const a = this.sprites.get(this.key(e.a.x, e.a.y))
@@ -2099,25 +2144,25 @@ export class BoardView {
             this.mapSwap(this.key(e.a.x, e.a.y), this.key(e.b.x, e.b.y), a, b)
             const move = (sp: Sprite, to: XY, back: boolean) => {
               // 成立スワップは目標セルをわずかに行き過ぎて戻る（手応えの核。JUICE.md §1）
-              tween(sp.position, { x: this.px(to.x), y: this.px(to.y) }, T.swap, { delay: t, ease: easeOutBackSoft })
+              tween(sp.position, { x: this.px(to.x), y: this.px(to.y) }, T.swap, { delay: ctx.t, ease: easeOutBackSoft })
               if (back)
                 tween(sp.position, { x: this.px(back ? e.a.x : to.x), y: this.px(back ? e.a.y : to.y) }, T.swap, {
-                  delay: t + T.swap,
+                  delay: ctx.t + T.swap,
                 })
             }
             if (e.illegal) {
               // 行って戻る（往復160ms＝行き90+戻り70。オーバーシュートを付けると「震え」に見えるのでイージングは据え置き。
               // 無くしはしない＝往復自体は残し「なぜ成立しないか」の学習を保つ）
-              tween(a.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackGo, { delay: t })
-              tween(b.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackGo, { delay: t })
-              tween(a.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackReturn, { delay: t + T.swapBackGo })
-              tween(b.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackReturn, { delay: t + T.swapBackGo })
+              tween(a.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackGo, { delay: ctx.t })
+              tween(b.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackGo, { delay: ctx.t })
+              tween(a.position, { x: this.px(e.a.x), y: this.px(e.a.y) }, T.swapBackReturn, { delay: ctx.t + T.swapBackGo })
+              tween(b.position, { x: this.px(e.b.x), y: this.px(e.b.y) }, T.swapBackReturn, { delay: ctx.t + T.swapBackGo })
               this.mapSwap(this.key(e.a.x, e.a.y), this.key(e.b.x, e.b.y), b, a) // 不成立：写像を元へ戻す
-              t += T.swapBackGo + T.swapBackReturn
+              ctx.t += T.swapBackGo + T.swapBackReturn
             } else {
               move(a, e.b, false)
               move(b, e.a, false)
-              t += T.swap
+              ctx.t += T.swap
             }
           } else if (a || b) {
             // 片方の駒しか帳簿に無い（前の手の消滅・移動と競合した稀ケース）。旧実装は何もせず
@@ -2130,29 +2175,29 @@ export class BoardView {
             this.snapDoomedAt(this.key(toC.x, toC.y))
             if (!e.illegal) {
               this.mapMove(fromK, this.key(toC.x, toC.y), sp)
-              tween(sp.position, { x: this.px(toC.x), y: this.px(toC.y) }, T.swap, { delay: t, ease: easeOutBackSoft })
-              t += T.swap
+              tween(sp.position, { x: this.px(toC.x), y: this.px(toC.y) }, T.swap, { delay: ctx.t, ease: easeOutBackSoft })
+              ctx.t += T.swap
             }
           }
           break
         }
         case 'match': {
-          if (e.chain > chainSeen) {
+          if (e.chain > ctx.chainSeen) {
             // 連鎖ビート＝前セグメント開始から一定拍。1〜6連鎖はCHAIN_BEAT固定、7連鎖以降だけ
             // chainBeatForで逓減させる（タイムライン予算：加速ではなく「暴走域だけ拍を詰める」。
             // JUICE.md §0-5・codex_timeline_review.md §3）
-            if (e.chain > 1) t = Math.max(t, chainStartT + chainBeatFor(e.chain))
-            chainSeen = e.chain
-            chainStartT = t
-            fireSegOffset = 0 // 新しいセグメントに入ったのでspecial-fireのサブ拍予算をリセット
-            lastFireSfxT = -1
-            delay(t, () => sfx.pop(e.chain), 'cue') // AudioContext絶対時刻の先行予約をやめ、tween時計に合わせて鳴らす
-            delay(t, () => buzz(e.chain >= 5 ? 'chain' : 'pop'), 'fx') // 連鎖段が上がった瞬間だけ鳴らす（1マッチ最大1回）
-            this.updateChainCounter(e.chain, t)
+            if (e.chain > 1) ctx.t = Math.max(ctx.t, ctx.chainStartT + chainBeatFor(e.chain))
+            ctx.chainSeen = e.chain
+            ctx.chainStartT = ctx.t
+            ctx.fireSegOffset = 0 // 新しいセグメントに入ったのでspecial-fireのサブ拍予算をリセット
+            ctx.lastFireSfxT = -1
+            delay(ctx.t, () => sfx.pop(e.chain), 'cue') // AudioContext絶対時刻の先行予約をやめ、tween時計に合わせて鳴らす
+            delay(ctx.t, () => buzz(e.chain >= 5 ? 'chain' : 'pop'), 'fx') // 連鎖段が上がった瞬間だけ鳴らす（1マッチ最大1回）
+            this.updateChainCounter(e.chain, ctx.t)
           }
           // 10連鎖以降は通常消去の火花を50%間引き、爆発・特殊生成・敵撃破の粒子だけを残す
           const skipChance = e.chain >= 10 ? 0.5 : 0
-          for (const p of e.cells) this.popPieceAt(p, t, false, skipChance)
+          for (const p of e.cells) this.popPieceAt(p, ctx.t, false, skipChance)
           break
         }
         case 'special-fire': {
@@ -2160,66 +2205,66 @@ export class BoardView {
           // 無条件で+160msするのをやめ、セグメント開始(chainStartT)からのサブ拍offsetとして配置する。
           // offset自体もFIRE_SEGMENT_CAPで頭打ちにするので、1セグメント内で何十発起きても次の連鎖拍を
           // 無制限に押さない。表示品質は通し番号visibleFireCountで3段階（旧実装は260発なら41.6秒だった）
-          const idx = visibleFireCount
+          const idx = ctx.visibleFireCount
           const tier: 'full' | 'simple' | 'aggregate' =
             idx < FIRE_FULL_LIMIT ? 'full' : idx < FIRE_SIMPLE_LIMIT ? 'simple' : 'aggregate'
           const step = tier === 'full' ? FIRE_SUB_BEAT_FULL : tier === 'simple' ? FIRE_SUB_BEAT_SIMPLE : 0
           // セグメント上限とplay()全体の総額上限、両方の残りで頭打ち（総額上限がセグメント数を跨いだ悪用を塞ぐ）
-          const applied = Math.min(step, FIRE_SEGMENT_CAP - fireSegOffset, fireGlobalBudget)
-          fireSegOffset += applied
-          fireGlobalBudget -= applied
-          const fireT = chainStartT + fireSegOffset
+          const applied = Math.min(step, FIRE_SEGMENT_CAP - ctx.fireSegOffset, ctx.fireGlobalBudget)
+          ctx.fireSegOffset += applied
+          ctx.fireGlobalBudget -= applied
+          const fireT = ctx.chainStartT + ctx.fireSegOffset
           // 盤面状態の反映（駒の消滅）は品質段に関わらず必ず維持する
           this.popPieceAt(e.at, fireT, true) // 発動した特殊駒自身のスプライトを消す（描画残りバグ対策）
           for (const p of e.cleared) this.popPieceAt(p, fireT, true)
           if (tier === 'aggregate') {
             // 25発以降：FX・SE・振動はイベント毎には生成しない。種類ごとに件数だけ数え、末尾で×N表示する
-            aggregateFireCounts.set(e.piece.kind, (aggregateFireCounts.get(e.piece.kind) ?? 0) + 1)
-            aggregateFireAt.set(e.piece.kind, e.at)
+            ctx.aggregateFireCounts.set(e.piece.kind, (ctx.aggregateFireCounts.get(e.piece.kind) ?? 0) + 1)
+            ctx.aggregateFireAt.set(e.piece.kind, e.at)
           } else {
-            visibleFireCount++
+            ctx.visibleFireCount++
             this.fireFx(e.at, e.piece, fireT, tier === 'simple') // simple=trueで粒子数を間引く
-            if (fireT !== lastFireSfxT) {
+            if (fireT !== ctx.lastFireSfxT) {
               delay(fireT, () => sfx.fire(e.piece.kind), 'cue') // 同拍1音まで（多重AudioNode生成の防止）
-              lastFireSfxT = fireT
+              ctx.lastFireSfxT = fireT
             }
             if (e.piece.kind === 'hitsubo') {
               delay(fireT, () => buzz('blast'), 'fx')
               this.shakeRootDecay(fireT, 4, 160) // 歯車爆弾：3×3相当の揺れ
-              t = Math.max(t, fireT + hitstop.request(fireT, 45))
+              ctx.t = Math.max(ctx.t, fireT + ctx.hitstop.request(fireT, 45))
             }
           }
-          t = Math.max(t, fireT)
+          ctx.t = Math.max(ctx.t, fireT)
           // codex_consult [D]-3：特殊駒発火では連鎖段を0に戻さない。同じ解決内なら連鎖を維持し、音階/低域を積み上げる
           break
         }
         case 'win-drain': {
           // 残手数→特殊駒変換の彗星（1手 約45ms＝実測30-60msの中庸）
-          if (e.convertAt) this.cometFx(e.convertAt, t)
+          if (e.convertAt) this.cometFx(e.convertAt, ctx.t)
           // win-drainのタイミング予算（実装項目6）：最初のWIN_DRAIN_FULL_COUNT件は45ms、以降20ms、
           // 合計WIN_DRAIN_BUDGET msで頭打ち。残手数が多い層では数百件級になり得るため
-          const step = winDrainCount < WIN_DRAIN_FULL_COUNT ? WIN_DRAIN_STEP_FULL : WIN_DRAIN_STEP_LATER
-          winDrainCount++
-          if (winDrainTotal < WIN_DRAIN_BUDGET) {
-            const applied = Math.min(step, WIN_DRAIN_BUDGET - winDrainTotal)
-            delay(t, () => sfx.drain(this.drainCount++), 'cue')
-            winDrainTotal += applied
-            t += applied
+          const step = ctx.winDrainCount < WIN_DRAIN_FULL_COUNT ? WIN_DRAIN_STEP_FULL : WIN_DRAIN_STEP_LATER
+          ctx.winDrainCount++
+          if (ctx.winDrainTotal < WIN_DRAIN_BUDGET) {
+            const applied = Math.min(step, WIN_DRAIN_BUDGET - ctx.winDrainTotal)
+            delay(ctx.t, () => sfx.drain(this.drainCount++), 'cue')
+            ctx.winDrainTotal += applied
+            ctx.t += applied
           }
           break
         }
         case 'win-detonate-begin': {
-          t += 350
+          ctx.t += 350
           break
         }
         case 'combo': {
           // 合成：両方の特殊駒スプライトを消費（描画残りバグ対策）。特殊駒コンボは65msヒットストップ＋root揺れ
-          this.popPieceAt(e.from, t, true)
-          this.popPieceAt(e.at, t, true)
-          this.flashFx(e.at, t)
-          delay(t, () => buzz('blast'), 'fx')
-          this.shakeRootDecay(t, 6, 220)
-          t += hitstop.request(t, 65)
+          this.popPieceAt(e.from, ctx.t, true)
+          this.popPieceAt(e.at, ctx.t, true)
+          this.flashFx(e.at, ctx.t)
+          delay(ctx.t, () => buzz('blast'), 'fx')
+          this.shakeRootDecay(ctx.t, 6, 220)
+          ctx.t += ctx.hitstop.request(ctx.t, 65)
           break
         }
         case 'special-born': {
@@ -2228,13 +2273,13 @@ export class BoardView {
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
           const b = this.bs(sp)
           const style = SPECIAL_BORN_STYLE[e.piece.kind] ?? SPECIAL_BORN_STYLE.default
-          const born0 = t + T.pop
+          const born0 = ctx.t + T.pop
           sp.scale.set(0)
           sp.alpha = 0
           // 0-70ms：周囲の駒を中心へ2-3px吸引＋局所減光（消滅ポップと同時並行）
           this.birthPullFx(e.at, born0)
           // 70-105ms：白コア1フレーム相当＋35msの表示上のヒットストップ（以後の予約時刻を後ろへずらす）
-          const stop = hitstop.request(born0 + 70, 35)
+          const stop = ctx.hitstop.request(born0 + 70, 35)
           delay(born0 + 70, () => {
             const core = this.acquireG(this.overFxLayer, 'important')
             core.circle(0, 0, this.S * 0.36).fill({ color: 0xffffff, alpha: 0.95 })
@@ -2267,32 +2312,32 @@ export class BoardView {
               tween(sp, { rotation: 0 }, 180, { ease: easeOutBack })
             })
           }
-          t += stop
+          ctx.t += stop
           break
         }
         case 'block-hit': {
-          if (e.destroyed) delay(t, () => sfx.block(), 'cue')
+          if (e.destroyed) delay(ctx.t, () => sfx.block(), 'cue')
           const g = this.blockG.get(this.key(e.at.x, e.at.y))
           if (g) {
             const gg = g
-            tween(gg.scale, { x: 1.08, y: 1.08 }, 60, { delay: t })
-            tween(gg.scale, { x: 1, y: 1 }, 100, { delay: t + 60 })
+            tween(gg.scale, { x: 1.08, y: 1.08 }, 60, { delay: ctx.t })
+            tween(gg.scale, { x: 1, y: 1 }, 100, { delay: ctx.t + 60 })
             // 破壊 or 状態変化（匣→陶片、苔石2層→1層）: 再描画。世代跨ぎ・多重破棄は無効化
             const ep = this.epoch
-            delay(t + T.blockHit, () => {
+            delay(ctx.t + T.blockHit, () => {
               if (ep !== this.epoch || gg.destroyed) return
               gg.destroy()
               this.blockG.delete(this.key(e.at.x, e.at.y))
               const c = this.board.at(e.at.x, e.at.y)
               if (c?.block) this.makeBlock(e.at.x, e.at.y)
             })
-            if (e.destroyed || e.type === 'hako') this.debrisFx(e.at, t, e.type === 'kokeishi' ? PAL.stone : PAL.wood)
+            if (e.destroyed || e.type === 'hako') this.debrisFx(e.at, ctx.t, e.type === 'kokeishi' ? PAL.stone : PAL.wood)
           }
           break
         }
         case 'goal-progress': {
-          const n = goalFxCount++
-          const fxT = t + GOAL_FX_DELAY[e.goal.type]
+          const n = ctx.goalFxCount++
+          const fxT = ctx.t + GOAL_FX_DELAY[e.goal.type]
           if (n < 4) this.debrisFx(e.at, fxT, GOAL_DEBRIS_COLOR[e.goal.type]) // 既存の粒子プール経由
           if (n < 6) {
             const stagger = Math.min(55, 300 / Math.max(1, Math.min(5, n))) * n
@@ -2312,7 +2357,7 @@ export class BoardView {
             const gg = g
             const left = e.left
             const ep = this.epoch
-            delay(t + T.pop * 0.6, () => {
+            delay(ctx.t + T.pop * 0.6, () => {
               if (ep !== this.epoch) return // レベル遷移後の幽霊タイル防止
               gg.destroy()
               this.groundG.delete(this.key(e.at.x, e.at.y))
@@ -2330,17 +2375,17 @@ export class BoardView {
             // 落下tweenはここでは張らない。同じ列・同じ拍の落下と補充を**同じ遅延・同じ所要時間**で
             // 動かすため（別々のdurationだと落下距離の長い駒が短い駒に途中で追いつき重なる）、
             // 記録だけして play() 末尾の列ドロップ組みでまとめて張る（2026-08-15 幽霊調査の非幽霊2件）
-            const dropKey = `${t}|${e.to.x}`
-            const g = columnFalls.get(dropKey)
+            const dropKey = `${ctx.t}|${e.to.x}`
+            const g = ctx.columnFalls.get(dropKey)
             const item = { sp, toX: e.to.x, toY: e.to.y, dist: Math.abs(e.to.y - e.from.y) }
             if (g) g.push(item)
-            else columnFalls.set(dropKey, [item])
+            else ctx.columnFalls.set(dropKey, [item])
           }
           break
         }
         case 'reroll': {
           // 詰み保険リロール（C案移行Phase3で専用イベント化）：盤上の駒のその場色替え＝クロスフェード
-          this.playReroll(e.at, e.piece, t)
+          this.playReroll(e.at, e.piece, ctx.t)
           break
         }
         case 'refill': {
@@ -2349,7 +2394,7 @@ export class BoardView {
           if (already && !already.destroyed) {
             // 防御的フォールバック：reroll分離後、refillが占有セルへ来ることは無いはずだが、
             // 万一来ても旧挙動（修正6のクロスフェード）で吸収する
-            this.playReroll(e.at, e.piece, t)
+            this.playReroll(e.at, e.piece, ctx.t)
             break
           }
           this.snapDoomedAt(k) // 修正3：通常補充でも、このセルにポップ待ち駒が残っていたら先に畳む
@@ -2360,11 +2405,11 @@ export class BoardView {
           const sp = this.makePiece(e.at.x, e.at.y, e.piece)
           sp.position.y = -this.S * 1.2 // 仮置き（マスクの外）。実位置は末尾のトレイン組みで決まる
           sp.alpha = 0
-          const trainKey = `${t}|${e.at.x}`
-          const train = refillTrains.get(trainKey)
-          const item = { sp, row: e.at.y, col: e.at.x, t }
+          const trainKey = `${ctx.t}|${e.at.x}`
+          const train = ctx.refillTrains.get(trainKey)
+          const item = { sp, row: e.at.y, col: e.at.x, t: ctx.t }
           if (train) train.push(item)
-          else refillTrains.set(trainKey, [item])
+          else ctx.refillTrains.set(trainKey, [item])
           break
         }
         case 'spore-born': {
@@ -2372,7 +2417,7 @@ export class BoardView {
           const sp = this.makePiece(e.at.x, e.at.y, { kind: 'spore' })
           const b = this.bs(sp)
           sp.scale.set(0)
-          tween(sp.scale, { x: b, y: b }, 250, { delay: t, ease: easeOutBack })
+          tween(sp.scale, { x: b, y: b }, 250, { delay: ctx.t, ease: easeOutBack })
           break
         }
         case 'spore-rise': {
@@ -2385,13 +2430,13 @@ export class BoardView {
             if (other) this.snapPieceForMove(other)
             if (other) this.mapSwap(this.key(e.from.x, e.from.y), this.key(e.to.x, e.to.y), sp, other)
             else this.mapMove(this.key(e.from.x, e.from.y), this.key(e.to.x, e.to.y), sp)
-            tween(sp.position, { y: this.px(e.to.y) }, 300, { delay: t, ease: easeOutCubic })
-            if (other) tween(other.position, { y: this.px(e.from.y) }, 300, { delay: t, ease: easeOutCubic })
+            tween(sp.position, { y: this.px(e.to.y) }, 300, { delay: ctx.t, ease: easeOutCubic })
+            if (other) tween(other.position, { y: this.px(e.from.y) }, 300, { delay: ctx.t, ease: easeOutCubic })
           }
           break
         }
         case 'spore-collected': {
-          delay(t, () => sfx.spore(), 'cue')
+          delay(ctx.t, () => sfx.spore(), 'cue')
           const k = this.key(e.at.x, e.at.y)
           const sp = this.sprites.get(k)
           if (sp) {
@@ -2399,9 +2444,9 @@ export class BoardView {
             // Codexレビュー3回目P0：胞子の回収演出（250ms上昇フェード）も doomed 台帳へ載せる。
             // 載せないと同セルへの補充が畳めず、旧胞子×新駒の共存になる（popPieceAtを通らない消し方の穴）
             this.mapRetire(k, sp)
-            tween(sp, { alpha: 0 }, 250, { delay: t })
+            tween(sp, { alpha: 0 }, 250, { delay: ctx.t })
             tween(sp.position, { y: sp.position.y - this.S }, 250, {
-              delay: t,
+              delay: ctx.t,
               onDone: () => {
                 this.removeDoomed(k, sp)
                 if (!sp.destroyed) sp.destroy()
@@ -2412,8 +2457,8 @@ export class BoardView {
         }
         // ---- ローグライク拡張（ROGUE.md §3/§5/§6）：フック・敵・ターン・環境 ----
         case 'token-spawn': {
-          this.makeSporeTokenSprite(e.at.x, e.at.y, t)
-          this.floatLabelFx(e.at, '＋胞子', 0xbfe8ff, t, -0.3) // 可視化第一波③：因果の実況（生成系の無言解消）
+          this.makeSporeTokenSprite(e.at.x, e.at.y, ctx.t)
+          this.floatLabelFx(e.at, '＋胞子', 0xbfe8ff, ctx.t, -0.3) // 可視化第一波③：因果の実況（生成系の無言解消）
           break
         }
         case 'token-consumed': {
@@ -2422,7 +2467,7 @@ export class BoardView {
           if (node) {
             this.sporeTokenG.delete(k)
             tween(node.scale, { x: 0, y: 0 }, 150, {
-              delay: t,
+              delay: ctx.t,
               ease: easeInCubic,
               onDone: () => {
                 if (!node.destroyed) node.destroy()
@@ -2432,70 +2477,70 @@ export class BoardView {
           break
         }
         case 'explode': {
-          for (const p of e.cells) this.popPieceAt(p, t, true)
+          for (const p of e.cells) this.popPieceAt(p, ctx.t, true)
           // 十字(通常5マス以下)か3x3(共振破砕)かをcells数から推定し、規模で見た目/揺れを変える
           const big = e.cells.length >= 6
-          this.explodeFx(e.at, t, big)
-          delay(t, () => buzz('blast'), 'fx')
-          this.shakeRootDecay(t, big ? 4 : 2.5, big ? 160 : 120)
-          t += hitstop.request(t, 30) // 爆発鉱石：30msヒットストップ
-          t += 200
+          this.explodeFx(e.at, ctx.t, big)
+          delay(ctx.t, () => buzz('blast'), 'fx')
+          this.shakeRootDecay(ctx.t, big ? 4 : 2.5, big ? 160 : 120)
+          ctx.t += ctx.hitstop.request(ctx.t, 30) // 爆発鉱石：30msヒットストップ
+          ctx.t += 200
           break
         }
         case 'gear-trigger': {
-          this.gearRingFx(e.at, t)
-          this.floatLabelFx(e.at, `起動 x${e.count}`, 0xe8b33c, t, -0.28) // 可視化第一波③：ギアチャージ/起動の実況
+          this.gearRingFx(e.at, ctx.t)
+          this.floatLabelFx(e.at, `起動 x${e.count}`, 0xe8b33c, ctx.t, -0.28) // 可視化第一波③：ギアチャージ/起動の実況
           break
         }
         case 'upgrade-fire': {
           // 可視化第一波②：発動アピール。同一タイムラインで多発する場合はラベルは最初の2回まで（うるささ対策）
-          const n = (upgradeFireCounts.get(e.id) ?? 0) + 1
-          upgradeFireCounts.set(e.id, n)
+          const n = (ctx.upgradeFireCounts.get(e.id) ?? 0) + 1
+          ctx.upgradeFireCounts.set(e.id, n)
           if (n <= 2) {
-            this.floatLabelFx(e.at, UPGRADE_NAME.get(e.id) ?? e.id, 0xf2c14e, t)
-            this.upgradeFlashFx(e.at, t)
+            this.floatLabelFx(e.at, UPGRADE_NAME.get(e.id) ?? e.id, 0xf2c14e, ctx.t)
+            this.upgradeFlashFx(e.at, ctx.t)
           }
           const id = e.id
           const src = { ...e.at }
-          delay(t, () => this.onUpgradeFire?.(id, src), 'fx') // バー側のバウンス演出は毎回（アイコンは常に反応させる）
+          delay(ctx.t, () => this.onUpgradeFire?.(id, src), 'fx') // バー側のバウンス演出は毎回（アイコンは常に反応させる）
           break
         }
         case 'obstacle-spawn': {
-          this.popPieceAt(e.at, t, true)
+          this.popPieceAt(e.at, ctx.t, true)
           const ep = this.epoch
-          delay(t + 60, () => {
+          delay(ctx.t + 60, () => {
             if (ep !== this.epoch) return
             this.makeBlock(e.at.x, e.at.y)
           })
-          t += 150
+          ctx.t += 150
           break
         }
         case 'enemy-damage': {
-          this.enemyDamageFx(e.id, e.amount, e.hpLeft, t)
+          this.enemyDamageFx(e.id, e.amount, e.hpLeft, ctx.t)
           break
         }
         case 'enemy-defeated': {
-          const swarmInfo = swarmChain.get(ei)
-          this.enemyDefeatedFx(e.id, e.cells, t, swarmInfo)
+          const swarmInfo = ctx.swarmChain.get(ei)
+          this.enemyDefeatedFx(e.id, e.cells, ctx.t, swarmInfo)
           if (swarmInfo && swarmInfo.total > 1) {
             // swarmドミノ：連鎖ごとに20ms短縮し80msを下限。最後の1体だけ50msヒットストップ
-            if (swarmInfo.pos === swarmInfo.total) t += hitstop.request(t, 50)
-            t += Math.max(80, 160 - (swarmInfo.pos - 1) * 20)
+            if (swarmInfo.pos === swarmInfo.total) ctx.t += ctx.hitstop.request(ctx.t, 50)
+            ctx.t += Math.max(80, 160 - (swarmInfo.pos - 1) * 20)
           } else {
-            t += 200
+            ctx.t += 200
           }
           break
         }
         case 'armor-applied': {
           // 可視化第一波①：予告（バッジ強発光）→実行（甲殻オーバーレイ）の順
-          this.flashIntentBadge(e.id, t)
-          this.makeArmorOverlay(e.at.x, e.at.y, t + 120)
-          this.causeLineFx(e.id, e.at, 0xc7ccd2, t + 100) // 可視化第二波③：どの敵がやったかの因果線
-          if (disruptLabelCount < 2) {
-            disruptLabelCount++
-            this.floatLabelFx(e.at, 'かたくなった！', 0xd8d2c2, t + 160)
+          this.flashIntentBadge(e.id, ctx.t)
+          this.makeArmorOverlay(e.at.x, e.at.y, ctx.t + 120)
+          this.causeLineFx(e.id, e.at, 0xc7ccd2, ctx.t + 100) // 可視化第二波③：どの敵がやったかの因果線
+          if (ctx.disruptLabelCount < 2) {
+            ctx.disruptLabelCount++
+            this.floatLabelFx(e.at, 'かたくなった！', 0xd8d2c2, ctx.t + 160)
           }
-          t += 320
+          ctx.t += 320
           break
         }
         case 'armor-broken': {
@@ -2504,46 +2549,46 @@ export class BoardView {
           if (g) {
             this.armorG.delete(k)
             tween(g, { alpha: 0 }, 150, {
-              delay: t,
+              delay: ctx.t,
               onDone: () => {
                 if (!g.destroyed) g.destroy()
               },
             })
           }
-          this.flashFx(e.at, t)
+          this.flashFx(e.at, ctx.t)
           break
         }
         case 'prey-marked': {
-          this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
-          this.makePreyOverlay(e.at.x, e.at.y, t + 120)
-          this.causeLineFx(e.id, e.at, 0xb98be0, t + 100) // 可視化第二波③：因果線
-          if (disruptLabelCount < 2) {
-            disruptLabelCount++
-            this.floatLabelFx(e.at, 'ねらわれた！', 0xb98be0, t + 160)
+          this.flashIntentBadge(e.id, ctx.t) // 可視化第一波①：予告→実行
+          this.makePreyOverlay(e.at.x, e.at.y, ctx.t + 120)
+          this.causeLineFx(e.id, e.at, 0xb98be0, ctx.t + 100) // 可視化第二波③：因果線
+          if (ctx.disruptLabelCount < 2) {
+            ctx.disruptLabelCount++
+            this.floatLabelFx(e.at, 'ねらわれた！', 0xb98be0, ctx.t + 160)
           }
-          t += 320
+          ctx.t += 320
           break
         }
         case 'prey-devoured': {
           this.clearPreyOverlay(e.at)
-          this.violetBurstFx(e.at, t)
-          this.popPieceAt(e.at, t)
-          t += 200
+          this.violetBurstFx(e.at, ctx.t)
+          this.popPieceAt(e.at, ctx.t)
+          ctx.t += 200
           break
         }
         case 'prey-escaped': {
           this.clearPreyOverlay(e.at)
-          this.floatLabelFx(e.at, 'おいはらった！', 0xf2c96a, t + 60)
+          this.floatLabelFx(e.at, 'おいはらった！', 0xf2c96a, ctx.t + 60)
           break
         }
         case 'fissure-telegraph': {
-          this.flashIntentBadge(e.id, t)
-          this.makeFissureFrame(e.id, e.cells, t)
-          if (disruptLabelCount < 2) {
-            disruptLabelCount++
-            this.floatLabelFx(e.cells[0], '崩落の予兆', 0xcbb28a, t + 160)
+          this.flashIntentBadge(e.id, ctx.t)
+          this.makeFissureFrame(e.id, e.cells, ctx.t)
+          if (ctx.disruptLabelCount < 2) {
+            ctx.disruptLabelCount++
+            this.floatLabelFx(e.cells[0], '崩落の予兆', 0xcbb28a, ctx.t + 160)
           }
-          t += 240
+          ctx.t += 240
           break
         }
         case 'fissure-averted': {
@@ -2551,35 +2596,35 @@ export class BoardView {
           break
         }
         case 'oxygen-drained': {
-          this.flashIntentBadge(e.id, t)
-          this.enemyAttackTelegraphFx(e.id, t)
-          if (disruptLabelCount < 2) {
-            disruptLabelCount++
+          this.flashIntentBadge(e.id, ctx.t)
+          this.enemyAttackTelegraphFx(e.id, ctx.t)
+          if (ctx.disruptLabelCount < 2) {
+            ctx.disruptLabelCount++
             const cells = this.enemyCellsCache.get(e.id)
             if (cells?.length) {
               const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
               const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
-              this.floatLabelFx({ x: cx, y: cy }, `灯を奪われた −${e.amount}`, 0xff6b5a, t + 100, -0.25)
+              this.floatLabelFx({ x: cx, y: cy }, `灯を奪われた −${e.amount}`, 0xff6b5a, ctx.t + 100, -0.25)
             }
           }
-          delay(t, () => this.onOxygenDrained?.(e.id, e.amount), 'fx')
-          t += 260
+          delay(ctx.t, () => this.onOxygenDrained?.(e.id, e.amount), 'fx')
+          ctx.t += 260
           break
         }
         case 'cell-sealed': {
-          this.flashIntentBadge(e.id, t) // 可視化第一波①：予告→実行
+          this.flashIntentBadge(e.id, ctx.t) // 可視化第一波①：予告→実行
           // Codexレビュー3回目P0：エンジンは封鎖時に c.piece を null にするのに、ビューは駒を消していなかった。
           // 残った駒スプライトは帳簿上「正」に見えるため後の解封→補充でリロール誤認のクロスフェードを招く
-          this.popPieceAt(e.at, t, true)
+          this.popPieceAt(e.at, ctx.t, true)
           const g = this.makeSealBlock(e.at.x, e.at.y)
           g.scale.set(0)
-          tween(g.scale, { x: 1, y: 1 }, 220, { delay: t + 120, ease: easeOutBack })
-          this.causeLineFx(e.id, e.at, 0xcbb28a, t + 100) // 可視化第二波③：因果線
-          if (disruptLabelCount < 2) {
-            disruptLabelCount++
-            this.floatLabelFx(e.at, 'ふさがれた！', 0xcbb28a, t + 160)
+          tween(g.scale, { x: 1, y: 1 }, 220, { delay: ctx.t + 120, ease: easeOutBack })
+          this.causeLineFx(e.id, e.at, 0xcbb28a, ctx.t + 100) // 可視化第二波③：因果線
+          if (ctx.disruptLabelCount < 2) {
+            ctx.disruptLabelCount++
+            this.floatLabelFx(e.at, 'ふさがれた！', 0xcbb28a, ctx.t + 160)
           }
-          t += 340
+          ctx.t += 340
           break
         }
         case 'cell-unsealed': {
@@ -2588,7 +2633,7 @@ export class BoardView {
           if (g && !g.destroyed) {
             this.blockG.delete(k)
             tween(g.scale, { x: 0, y: 0 }, 160, {
-              delay: t,
+              delay: ctx.t,
               ease: easeInCubic,
               onDone: () => {
                 if (!g.destroyed) g.destroy()
@@ -2598,16 +2643,16 @@ export class BoardView {
           break
         }
         case 'boss-shell-broken': {
-          this.shakeContainer(this.root, t)
+          this.shakeContainer(this.root, ctx.t)
           this.paintBossGauge()
-          t += 160
+          ctx.t += 160
           break
         }
         case 'boss-phase': {
           // 身体1行ぶんのコンテナと顔をまとめて畳み、freedセル＋顔だけを描き直す（修正7）
           const row = this.bossRowG.get(H - 1)
-          if (row && !row.destroyed) tween(row, { alpha: 0 }, 220, { delay: t })
-          this.shakeRootDecay(t + 60, 6, 220)
+          if (row && !row.destroyed) tween(row, { alpha: 0 }, 220, { delay: ctx.t })
+          this.shakeRootDecay(ctx.t + 60, 6, 220)
           // 修正7：ここで全域reconcile()を呼ぶと、epoch/moveSeqガードが無いため同じ手の後続演出
           // （落下・補充）を巻き込んで無動作化し一斉テレポートさせる（ボス相転移時限定の症状）。
           // ボスの身体（freedセル）と顔だけを直す部分更新に差し替え、ガードも付ける。
@@ -2615,11 +2660,11 @@ export class BoardView {
           const mv = this.moveSeq
           const bossId = e.id
           const freed = e.freed
-          delay(t + 240, () => {
+          delay(ctx.t + 240, () => {
             if (ep !== this.epoch || mv !== this.moveSeq) return
             this.reconcileBossPhase(bossId, freed)
           })
-          t += 300
+          ctx.t += 300
           break
         }
         // 酸素の増減・層クリア・遭難：ビューでは何もしない（HUDと層進行は main.ts の管轄）
@@ -2632,22 +2677,23 @@ export class BoardView {
           break
       }
     }
-    // タイムライン予算：special-fireが25発以降で集約された分は、種類ごとに「×N」で因果をまとめて示す
-    for (const [kind, count] of aggregateFireCounts) {
-      const at = aggregateFireAt.get(kind)
-      if (!at) continue
-      this.floatLabelFx(at, `${FIRE_KIND_NAME[kind] ?? kind} ×${count}`, 0xf2c14e, t)
-    }
+  }
+
+  /** 列ドロップの組み立て（case 'fall' / 'refill' の収集を剛体トレインとして予約する）。
+   *  ctx.builtDropKeysに載っているキーは構築済みとしてスキップする（後続セグメント再生で
+   *  未構築ぶんだけ構築するため。play()経由の単発呼び出しでは常に全キーが未構築なので挙動は変わらない） */
+  private buildDropTrains(ctx: MoveCtx): void {
     // 列ドロップの組み立て（case 'fall' / 'refill' の収集の続き）：同じ拍・同じ列の落下と補充を、
     // **同じ遅延・同じ所要時間**で一斉に落とす（剛体）。開始時も終了時も1マス以上の間隔がある駒同士が
     // 同じ時間関数で動くので、密着・追い越し・湧き点のスタックが構造的に起きない。
     // 補充は着地行の並びを保った1マス間隔で盤の上空に整列し、pieceLayer のマスクの奥から降ってくる
-    const dropKeys = new Set([...refillTrains.keys(), ...columnFalls.keys()])
-    const mvDrop = this.moveSeq // 計器：着地コールバックの世代（codex_arch_review.md §1-6）
+    const dropKeys = new Set([...ctx.refillTrains.keys(), ...ctx.columnFalls.keys()])
     for (const key of dropKeys) {
-      if (DIAG) setTweenCtx(`m${mvDrop}/drop/${key}`)
-      const train = refillTrains.get(key) ?? []
-      const falls = columnFalls.get(key) ?? []
+      if (ctx.builtDropKeys.has(key)) continue
+      ctx.builtDropKeys.add(key)
+      if (DIAG) setTweenCtx(`m${ctx.mvDrop}/drop/${key}`)
+      const train = ctx.refillTrains.get(key) ?? []
+      const falls = ctx.columnFalls.get(key) ?? []
       const segT = Number(key.split('|')[0])
       const col = train[0]?.col ?? falls[0]?.toX ?? 0
       train.sort((a, b) => a.row - b.row)
@@ -2666,8 +2712,8 @@ export class BoardView {
           onDone: () => {
             // 計器：旧世代の着地コールバックが、次の手に接収された駒へ子tweenを張る競合の観測
             // （codex_arch_review.md §1-6「落下着地callbackには世代guardがない」。まず観測のみ・挙動は変えない）
-            if (DIAG && mvDrop !== this.moveSeq && [...this.sprites.values()].includes(f.sp))
-              report('staleCb', 'stale-gen landing bounce on mapped sprite', { sprite: dumpSprite(f.sp), scheduledMv: mvDrop, nowMv: this.moveSeq })
+            if (DIAG && ctx.mvDrop !== this.moveSeq && [...this.sprites.values()].includes(f.sp))
+              report('staleCb', 'stale-gen landing bounce on mapped sprite', { sprite: dumpSprite(f.sp), scheduledMv: ctx.mvDrop, nowMv: this.moveSeq })
             // 着地：52msだけ潰れて沈み、110msで戻す（潰れと沈みを対で動かすと重さが出る）
             tween(f.sp.scale, { x: b * 1.14, y: b * 0.86 }, 52, {
               onDone: () => tween(f.sp.scale, { x: b, y: b }, 110, { ease: easeOutBackSoft }),
@@ -2693,7 +2739,19 @@ export class BoardView {
             report('refillPostcond', 'refill lost position writer', { key, sprite: dumpSprite(it.sp) })
         }
     }
-    const total = t + T.pop + T.fall
+  }
+
+  /** 旧play()末尾を移設：×N集約ラベル→列ドロップ組み立て→総所要時間の確定→housekeeping/reconcile予約。
+   *  戻り値の所要合計msはplay()がそのまま返す */
+  private finishMove(ctx: MoveCtx): number {
+    // タイムライン予算：special-fireが25発以降で集約された分は、種類ごとに「×N」で因果をまとめて示す
+    for (const [kind, count] of ctx.aggregateFireCounts) {
+      const at = ctx.aggregateFireAt.get(kind)
+      if (!at) continue
+      this.floatLabelFx(at, `${FIRE_KIND_NAME[kind] ?? kind} ×${count}`, 0xf2c14e, ctx.t)
+    }
+    this.buildDropTrains(ctx)
+    const total = ctx.t + T.pop + T.fall
     // 可視化第一波①：敵の残りターン表示は「エンジン確定後」の値を見せたいのでタイムライン終端で更新
     // housekeeping：reconcile・カウンタ消去・フラグ解除の予約は計測対象（board/cue）から除外する
     // （codex_timeline_review.md §2-B。自分自身がchannelEndを延長する罠を避ける）
@@ -2731,6 +2789,14 @@ export class BoardView {
       'housekeeping',
     )
     return total
+  }
+
+  /** イベント列をアニメ予約。所要合計msを返す（C案移行 Phase4 Stage A：beginMove/scheduleEvents/
+   *  finishMoveを呼ぶ薄いadapter。呼び出し順・引数・戻り値は旧play()と等価） */
+  play(evs: BoardEvent[]): number {
+    const ctx = this.beginMove()
+    this.scheduleEvents(ctx, evs)
+    return this.finishMove(ctx)
   }
 
   /** エンジン状態への収束（差分だけ直すので通常は何も起きない） */
