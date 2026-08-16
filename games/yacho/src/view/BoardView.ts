@@ -129,9 +129,9 @@ const FALL_MAX = 390
  *  既定 false ＝ RM流の並行続行（前の手の演出を切らず、新しい手が触る駒だけ snap。rm_tempo.md §8 P3 Step2） */
 const FULL_SNAP_ON_INPUT = false
 
-/** 盤面AD v5 試作の切替（?board=v5）。オーナーが「盤面＋UI一式の実画面」で判断するための比較用で、
- *  既定の見た目は一切変えない（codex_design_fresheyes.md 垂直スライスの実機確認） */
-const BOARD_V5 = typeof location !== 'undefined' && /[?&]board=v5/.test(location.search)
+/** 盤面AD v6＝既定（デザイン総改修・codex_ad_overhaul.md §1「v5を採用する。現行の石枠盤面は廃止する」。
+ *  素材は細身化・明度調整済みの v6 世代。?board=legacy で旧石枠に戻せる（検証用） */
+const BOARD_V5 = typeof location === 'undefined' || !/[?&]board=legacy/.test(location.search)
 
 /** 600ms窓で最大80msに制限するヒットストップの累積予算（play()呼び出しごとにリセット） */
 class HitstopBudget {
@@ -395,12 +395,12 @@ export class BoardView {
     this.cellLayer.addChild(g)
   }
 
-  /** 盤面AD v5 試作（?board=v5）：採集箱枠×蝋引き帆布マス地（assets_src/board_v1 b案）。
+  /** 盤面AD v6（既定・codex_ad_overhaul.md §1）：細身の採集箱枠×蝋引き帆布マス地。
    *  マス地は8x8シートをセル単位に切って敷き（holeセルは敷かない）、枠は透過窓の実測インセット比
-   *  （非対称。frame_b.png 実測: L8.53% R9.73% T9.25% B10.45%）で盤格子に合わせる */
+   *  （非対称。frame_v6.png 実測: L4.59% R4.64% T4.49% B4.69%＝窓≈91%）で盤格子に合わせる */
   private drawStaticV5(): boolean {
-    const cellsTex = spriteTexture('cells_v5')
-    const frameTex = spriteTexture('frame_v5')
+    const cellsTex = spriteTexture('cells_v6')
+    const frameTex = spriteTexture('frame_v6')
     if (!cellsTex || !frameTex) return false
     const S = this.S
     const gridW = W * S
@@ -424,11 +424,11 @@ export class BoardView {
         sp.position.set(x * S, y * S)
         this.cellLayer.addChild(sp)
       }
-    const fL = 0.0853
-    const fR = 0.0973
-    const fT = 0.0925
-    const fB = 0.1045
-    const inset = S * 0.06 // 外周セルへの食い込み（既存フレームと同じ最小限）
+    const fL = 0.0459
+    const fR = 0.0464
+    const fT = 0.0449
+    const fB = 0.0469
+    const inset = S * 0.03 // 外周セルへの食い込み（正典§1：S*0.06→S*0.03へ縮小＝枠を駒に従属させる）
     const fw = (gridW + 2 * inset) / (1 - fL - fR)
     const fh = (gridH + 2 * inset) / (1 - fT - fB)
     const fr = new Sprite(frameTex)

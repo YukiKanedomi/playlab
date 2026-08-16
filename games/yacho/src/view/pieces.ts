@@ -40,6 +40,25 @@ const SPRITE_URLS: Record<string, URL> = {
   // 盤面AD v5 試作（?board=v5 比較用。b案=採集箱枠×蝋引き帆布マス地。assets_src/board_v1 から）
   frame_v5: new URL('../../assets/board/frame_v5.png', import.meta.url),
   cells_v5: new URL('../../assets/board/cells_v5.png', import.meta.url),
+  // ---- デザイン総改修 v6（正典 codex_ad_overhaul.md §4。素材5種=木/真鍮/帆布/革/古紙）----
+  frame_v6: new URL('../../assets/board/frame_v6.png', import.meta.url), // 細身の採集箱枠（窓≈91%）
+  cells_v6: new URL('../../assets/board/cells_v6.png', import.meta.url), // 蝋引き帆布8x8（市松なし）
+  hud_oil_v6: new URL('../../assets/ui/hud_oil_v6.png', import.meta.url), // 油槽（内側チャンネル x25.8-74.3% y40.6-56.6%）
+  hud_depth_v6: new URL('../../assets/ui/hud_depth_v6.png', import.meta.url),
+  hud_menu_v6: new URL('../../assets/ui/hud_menu_v6.png', import.meta.url),
+  floor_record_slip: new URL('../../assets/ui/floor_record_slip.png', import.meta.url), // 踏破記録票（破り取り紙片）
+  draft_ticket_plant: new URL('../../assets/ui/draft_ticket_plant.png', import.meta.url),
+  draft_ticket_instrument: new URL('../../assets/ui/draft_ticket_instrument.png', import.meta.url),
+  draft_ticket_relic: new URL('../../assets/ui/draft_ticket_relic.png', import.meta.url),
+  map_pin_done: new URL('../../assets/ui/map_pin_done.png', import.meta.url),
+  map_pin_current: new URL('../../assets/ui/map_pin_current.png', import.meta.url),
+  map_pin_next: new URL('../../assets/ui/map_pin_next.png', import.meta.url),
+  map_pin_locked: new URL('../../assets/ui/map_pin_locked.png', import.meta.url),
+  button_primary: new URL('../../assets/ui/button_primary.png', import.meta.url),
+  button_primary_pressed: new URL('../../assets/ui/button_primary_pressed.png', import.meta.url),
+  button_primary_disabled: new URL('../../assets/ui/button_primary_disabled.png', import.meta.url),
+  blessing_folio: new URL('../../assets/ui/blessing_folio.png', import.meta.url),
+  result_report_v6: new URL('../../assets/ui/result_report_v6.png', import.meta.url),
   // UI部材（ui_kit3切り出し。ラベルは焼き込み）
   ui_ribbon: new URL('../../assets/ui/ribbon.png', import.meta.url),
   ui_medal: new URL('../../assets/ui/booster_socket.png', import.meta.url),
