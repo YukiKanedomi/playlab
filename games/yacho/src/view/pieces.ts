@@ -153,11 +153,11 @@ export function upgradeIconTexture(id: string): Texture | null {
 }
 
 /**
- * 深度バッジ。素材は内容ベースで切り直したため単体アイコン1枚になっている
- * （旧版は横長ゲージが隣セルへはみ出したまま切っていたため2アイコン混在だった）。
+ * 深度バッジ。P1-2（codex_ad_overhaul.md §4.2）で測量器セット統一のため hud_depth_v6 を優先し、
+ * 未生成なら旧 ui_depth（さらに無ければ呼び出し側のGraphicsフォールバック）へ落ちる。
  */
 export function depthBadgeTexture(): Texture | null {
-  return loaded.get('ui_depth') ?? null
+  return loaded.get('hud_depth_v6') ?? loaded.get('ui_depth') ?? null
 }
 
 // ART.md §2 パレット
