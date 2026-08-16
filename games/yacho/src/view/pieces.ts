@@ -37,6 +37,9 @@ const SPRITE_URLS: Record<string, URL> = {
   tile_2: new URL('../../assets/board/tile2_2.png', import.meta.url),
   tile_3: new URL('../../assets/board/tile2_3.png', import.meta.url),
   frame: new URL('../../assets/board/board_frame2.png', import.meta.url),
+  // 盤面AD v5 試作（?board=v5 比較用。b案=採集箱枠×蝋引き帆布マス地。assets_src/board_v1 から）
+  frame_v5: new URL('../../assets/board/frame_v5.png', import.meta.url),
+  cells_v5: new URL('../../assets/board/cells_v5.png', import.meta.url),
   // UI部材（ui_kit3切り出し。ラベルは焼き込み）
   ui_ribbon: new URL('../../assets/ui/ribbon.png', import.meta.url),
   ui_medal: new URL('../../assets/ui/booster_socket.png', import.meta.url),

@@ -1,7 +1,7 @@
 // 盤面ビュー：エンジンのイベント列をタイムライン化して描く。
 // 方針: ロジックは即時確定・ビューが追いかける。入力割込時は snap で追いつく。
 // タイミングは RESEARCH.md §5 実測値。
-import { Container, Graphics, Point, Sprite, Renderer, Text } from 'pixi.js'
+import { Container, Graphics, Point, Rectangle, Sprite, Renderer, Text, Texture } from 'pixi.js'
 import { Board, W, H } from '../core/board'
 import type { ResolutionStep } from '../core/board'
 import type { BoardEvent, EnemyKind, GoalType, Piece, XY } from '../core/types'
@@ -128,6 +128,10 @@ const FALL_MAX = 390
 /** true で旧挙動（入力割込時に盤面チャンネルを全断）へ戻すスイッチ。
  *  既定 false ＝ RM流の並行続行（前の手の演出を切らず、新しい手が触る駒だけ snap。rm_tempo.md §8 P3 Step2） */
 const FULL_SNAP_ON_INPUT = false
+
+/** 盤面AD v5 試作の切替（?board=v5）。オーナーが「盤面＋UI一式の実画面」で判断するための比較用で、
+ *  既定の見た目は一切変えない（codex_design_fresheyes.md 垂直スライスの実機確認） */
+const BOARD_V5 = typeof location !== 'undefined' && /[?&]board=v5/.test(location.search)
 
 /** 600ms窓で最大80msに制限するヒットストップの累積予算（play()呼び出しごとにリセット） */
 class HitstopBudget {
@@ -345,6 +349,7 @@ export class BoardView {
   }
 
   private drawStatic() {
+    if (BOARD_V5 && this.drawStaticV5()) return
     const tileTex = spriteTexture('tile')
     const frameTex = spriteTexture('frame')
     if (tileTex) {
@@ -388,6 +393,52 @@ export class BoardView {
         g.roundRect(x * this.S + 1.5, y * this.S + 1.5, this.S - 3, this.S - 3, 6).fill((x + y) % 2 ? PAL.cellA : PAL.cellB)
       }
     this.cellLayer.addChild(g)
+  }
+
+  /** 盤面AD v5 試作（?board=v5）：採集箱枠×蝋引き帆布マス地（assets_src/board_v1 b案）。
+   *  マス地は8x8シートをセル単位に切って敷き（holeセルは敷かない）、枠は透過窓の実測インセット比
+   *  （非対称。frame_b.png 実測: L8.53% R9.73% T9.25% B10.45%）で盤格子に合わせる */
+  private drawStaticV5(): boolean {
+    const cellsTex = spriteTexture('cells_v5')
+    const frameTex = spriteTexture('frame_v5')
+    if (!cellsTex || !frameTex) return false
+    const S = this.S
+    const gridW = W * S
+    const gridH = H * S
+    // 下地（マス欠け・継ぎ目の覗き対策）
+    const base = new Graphics()
+    base.roundRect(-6, -6, gridW + 12, gridH + 12, 10).fill({ color: 0x241d16, alpha: 0.9 })
+    this.cellLayer.addChild(base)
+    const cw = cellsTex.width / W
+    const chh = cellsTex.height / H
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        if (!this.board.at(x, y)) continue
+        const t = new Texture({
+          source: cellsTex.source,
+          frame: new Rectangle(cellsTex.frame.x + x * cw, cellsTex.frame.y + y * chh, cw, chh),
+        })
+        const sp = new Sprite(t)
+        sp.width = S
+        sp.height = S
+        sp.position.set(x * S, y * S)
+        this.cellLayer.addChild(sp)
+      }
+    const fL = 0.0853
+    const fR = 0.0973
+    const fT = 0.0925
+    const fB = 0.1045
+    const inset = S * 0.06 // 外周セルへの食い込み（既存フレームと同じ最小限）
+    const fw = (gridW + 2 * inset) / (1 - fL - fR)
+    const fh = (gridH + 2 * inset) / (1 - fT - fB)
+    const fr = new Sprite(frameTex)
+    fr.width = fw
+    fr.height = fh
+    fr.position.set(-inset - fL * fw, -inset - fT * fh)
+    this.cellLayer.addChild(fr)
+    // HUDが盤の実占有域を知るための張り出し量（4辺の最大）
+    this.framePad = Math.max(fL * fw, fR * fw, fT * fh, fB * fh) + inset
+    return true
   }
 
   /** 盤の論理状態をそのまま描画に反映（初期化・保険） */
