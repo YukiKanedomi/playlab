@@ -3,6 +3,7 @@
 // タイミングは RESEARCH.md §5 実測値。
 import { Container, Graphics, Point, Sprite, Renderer, Text } from 'pixi.js'
 import { Board, W, H } from '../core/board'
+import type { ResolutionStep } from '../core/board'
 import type { BoardEvent, EnemyKind, GoalType, Piece, XY } from '../core/types'
 import { BOSS_SHELL_COUNT, enemyIntent, type EnemyInstance, type EnemyIntent, type IntentKind } from '../core/enemies'
 import { UPGRADES } from '../core/upgrades'
@@ -21,6 +22,8 @@ import {
   hasTween,
   hasTweenProperty,
   now,
+  scopeEnd,
+  setTweenScope,
   snap,
   snapSoft,
   tween,
@@ -154,10 +157,15 @@ function mulberry32(seed: number): () => number {
 /** C案移行 Phase4 Stage A（codex_c_phase46_plan.md §7.2）：play()冒頭でローカル宣言していた
  *  「1手ぶんの状態」を1オブジェクトへ集約したもの。beginMove()が生成し、scheduleEvents()/
  *  buildDropTrains()/finishMove()の間で使い回す（純リファクタ＝挙動・tween時刻は変えない）。 */
-interface MoveCtx {
+export interface MoveCtx {
   t: number // 主時計
   chainSeen: number
   chainStartT: number // 連鎖セグメントの開始時刻（ビートはここから加速カーブで刻む＝落下完了を待つ）
+  /** stepped経路（Phase4 StageB）か。trueのとき連鎖拍は「スケジュール加算」ではなく playSegment() の
+   *  開始間隔下限ゲートが担う（codex_c_phase46_plan.md §7.4＝二重待ちの回避） */
+  stepped?: boolean
+  /** stepped経路：直近の連鎖段が始まったtween時計（拍下限ゲートの基準） */
+  chainClock?: number
   upgradeFireCounts: Map<string, number> // 可視化第一波②：このタイムライン内での強化ごとの発動回数
   disruptLabelCount: number // 可視化第二波③：因果ラベルは1ターン（=このplay呼び出し1回）に最大2個まで
   goalFxCount: number // 目標収集：この手で何本目の飛翔か（破片4件・飛翔6件で打ち止める）
@@ -2186,7 +2194,9 @@ export class BoardView {
             // 連鎖ビート＝前セグメント開始から一定拍。1〜6連鎖はCHAIN_BEAT固定、7連鎖以降だけ
             // chainBeatForで逓減させる（タイムライン予算：加速ではなく「暴走域だけ拍を詰める」。
             // JUICE.md §0-5・codex_timeline_review.md §3）
-            if (e.chain > 1) ctx.t = Math.max(ctx.t, ctx.chainStartT + chainBeatFor(e.chain))
+            // steppedではこの加算をしない：前セグメントの完了を既にawaitしており、拍は playSegment() の
+            // 開始間隔下限ゲートが担う（加算すると二重待ちになる。codex_c_phase46_plan.md §7.4）
+            if (e.chain > 1 && !ctx.stepped) ctx.t = Math.max(ctx.t, ctx.chainStartT + chainBeatFor(e.chain))
             ctx.chainSeen = e.chain
             ctx.chainStartT = ctx.t
             ctx.fireSegOffset = 0 // 新しいセグメントに入ったのでspecial-fireのサブ拍予算をリセット
@@ -2799,8 +2809,96 @@ export class BoardView {
     return this.finishMove(ctx)
   }
 
-  /** エンジン状態への収束（差分だけ直すので通常は何も起きない） */
-  reconcile() {
+  // ---- C案移行Phase4 StageB（codex_c_phase46_plan.md §7）：stepped経路 ----
+  // ResolutionCoordinator（main.ts）が1手につき beginSteppedMove() → playSegment()×N →
+  // finishSteppedMove() の順で呼ぶ。各セグメントの盤面所有tween（board/cue）はセグメント内で
+  // 完了させ、完了を待ってから次を予約する＝表示境界と論理境界を一致させる。
+
+  /** stepped再生の1手を開始する（beginMove＋steppedフラグ） */
+  beginSteppedMove(): MoveCtx {
+    const ctx = this.beginMove()
+    ctx.stepped = true
+    return ctx
+  }
+
+  /** 1停止境界ぶんのイベントを予約し、盤面所有tween（board/cue）の完了まで待つ */
+  async playSegment(ctx: MoveCtx, step: ResolutionStep): Promise<void> {
+    // 連鎖拍の下限ゲート（§7.4）：新しい連鎖段は前の連鎖開始から chainBeatFor 以上あけて始める。
+    // 落下がそれ以上かかっていれば追加待ちゼロ、短ければ拍ぶんだけ補う（＝加算方式の二重待ちを避ける）
+    const firstMatch = step.events.find((e): e is Extract<BoardEvent, { t: 'match' }> => e.t === 'match')
+    if (firstMatch) {
+      if (firstMatch.chain > 1 && ctx.chainClock !== undefined) {
+        const wait = ctx.chainClock + chainBeatFor(firstMatch.chain) - now()
+        if (wait > 0) await this.sleep(wait)
+      }
+      ctx.chainClock = now()
+    }
+    // セグメント内はローカル時計で予約する（前セグメントは完了済み＝累積の空白を持ち込まない）
+    ctx.t = 0
+    ctx.chainStartT = 0
+    // 再生スコープ（§7.3）：このセグメントが作るtweenに一意のスコープIDを付け、その完了だけを待つ。
+    // channelEnd待ちだと爆発鉱石のゆらぎ等の常設アニメ（既定'board'）が混ざって永遠に0にならない
+    // （実測：毎セグメントが上限4秒まで待たされ、1手が20秒級に伸びてハーネスの連打が全部割込になった）
+    const scopeId = ++BoardView.segScopeSeq
+    setTweenScope(scopeId)
+    try {
+      this.scheduleEvents(ctx, step.events)
+      this.buildDropTrains(ctx)
+    } finally {
+      setTweenScope(0)
+    }
+    // トレイン収集器はセグメント使い切り（キー `${t}|${col}` はローカル時刻なので、跨いで再利用すると
+    // 別セグメントの同時刻・同列と衝突して builtDropKeys が誤スキップする）
+    ctx.refillTrains.clear()
+    ctx.columnFalls.clear()
+    ctx.builtDropKeys.clear()
+    await this.waitScopeIdle(scopeId)
+    if (DIAG) this.auditLedgers(`segment-${step.index}`) // 検収条件：各境界で帳簿違反0（§12）
+  }
+
+  /** stepped再生スコープの通し番号（0はスコープ外＝常設アニメ・FX） */
+  private static segScopeSeq = 0
+
+  /** stepped再生の1手を締める（×N集約ラベル・housekeeping・終端reconcile予約は legacy と共用） */
+  finishSteppedMove(ctx: MoveCtx): void {
+    this.finishMove(ctx)
+  }
+
+  /** 指定スコープのtweenの残時間が0になるまで待つ。「2回連続0」で確定＝着地コールバックが同フレームで
+   *  張る子tween（潰れ→復帰。親スコープを継承する）の隙間を静止と誤認しない。capMs はセグメント予算の
+   *  保険（§7.6。到達したら残りは finishSteppedMove の終端reconcileに任せて先へ進む） */
+  private waitScopeIdle(scopeId: number, capMs = 4000): Promise<void> {
+    return new Promise((resolve) => {
+      let waited = 0
+      let zeroStreak = 0
+      const poll = () => {
+        const remain = scopeEnd(scopeId)
+        if (remain <= 0) {
+          zeroStreak++
+          if (zeroStreak >= 2) return resolve()
+        } else zeroStreak = 0
+        if (waited >= capMs) return resolve()
+        const stepMs = remain > 0 ? Math.min(Math.max(remain, 60), 300) : 90
+        waited += stepMs
+        delay(stepMs, poll, 'housekeeping')
+      }
+      poll()
+    })
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => delay(ms, resolve, 'housekeeping'))
+  }
+
+  /** 割込ドレイン後の一括同期（C案移行Phase6・§9.2の renderStable 相当）。ドレインした残段は
+   *  意図的に描いていないので差分が出るのが正常＝strict系の計測（reconcileCorrected）には数えない */
+  renderStable() {
+    this.reconcile(true)
+  }
+
+  /** エンジン状態への収束（差分だけ直すので通常は何も起きない）。
+   *  expectStale=true は割込ドレイン後の一括同期＝差分が出て当然の呼び出し（計測から除外する） */
+  reconcile(expectStale = false) {
     this.repairStrandedAlpha() // タイムライン予算C：透明のまま取り残された駒の保険（reconcile直前）
     let corrected = 0 // 修正9：実際に直した件数（位置スナップ/差し替え/孤児破棄）。0が正常の指標
     for (let y = 0; y < H; y++)
@@ -2823,12 +2921,22 @@ export class BoardView {
           }
           this.makePiece(x, y, want)
           corrected++
+          if (DIAG && !expectStale)
+            console.warn('[yacho][diag] reconcile remake', k, sp ? JSON.stringify(dumpSprite(sp)) : 'missing', pieceKey(want), 'ops:', JSON.stringify(recentOps(k, 6)))
         } else {
           // 位置・透明度・スケールをセル定位置へスナップ（実際にズレていた場合だけ件数に数える）
           const wantX = this.px(x)
           const wantY = this.px(y)
           const b = this.bs(sp)
-          if (sp.position.x !== wantX || sp.position.y !== wantY || sp.alpha !== 1 || sp.scale.x !== b || sp.scale.y !== b) corrected++
+          if (sp.position.x !== wantX || sp.position.y !== wantY || sp.alpha !== 1 || sp.scale.x !== b || sp.scale.y !== b) {
+            corrected++
+            if (DIAG && !expectStale)
+              console.warn(
+                '[yacho][diag] reconcile fix',
+                k,
+                JSON.stringify({ dx: +(sp.position.x - wantX).toFixed(2), dy: +(sp.position.y - wantY).toFixed(2), a: +sp.alpha.toFixed(3), s: +(sp.scale.x / b).toFixed(3) }),
+              )
+          }
           sp.position.set(wantX, wantY)
           sp.alpha = 1
           sp.scale.set(b)
@@ -2936,9 +3044,9 @@ export class BoardView {
     // 残留する（残留すると snapDoomedAt が破棄済みへ触る）。ここで台帳を掃除して整合を保つ
     for (const [k, list] of [...this.doomedByCell]) for (const en of list.slice()) if (en.sp.destroyed) this.removeDoomed(k, en.sp)
     // 修正9：reconcileが実際に何かを直した場合のみ出す。発生ゼロが正常の指標（QA・実機での観測用）
-    if (corrected > 0) console.debug('[yacho] reconcile corrected', corrected)
+    if (corrected > 0 && !expectStale) console.debug('[yacho] reconcile corrected', corrected)
     if (DIAG) {
-      counters.reconcileCorrected += corrected
+      if (!expectStale) counters.reconcileCorrected += corrected // 割込後の一括同期は「差分が出て当然」＝strict計測から除外
       this.auditLedgers('reconcile-end') // 計器：終端修復の直後は3帳簿が完全一致しているはず
     }
   }

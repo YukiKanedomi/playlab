@@ -38,6 +38,30 @@ interface Tween {
   dead: boolean
   channel: string
   tag?: string // 計器（C案移行 Phase1）：発注元の文脈。DIAG時のみ設定される
+  scope: number // C案移行Phase4（§7.3）：この予約を作った再生スコープ（0=スコープ外の常設/FX）
+}
+
+// ---- 再生スコープ（C案移行Phase4・codex_c_phase46_plan.md §7.3）----
+// playSegment() が「このセグメントが作った盤面tweenの完了」だけを待てるようにする仕組み。
+// チャンネル全体（channelEnd）を待つと、爆発鉱石のゆらぎ等の常設アニメ（既定'board'）が
+// 混ざって永遠に0にならない（実測：毎セグメントが上限まで待たされ手が20秒級に伸びた）。
+// onDoneコールバックが作る子tween（着地バウンス等）は親のスコープを継承する＝取りこぼさない。
+let currentScope = 0
+
+/** 以降の tween()/delay() 予約に付くスコープを設定（0=スコープ外）。playSegmentが囲みで使う */
+export function setTweenScope(s: number): void {
+  currentScope = s
+}
+
+/** 指定スコープの生存tweenの残り時間(ms)の最大値（channelEndのスコープ版） */
+export function scopeEnd(scope: number): number {
+  let max = 0
+  for (const tw of tweens) {
+    if (tw.dead || tw.scope !== scope) continue
+    const remain = tw.t < 0 ? Math.max(0, tw.delay) + tw.dur : Math.max(0, tw.dur - tw.t)
+    if (remain > max) max = remain
+  }
+  return max
 }
 
 const tweens: Tween[] = []
@@ -117,6 +141,7 @@ export function tween(
     onDone: opts.onDone,
     dead: false,
     channel: opts.channel ?? 'board',
+    scope: currentScope,
   }
   if (diagOn) {
     tw.tag = diagCtx
@@ -141,7 +166,10 @@ export function snap(obj: unknown): void {
       for (const k of Object.keys(tw.to)) tw.obj[k] = tw.to[k]
       tw.dead = true
       if (diagOn) diagCtx = `snap-cb:${tw.tag ?? '?'}`
+      const prevScope = currentScope
+      currentScope = tw.scope // 子tweenは親のスコープを継承（§7.3）
       tw.onDone?.()
+      currentScope = prevScope
     }
   }
 }
@@ -175,6 +203,7 @@ export function snapSoft(obj: unknown, ms = 70): void {
         dead: false,
         channel: tw.channel,
         tag: tw.tag, // 計器：元予約の文脈を引き継ぐ
+        scope: tw.scope, // スコープも引き継ぐ（§7.3）
       })
     }
   }
@@ -309,7 +338,10 @@ export function update(dtMs: number): void {
     if (p >= 1) {
       tw.dead = true
       if (diagOn) diagCtx = `cb:${tw.tag ?? '?'}`
+      const prevScope = currentScope
+      currentScope = tw.scope // 子tween（着地バウンス等）は親のスコープを継承（§7.3）
       tw.onDone?.()
+      currentScope = prevScope
     }
   }
   // 掃除

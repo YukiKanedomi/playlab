@@ -37,6 +37,15 @@ const FONT = '"Shippori Mincho", serif'
 
 // ---- アイドルヒント（RM/Candy式・控えめ。校正しやすいよう定数化） ----
 const HINT_IDLE_MS = 4000 // この時間、無操作かつ盤面が静止したら最初のパルス
+
+/** C案移行Phase6（codex_c_phase46_plan.md §11）：解決経路のフラグ。
+ *  'legacy'=現行（board.swap()完全同期→view.play()一括予約）。既定値。
+ *  'stepped'=ResolutionCoordinator（エンジンをセグメント単位で停止し、ビュー再生完了と交互に進める）。
+ *  層の途中では切り替えない（モードはページ読み込みで固定）。 */
+const RESOLUTION_MODE: 'legacy' | 'stepped' = /[?&]resolution=stepped/.test(location.search) ? 'stepped' : 'legacy'
+
+/** 正規化した1手の入力（Coordinatorの単位。§9.2：queued swapは座標だけ保持しPiece参照を持たない） */
+type MoveCommand = { kind: 'swap'; a: XY; b: XY } | { kind: 'tap'; at: XY }
 const HINT_REPEAT_MS = 3000 // 以降、手が打たれるまでこの間隔で同じ手を再パルス
 
 // ---- ラン記録（拠点の「さいこう とうたつ」表示。ROGUE.md §8） ----
@@ -2445,6 +2454,14 @@ async function boot() {
         app.ticker.remove(idleHintTick)
         return
       }
+      // stepped経路：Coordinatorが手を進めている間はセグメント間の待ちが「静止」に見えるが手の途中。
+      // healer/命綱/ヒントを動かすと手の途中でreconcile・クリア回収・ヒント演出が割り込む（§10.2）
+      if (RESOLUTION_MODE === 'stepped' && coordinatorActive) {
+        idleHealMs = 0
+        hintIdleMs = 0
+        hintNextAt = HINT_IDLE_MS
+        return
+      }
       if (view.isQuiet()) {
         idleHealMs += t.deltaMS
         if (idleHealMs >= 2000) {
@@ -2564,10 +2581,11 @@ async function boot() {
       const dx = e.global.x - downAt.x
       const dy = e.global.y - downAt.y
       const dist = Math.hypot(dx, dy)
-      let evs: BoardEvent[] = []
+      // 入力をコマンドへ正規化してから経路（legacy/stepped）を分岐する（C案移行Phase6）
+      let cmd: MoveCommand | null = null
       if (dist < view.S * 0.35) {
         const c = board.at(downCell.x, downCell.y)
-        if (c?.piece && c.piece.kind !== 'normal' && c.piece.kind !== 'spore') evs = board.tap(downCell)
+        if (c?.piece && c.piece.kind !== 'normal' && c.piece.kind !== 'spore') cmd = { kind: 'tap', at: downCell }
       } else {
         const adx = Math.abs(dx)
         const ady = Math.abs(dy)
@@ -2575,11 +2593,17 @@ async function boot() {
         // 何もしない（不正手扱いにもしない＝音も往復も出さずキャンセル。1px差の決め打ちで誤爆していた）
         if (Math.max(adx, ady) >= Math.min(adx, ady) * 1.25) {
           const dir = adx > ady ? { x: Math.sign(dx), y: 0 } : { x: 0, y: Math.sign(dy) }
-          evs = board.swap(downCell, { x: downCell.x + dir.x, y: downCell.y + dir.y })
+          cmd = { kind: 'swap', a: downCell, b: { x: downCell.x + dir.x, y: downCell.y + dir.y } }
         }
       }
       downAt = null
       downCell = null
+      if (cmd === null) return
+      if (RESOLUTION_MODE === 'stepped') {
+        submitStepped(cmd)
+        return
+      }
+      const evs = cmd.kind === 'tap' ? board.tap(cmd.at) : board.swap(cmd.a, cmd.b)
       if (evs.length === 0) return
       if (evs.some((ev2) => ev2.t === 'swap' && ev2.illegal)) sfx.illegal()
       else sfx.swap()
@@ -2592,13 +2616,13 @@ async function boot() {
     // 補給量は祝福・呪いで動くので定数ではなく実際に起きた値を採録帯へ渡す
     let refillAmount = OXYGEN_SUPPLY_PER_FLOOR
     const floorFireCount = new Map<string, number>()
-    const handleFloorResult = (evs: BoardEvent[]) => {
-      resetHintTimer() // 手が解決したので、次の無操作4秒をここから数え直す（選定キャッシュも捨てる）
-      const dur = view.play(evs)
-      // 飛翔が落ちても数字は必ず board.goalDone に追いつく（演出の取りこぼしを表示に持ち込まない）
-      tw.delay(Math.min(dur + 500, 2200), () => {
-        if (alive()) syncGoalDisplay()
-      })
+    /**
+     * 1手ぶんの「集計消費」（C案移行Phase6・codex_c_phase46_plan.md §8.1-B/§8.2）。
+     * 記録・HUD数値・採録帯用カウンタなど、イベント時刻に依存しない消費だけをここに置く。
+     * legacy経路は手の直後、stepped経路は手の完了時（finalize）に全イベントまとめて1回呼ぶ
+     * ＝二重計上が構造的に起きない。演出（飛翔・被弾軌跡等）はBoardViewのコールバックが担う。
+     */
+    const accountMove = (evs: BoardEvent[]): { cleared: boolean; over: boolean } => {
       const refill = evs.find((e) => e.t === 'oxygen-refill')
       if (refill && refill.t === 'oxygen-refill') refillAmount = refill.amount
       // 「なぜ細ったか」の記録（PHASE2.md §2.5②）。層を出るときの灯は補給を足す前の値。
@@ -2638,8 +2662,17 @@ async function boot() {
           },
         })
       }
-      const cleared = evs.some((e) => e.t === 'floor-clear')
-      const over = evs.some((e) => e.t === 'run-over')
+      return { cleared: evs.some((e) => e.t === 'floor-clear'), over: evs.some((e) => e.t === 'run-over') }
+    }
+
+    const handleFloorResult = (evs: BoardEvent[]) => {
+      resetHintTimer() // 手が解決したので、次の無操作4秒をここから数え直す（選定キャッシュも捨てる）
+      const dur = view.play(evs)
+      // 飛翔が落ちても数字は必ず board.goalDone に追いつく（演出の取りこぼしを表示に持ち込まない）
+      tw.delay(Math.min(dur + 500, 2200), () => {
+        if (alive()) syncGoalDisplay()
+      })
+      const { cleared, over } = accountMove(evs)
       // 決着の画面は**盤面の演出が本当に終わってから**出す（2026-08-15 オーナー「連鎖が続いているのに
       // 勝利ページが出てくる」）。旧実装の Math.min(dur, 1200) は長い連鎖・勝利連射の途中で被せていた。
       // dur は「この手」のタイムラインだが、並行続行では前の手の尻尾も残りうるので isQuiet() で締める
@@ -2671,6 +2704,74 @@ async function boot() {
         lightSeries.push({ floor, light: Math.max(0, run.oxygen) })
         whenBoardQuiet(() => showRunResult(false))
       }
+    }
+
+    // ---- C案移行Phase6（codex_c_phase46_plan.md §9）：ResolutionCoordinator（?resolution=stepped 時のみ） ----
+    // エンジン1セグメント → ビュー再生完了 → 次セグメント…の交互進行。入力評価時に表示と論理が一致する。
+    // 割込は「現セグメントは最後まで再生 → 残段を無演出drain → reconcileで最終盤面へ → latest input 1件を再評価」。
+    // 決着（floor-clear / run-over）は queued input より優先（§9.2）。
+    let coordinatorActive = false
+    let latestInput: MoveCommand | null = null
+    const submitStepped = (cmd: MoveCommand) => {
+      if (coordinatorActive) {
+        latestInput = cmd // 無制限queueにしない：最新1件だけ上書き保持
+        return
+      }
+      void runStepped(cmd)
+    }
+    const runStepped = async (cmd: MoveCommand): Promise<void> => {
+      coordinatorActive = true
+      try {
+        const resolution = cmd.kind === 'swap' ? board.swapStepped(cmd.a, cmd.b) : board.tapStepped(cmd.at)
+        const firstStep = resolution.next()
+        if (firstStep === null) return // 空手（通常駒タップ等）。legacyの evs.length===0 と同じ扱い
+        resetHintTimer()
+        if (firstStep.events.some((e) => e.t === 'swap' && e.illegal)) sfx.illegal()
+        else sfx.swap()
+        const all: BoardEvent[] = [...firstStep.events]
+        const ctx = view.beginSteppedMove()
+        let step: typeof firstStep | null = firstStep
+        let segs = 0
+        while (step !== null) {
+          segs++
+          await view.playSegment(ctx, step)
+          if (!alive()) return
+          if (latestInput && !resolution.done) {
+            // 割込：残段を無演出で確定し、最終盤面へ写像を保証してから抜ける
+            const drained = resolution.drain()
+            all.push(...drained.events)
+            view.renderStable() // ドレイン分は意図的に描いていない＝差分が出て当然の一括同期（§9.2）
+            console.debug('[yacho] stepped interrupt: segs', segs, 'drained', drained.events.length)
+            break
+          }
+          step = resolution.next()
+          if (step) all.push(...step.events)
+        }
+        console.debug('[yacho] stepped move done: segs', segs, 'events', all.length)
+        view.finishSteppedMove(ctx)
+        syncGoalDisplay()
+        const { cleared, over } = accountMove(all)
+        if (cleared || over) {
+          floorDecided = true
+          inputLocked = true
+          latestInput = null // 決着はqueued inputより優先
+          if (cleared) onFloorClear()
+          else {
+            lightSeries.push({ floor, light: Math.max(0, run.oxygen) })
+            showRunResult(false)
+          }
+        }
+      } catch (err) {
+        // 非同期経路の例外はunhandled rejectionになり黙って手が途切れる。必ず可視化して盤面は写像を回復する
+        console.error('[yacho] stepped move failed:', err)
+        view.renderStable()
+      } finally {
+        coordinatorActive = false
+      }
+      // 手が確定した最終盤面で、保留中の最新入力を1件だけ再評価する
+      const next = latestInput
+      latestInput = null
+      if (next && !inputLocked && alive()) void runStepped(next)
     }
 
     const onFloorClear = () => {
