@@ -113,15 +113,27 @@ const TICKET_KEY: Record<UpgradeCategory, string> = {
   synergy: 'draft_ticket_relic',
   lamp: 'draft_ticket_relic',
 }
-/** 標本票3種の本文安全域（紙寸比・P1-4検品の修正ラウンド）。各紙型は縁の欠けや装飾が実測で異なるため、
- *  紙全体をテキスト領域にせずこの内側だけへ収める：plant=右上の葉飾り、instrument=左の金具クリップ、
- *  relic=左の紐紙片・右の空円と紙片を避ける。素材なし（フォールバック紙）は装飾が無いぶん広めに取る */
+/** 標本票3種の本文安全域（紙寸比。codex_draft_fixspec.md §2「安全域」の装飾実測値へ全面差し替え）。
+ *  値は1024×512元素材上の装飾実測に基づく割合で、紙は常に2:1固定描画（暫定実装5）なのでy側はcardW/2基準。
+ *  各紙型は縁の欠けや装飾が実測で異なるため、紙全体をテキスト領域にせずこの内側だけへ収める：
+ *  plant=右上の葉飾り、instrument=左の金具クリップ、relic=左の紐紙片・右の空円と紙片を避ける。
+ *  素材なし（フォールバック紙）は装飾が無いぶん広めに取る */
 const TICKET_SAFE_ZONE: Record<string, { x0: number; x1: number; y0: number; y1: number }> = {
-  draft_ticket_plant: { x0: 0.06, x1: 0.94, y0: 0.12, y1: 0.88 },
-  draft_ticket_instrument: { x0: 0.1, x1: 0.94, y0: 0.12, y1: 0.88 },
-  draft_ticket_relic: { x0: 0.06, x1: 0.72, y0: 0.14, y1: 0.86 },
+  draft_ticket_plant: { x0: 0.09, x1: 0.76, y0: 0.15, y1: 0.8 },
+  draft_ticket_instrument: { x0: 0.13, x1: 0.93, y0: 0.14, y1: 0.87 },
+  draft_ticket_relic: { x0: 0.14, x1: 0.77, y0: 0.14, y1: 0.84 },
 }
-const TICKET_SAFE_ZONE_FALLBACK = { x0: 0.06, x1: 0.94, y0: 0.08, y1: 0.92 }
+const TICKET_SAFE_ZONE_FALLBACK = { x0: 0.08, x1: 0.92, y0: 0.12, y1: 0.88 }
+/** 本文がcardH>naturalHへ溢れたときだけ紙下端に継ぎ足す短冊の色（正典§3.4「フル外枠は作らない」）。
+ *  各紙素材の下寄り本紙域（不透明ピクセル）を実測した平均色。UI.paper（明るいクリーム）そのままだと
+ *  紙自体より浮くため、継ぎ目が目立たないようこの色に寄せる */
+// （短冊方式は廃止＝紙スプライトの≤18%縦伸びで吸収するため、紙トーン定数は不要になった）
+/** 「推」印の最小y（naturalH比）。TICKET_SAFE_ZONEのy0（本文安全域）とは別に持つ：
+ *  plantは実測で本紙の上端が装飾実測でおよそ17%からしか始まらず、本文安全域(0.15)のままだと
+ *  印の上側が紙の外（透過部）へ半分はみ出す（オーナー実機QA・fx_375x667_1.png）。印だけこの値で押し下げる */
+const TICKET_MARK_Y0: Record<string, number> = {
+  draft_ticket_plant: 0.19,
+}
 
 /** 採録画面の3つの行為（PHASE2.md §2.8）。採る＝入れ替え／合成＝枠が空く／深化＝枠は変わらない */
 type DraftMode = 'take' | 'fuse' | 'deepen'
@@ -361,6 +373,49 @@ function layoutRichText(
   return y + lineH
 }
 
+/** 文字単位で最大幅いっぱいに改行する（CJK主体のため単語境界は見ない）。用語リンクは持たないプレーン改行専用 */
+function wrapAllLines(measurer: Text, text: string, maxWidth: number, fontSize: number, bold: boolean): string[] {
+  measurer.style.fontSize = fontSize
+  measurer.style.fontWeight = bold ? 'bold' : 'normal'
+  const lines: string[] = []
+  let cur = ''
+  for (const ch of text) {
+    if (ch === '\n') {
+      lines.push(cur)
+      cur = ''
+      continue
+    }
+    const cand = cur + ch
+    measurer.text = cand
+    if (measurer.width > maxWidth && cur.length) {
+      lines.push(cur)
+      cur = ch
+    } else {
+      cur = cand
+    }
+  }
+  lines.push(cur)
+  return lines
+}
+
+/**
+ * ドラフトカードの見出し・本文フォールバック用：最大maxLines行までに畳み、溢れたぶんは末尾を省略記号で切り詰める
+ * （codex_draft_fixspec.md §2「折返し・行数・カード高の決定順」3・9：本文13px/補助11px未満には縮めず、行数側で吸収する）。
+ */
+function wrapLines(measurer: Text, text: string, maxWidth: number, maxLines: number, fontSize: number, bold = false): string[] {
+  const all = wrapAllLines(measurer, text, maxWidth, fontSize, bold)
+  if (all.length <= maxLines) return all
+  const kept = all.slice(0, maxLines)
+  let last = kept[maxLines - 1]
+  measurer.text = last + '…'
+  while (last.length > 0 && measurer.width > maxWidth) {
+    last = last.slice(0, -1)
+    measurer.text = last + '…'
+  }
+  kept[maxLines - 1] = last + '…'
+  return kept
+}
+
 // ---- 野帳シートのアイコン（ビルドドックの描き方を簡略再利用。素材キーは spriteTexture(...) ?? null で必ずフォールバック） ----
 function makeUpgradeIconContainer(id: string, size: number): Container {
   const c = new Container()
@@ -456,29 +511,93 @@ function drawConnectionChip(host: Container, x: number, y: number, maxW: number,
 }
 /**
  * 呼応する所持知見を「アイコンの併記」だけで見せる（オーナー指示：説明文は不要）。
- * 接頭に「呼応」の1語だけ添え、アイコンを最大3つ横並び、あふれたら「+N」。理由文・ツールチップは付けない。
- * 戻り値はブロック下端のy（後続要素の積み上げ用）
+ * 接頭に「呼応」の1語だけ添え、アイコンを最大3つ横並び、maxWに収まらなければ1個+「+N」へ畳み、
+ * それでも収まらなければ「呼応 +N」のテキストのみへ畳む（codex_draft_fixspec.md §2 折返し規則6）。
+ * 戻り値はブロック下端のy（後続要素の積み上げ用）。measurerは幅の下見専用（新規Textを都度作らない）
  */
-function drawConnectedIcons(host: Container, x: number, y: number, ids: string[], iconSize: number): number {
-  const label = new Text({ text: '呼応', style: { fill: 0x8a6a3f, fontSize: iconSize * 0.72, fontFamily: FONT, fontWeight: 'bold' } })
-  label.position.set(x, y + (iconSize - label.height) / 2)
+function drawConnectedIcons(host: Container, measurer: Text, x: number, y: number, ids: string[], iconSize: number, maxW: number): number {
+  const rowH = Math.max(20, iconSize + 4)
+  const labelFont = Math.max(11, iconSize * 0.72)
+  const gap = iconSize * 0.22
+  measurer.style.fontSize = labelFont
+  measurer.style.fontWeight = 'bold'
+  const widthFor = (n: number) => {
+    measurer.text = '呼応'
+    let w = measurer.width + iconSize * 0.3 + n * iconSize + Math.max(0, n - 1) * gap
+    if (ids.length > n) {
+      measurer.text = `+${ids.length - n}`
+      w += measurer.width + iconSize * 0.15
+    }
+    return w
+  }
+  let shown = Math.min(3, ids.length)
+  while (shown > 1 && widthFor(shown) > maxW) shown--
+  if (shown === 1 && widthFor(1) > maxW) {
+    // 1個+ラベルすら収まらない狭さ：テキストのみ「呼応 +N」（正典§2折返し規則6の最終段）
+    const only = new Text({ text: `呼応 +${ids.length}`, style: { fill: 0x8a6a3f, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
+    only.position.set(x, y + (rowH - only.height) / 2)
+    host.addChild(only)
+    return y + rowH
+  }
+  const label = new Text({ text: '呼応', style: { fill: 0x8a6a3f, fontSize: labelFont, fontFamily: FONT, fontWeight: 'bold' } })
+  label.position.set(x, y + (rowH - label.height) / 2)
   host.addChild(label)
   let cx = x + label.width + iconSize * 0.3
-  const gap = iconSize * 0.22
-  const shown = ids.slice(0, 3)
-  for (const id of shown) {
+  for (const id of ids.slice(0, shown)) {
     const icon = makeUniqueUpgradeIcon(id, iconSize)
-    icon.position.set(cx + iconSize / 2, y + iconSize / 2)
+    icon.position.set(cx + iconSize / 2, y + rowH / 2)
     host.addChild(icon)
     cx += iconSize + gap
   }
-  const overflow = ids.length - shown.length
+  const overflow = ids.length - shown
   if (overflow > 0) {
-    const moreT = new Text({ text: `+${overflow}`, style: { fill: 0x8a6a3f, fontSize: iconSize * 0.62, fontFamily: FONT, fontWeight: 'bold' } })
-    moreT.position.set(cx + iconSize * 0.08, y + (iconSize - moreT.height) / 2)
+    const moreT = new Text({ text: `+${overflow}`, style: { fill: 0x8a6a3f, fontSize: Math.max(11, iconSize * 0.62), fontFamily: FONT, fontWeight: 'bold' } })
+    moreT.position.set(cx + iconSize * 0.08, y + (rowH - moreT.height) / 2)
     host.addChild(moreT)
   }
-  return y + iconSize
+  return y + rowH
+}
+
+/**
+ * 採録時のおまけ帯（codex_draft_fixspec.md §2「呼応行・おまけ帯」）：最小28px・1行固定・省略記号。
+ * 下地は不透明寄り（alpha 0.55→0.88）にして紙の絵柄の上でもコントラストを確保する（オーナー実機QA指摘）。
+ * 戻り値はブロック下端のy
+ */
+function drawBonusBand(host: Container, measurer: Text, x: number, y: number, w: number, bonus: string, fontSize: number): number {
+  const bandH = Math.max(28, fontSize * 1.8)
+  const band = new Graphics()
+  band.roundRect(x, y, w, bandH, bandH * 0.28).fill({ color: 0xf4ecd8, alpha: 0.88 })
+  host.addChild(band)
+  const giftSize = bandH * 0.5
+  const giftCx = x + bandH * 0.55
+  const giftCy = y + bandH / 2
+  const gift = new Graphics()
+  gift.roundRect(giftCx - giftSize / 2, giftCy - giftSize * 0.32, giftSize, giftSize * 0.64, giftSize * 0.08).fill(UI.brass)
+  gift.rect(giftCx - giftSize * 0.09, giftCy - giftSize * 0.32, giftSize * 0.18, giftSize * 0.64).fill(0x8a5a2a)
+  gift.rect(giftCx - giftSize / 2, giftCy - giftSize * 0.08, giftSize, giftSize * 0.16).fill(0x8a5a2a)
+  host.addChild(gift)
+  const bonusText = bonus.replace(/^おまけ[:：]\s*/, '')
+  const textX = giftCx + giftSize * 0.85
+  const maxTextW = Math.max(20, x + w - textX - 6)
+  measurer.style.fontSize = fontSize
+  measurer.style.fontWeight = 'normal'
+  let shown = `採録時のおまけ　${bonusText}`
+  measurer.text = shown
+  if (measurer.width > maxTextW) {
+    while (shown.length > 0) {
+      shown = shown.slice(0, -1)
+      measurer.text = shown + '…'
+      if (measurer.width <= maxTextW) {
+        shown += '…'
+        break
+      }
+    }
+  }
+  const bonusT = new Text({ text: shown, style: { fill: 0x6b5238, fontSize, fontFamily: FONT, fontWeight: 'bold' } })
+  bonusT.anchor.set(0, 0.5)
+  bonusT.position.set(textX, giftCy)
+  host.addChild(bonusT)
+  return y + bandH
 }
 const ENEMY_ICON_TEX: Partial<Record<EnemyKind, string>> = { rockshell: 'kokeishi', sporeling: 'subi', swarm: 'e_swarm', boss: 'hako' }
 function makeEnemyIconContainer(kind: EnemyKind, size: number): Container {
@@ -2960,14 +3079,16 @@ async function boot() {
       tw.tween(dim, { alpha: 0.26 }, 350) // P1-3：0.34→0.24〜0.28
 
       const slipW = vw * 0.86
-      const slipH = Math.min(148, vh * 0.17)
+      const slipTex = spriteTexture('floor_record_slip')
+      // 横断監査で判明：floor_record_slip(1536×512=3:1)を幅vw*0.86・高さmin(148,vh*0.17)の縦横別倍率で
+      // 伸ばしており、端末サイズ次第で紙が歪んでいた。ドラフト票（正典§2）と同じ方針でアスペクトを固定する
+      const slipH = slipTex ? slipW * (slipTex.height / slipTex.width) : slipW / 3
       const slipX = vw * 0.07
       const slipY = vh * 0.49 - slipH / 2 // 画面中央やや下へ差し込む
       const band = new Container()
       // タップは全部 dim で受ける。帯を素通しにしないと「帯の上のタップ」だけが黙って無視される
       // （playRoot が interactive なので子の帯がヒットテストに掛かる。旧実装では自動送りがこの欠陥を隠していた。実測 2026-08-15）
       band.eventMode = 'none'
-      const slipTex = spriteTexture('floor_record_slip')
       if (slipTex) {
         const sp = new Sprite(slipTex)
         sp.width = slipW
@@ -3307,7 +3428,7 @@ async function boot() {
       // 位置が重なるため、ドラフト中は丸ごと隠す。半透明の暗幕だけでは透けて混線する
       ui.visible = false
       const dimG = new Graphics()
-      dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 0.66 }) // P1-4：0.82→0.64〜0.68
+      dimG.rect(0, 0, vw, vh).fill({ color: 0x0f0a06, alpha: 0.72 }) // P1-4：0.82→0.64〜0.68／実機QA：カード可読性不足で0.66→0.72（codex_draft_fixspec.md付随修正）
       dimG.eventMode = 'static' // 背面のタップを吸収（誤操作防止）
       panel.addChild(dimG)
       playRoot.addChild(panel)
@@ -3446,21 +3567,23 @@ async function boot() {
         .map((c) => `${CATEGORY_LABEL[c]}${counts[c]}`)
         .join('・')
       if (breakdownText) {
-        const bd = new Text({ text: breakdownText, style: { fill: 0x9a8968, fontSize: fs(0.021), fontFamily: FONT } })
+        // 実機QA：暗地に対して薄くて読みにくい → 0x9a8968（鈍い黄土）から明るい杏色へ（付随修正）
+        const bd = new Text({ text: breakdownText, style: { fill: 0xcbb98a, fontSize: fs(0.021), fontFamily: FONT } })
         bd.position.set(padX, stripRowY + fs(0.045))
         panel.addChild(bd)
       }
 
-      // ---- 20〜82%：候補カード3枚（各18%・間隔4%。[D]表のとおり固定） ----
+      // ---- 候補カード3枚（codex_draft_fixspec.md §2）----
       // 行為が2つ以上あるときだけ、カードの上に細い行為タブを1本足して、そのぶんカードを詰める
       const hasTabs = modes.length > 1
       const tabsY = vh * 0.207
       const tabH = vh * 0.048
-      const cardTop = hasTabs ? vh * 0.245 : vh * 0.2
-      const cardH = hasTabs ? vh * 0.165 : vh * 0.18
+      const cardsRegionTop = hasTabs ? vh * 0.245 : vh * 0.2
       const cardGap = hasTabs ? vh * 0.032 : vh * 0.04
-      const safeW = Math.min(vw, vh * 0.62)
-      const cardW = safeW - 32
+      // 正典§2：cardW = min(viewportW-32, 400)。紙は縦横別倍率で伸縮させず、常に2:1固定で描く（暫定実装5）
+      const cardW = Math.min(vw - 32, 400)
+      const naturalH = cardW / 2
+      const minCardH = Math.max(176, naturalH)
       const cardIconSize = Math.max(30, Math.min(40, fs(0.1)))
       const connIconSize = Math.max(16, Math.min(20, fs(0.045)))
       // 2026-08-15 オーナー「文字が枠に対して小さい」→ 本文を一段大きく（0.0265→0.031）。
@@ -3580,78 +3703,184 @@ async function boot() {
         setStripHighlight(mode === 'take' && selectedIndex !== null ? connections[selectedIndex].connected.map((u) => u.id) : null)
       }
 
-      // カード3枚は行為タブで中身が入れ替わるので、専用のホストへ描いて丸ごと作り直す
+      // カード3枚は行為タブで中身が入れ替わるので、専用のホストへ描いて丸ごと作り直す。
+      // カードごとに高さが変わる（正典§2：cardH = max(minH, 実測コンテンツ高+上下インセット)）ため、
+      // 3枚の合計高が候補領域を超えたら cardHost をマスク＋ドラッグで縦スクロールにする（P0-7）
       const cardHost = new Container()
       panel.addChild(cardHost)
+      const cardMask = new Graphics()
+      panel.addChild(cardMask) // stripMaskと同じ作法：mask専用として使う限り、そのものは描画されない
+      const cardsRegionBottom = bottomTop
+
+      // 積み上げの間隔（正典§2「折返し・行数・カード高の決定順」4：標準8px→最小4pxの2段階だけ試す）
+      const HEADER_GAP_STD = 8
+      const HEADER_GAP_MIN = 4
+      const FLOW_GAP = 6 // 本文→呼応→おまけ帯の固定間隔（正典§2「呼応行・おまけ帯」の積み上げ図どおり）
+      const BOTTOM_PAD = 8
+
+      /** 見出し（最大2行）→本文（最大4行）→呼応/チップ→おまけ帯 の順に安全域内へ積み上げる。戻り値＝内容レイヤーと下端y */
+      const buildCardContent = (view: DraftCardView, measurer: Text, zoneX0: number, zoneX1: number, zoneY0: number, headerGap: number): { layer: Container; bottomY: number } => {
+        const layer = new Container()
+        const textX = zoneX0 + cardIconSize + Math.max(12, fs(0.018)) // タイトルはアイコン右端+12px以上（P1-4）
+        const headerWrapW = Math.max(20, zoneX1 - textX)
+        const catT = new Text({ text: view.category, style: { fill: 0x8a6a3f, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' } })
+        catT.position.set(textX, zoneY0)
+        layer.addChild(catT)
+        const nameFont = fs(0.038) // 2026-08-15 オーナー「文字が枠に対して小さい」→ 見出しを一段大きく
+        const nameLines = wrapLines(measurer, view.name, headerWrapW, 2, nameFont, true) // 見出し最大2行（正典§2手順3）
+        const nameT = new Text({
+          text: nameLines.join('\n'),
+          style: { fill: UI.paperInk, fontSize: nameFont, fontFamily: FONT, fontWeight: 'bold', lineHeight: nameFont * 1.18 },
+        })
+        nameT.position.set(textX, zoneY0 + catT.height + 2)
+        layer.addChild(nameT)
+        let headerBlockH = catT.height + 2 + nameT.height
+        // 合成の元2つ／深化まえの効果（PHASE2 §2.8）。見出しの直下に淡く1行だけ添える
+        if (view.note) {
+          const noteT = new Text({
+            text: view.note,
+            style: { fill: 0x8a6a3f, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: headerWrapW, breakWords: true },
+          })
+          noteT.position.set(textX, zoneY0 + headerBlockH + 4)
+          layer.addChild(noteT)
+          headerBlockH += 4 + noteT.height
+        }
+        const icon = makeUniqueUpgradeIcon(view.iconId, cardIconSize)
+        icon.position.set(zoneX0 + cardIconSize / 2, zoneY0 + cardIconSize / 2)
+        layer.addChild(icon)
+
+        // 起きること（三段の第二段）。descをカード幅いっぱいの1段落で流す。用語には点線下線＋「?」でリンクを張る（[C]）。
+        // カード全体タップは選択トグルのみなので、用語タップは layoutRichText 側の stopPropagation で確実に分離する
+        const bodyTop = zoneY0 + Math.max(cardIconSize, headerBlockH) + headerGap
+        const bodyWrapW = Math.max(20, zoneX1 - zoneX0)
+        const lineH = bodyFont * 1.56
+        measurer.style.fontWeight = 'normal' // wrapLines(見出し)がboldへ変えているので、本文測定前に戻す
+        const usedTerms = new Set<string>()
+        const trial = new Container()
+        const trialBottom = layoutRichText(trial, measurer, tokenizeRich(view.desc, usedTerms), zoneX0, bodyTop, bodyWrapW, bodyFont, UI.paperInk, 0x7a5a1e, openGlossaryTerm)
+        let rowY: number
+        if (trialBottom - bodyTop <= lineH * 4 + 0.5) {
+          layer.addChild(trial) // 4行に収まった：用語リンク付きでそのまま採用
+          rowY = trialBottom
+        } else {
+          // 4行を超える：正典§2「4行を超えるデータはカード用短縮文を別途用意」の暫定代替として、
+          // 用語リンクは諦めプレーン4行+省略記号へ畳んで必ず収める（本文は13px未満へ縮めない）
+          trial.destroy({ children: true })
+          const lines = wrapLines(measurer, view.desc, bodyWrapW, 4, bodyFont, false)
+          const bodyT = new Text({ text: lines.join('\n'), style: { fill: UI.paperInk, fontSize: bodyFont, fontFamily: FONT, lineHeight: lineH } })
+          bodyT.position.set(zoneX0, bodyTop)
+          layer.addChild(bodyT)
+          rowY = bodyTop + lines.length * lineH
+        }
+
+        // 呼応（採るときのみ）／チップ（合成・深化の枠の動き）：バッジ。どちらか一方だけが存在する
+        if (view.connectedIds && view.connectedIds.length) {
+          rowY += FLOW_GAP
+          rowY = drawConnectedIcons(layer, measurer, zoneX0, rowY, view.connectedIds, connIconSize, bodyWrapW)
+        }
+        if (view.chip) {
+          rowY += FLOW_GAP
+          rowY = drawConnectionChip(layer, zoneX0, rowY, bodyWrapW, view.chip, Math.max(10, fs(0.022)))
+        }
+        // 採録時のおまけ（starterDescありのみ・三段の第三段）：最小28px・1行・省略記号の帯
+        if (view.bonus) {
+          rowY += FLOW_GAP
+          rowY = drawBonusBand(layer, measurer, zoneX0, rowY, bodyWrapW, view.bonus, Math.max(11, fs(0.019)))
+        }
+        return { layer, bottomY: rowY }
+      }
 
       const renderCards = () => {
         cardHost.removeChildren().forEach((c) => c.destroy({ children: true }))
+        cardHost.removeAllListeners() // 前回タブでのスクロールドラッグ購読を残さない
         cardContainers = []
         cardGlows = []
         cardBaseY = []
         // カード本文の用語リンク（[C]用語リンクの実装方針）：測定用Textは3枚で使い回し、生成後まとめて片付ける
         const cardMeasurer = new Text({ text: '', style: { fontFamily: FONT, fontSize: bodyFont } })
-        cardsFor(mode).forEach((view, i) => {
-          const cy = cardTop + i * (cardH + cardGap)
-          const card = new Container()
-          card.pivot.set(cardW / 2, cardH / 2) // 選択時の拡大が中心基準になるようpivotを中央に置く
-          card.position.set((vw - cardW) / 2 + cardW / 2, cy + cardH / 2)
-          cardBaseY.push(card.position.y)
+        const cardX0 = (vw - cardW) / 2
+        let stackY = 0
 
-          // 背景：野帳へ挟んだ標本票（P1-4・§2.5）。系統ごとに紙型を切り替える
-          // （植物=繊維紙・淡緑罫／鉱物機械=方眼青灰紙・真鍮クリップ／遺物異種=濃端の薄紙・朱印）。
-          // 素材が無ければクリーム紙＋墨25%の1本線へフォールバック（角丸はcardH*0.09→min(8,cardH*0.04)）
+        cardsFor(mode).forEach((view, i) => {
+          // 紙型ごとの安全域（紙寸比→px）。紙は2:1固定描画（暫定実装5）なのでy側はnaturalH基準
           const ticketKey = TICKET_KEY[UPGRADE_CATEGORY[view.iconId]] ?? 'draft_ticket_relic'
           const ticketTex = spriteTexture(ticketKey)
-          if (ticketTex) {
-            const sp = new Sprite(ticketTex)
-            sp.width = cardW
-            sp.height = cardH
-            card.addChild(sp)
-          } else {
-            const bg = new Graphics()
-            bg.roundRect(0, 0, cardW, cardH, Math.min(8, cardH * 0.04)).fill({ color: UI.paper, alpha: 0.98 })
-            bg.roundRect(0, 0, cardW, cardH, Math.min(8, cardH * 0.04)).stroke({ width: 1, color: UI.ink, alpha: 0.25 })
-            card.addChild(bg)
-          }
-          cardContainers.push(card)
-
-          // 本文安全域（紙寸比→px）。紙型ごとに縁の欠け・装飾位置が違うため、全テキスト・アイコン・印はこの内側に収める（P1-4修正）
           const zone = (ticketTex ? TICKET_SAFE_ZONE[ticketKey] : null) ?? TICKET_SAFE_ZONE_FALLBACK
           const zoneX0 = cardW * zone.x0
           const zoneX1 = cardW * zone.x1
-          const zoneY0 = cardH * zone.y0
-          const zoneY1 = cardH * zone.y1
+          const zoneY0 = naturalH * zone.y0
+          const zoneY1 = naturalH * zone.y1
+          const bottomInset = naturalH - zoneY1
 
-          // 選択マーク（未選択時は非表示）：金の太枠ではなく「左上の真鍮クリップ＋採録候補の朱印」の2点で示す（P1-4）。
-          // card自身はpivotで中央基準に回転・拡縮されるが、子の座標系はbgと同じ0..cardW/0..cardHのまま
+          let built = buildCardContent(view, cardMeasurer, zoneX0, zoneX1, zoneY0, HEADER_GAP_STD)
+          if (built.bottomY > zoneY1) {
+            const retry = buildCardContent(view, cardMeasurer, zoneX0, zoneX1, zoneY0, HEADER_GAP_MIN)
+            built.layer.destroy({ children: true })
+            built = retry
+          }
+          if (built.bottomY > zoneY1 && DEBUG_PLACE) {
+            console.warn(`[yacho draft] 安全域超過: 「${view.name}」(${ticketKey}) 本文下端=${Math.round(built.bottomY)}px 安全域下端=${Math.round(zoneY1)}px → カード高を伸ばして吸収`)
+          }
+          const contentBottom = built.bottomY + BOTTOM_PAD
+          const cardH = Math.max(minCardH, contentBottom + bottomInset) // 正典§2のcardH式（収まりきらないぶんだけ伸びる）
+
+          const card = new Container()
+          if (ticketTex) {
+            // 正典§3.4「一様なクリーム角丸カードにしない」：紙の周囲に平坦な下地を敷かず、紙そのものを
+            // カードの見た目にする。縦横を独立伸縮させず、常に2:1固定で描く（暫定実装5）
+            const sp = new Sprite(ticketTex)
+            sp.width = cardW
+            // 実データが2:1へ収まらなかった分は、紙スプライト自体を最大12%だけ縦に伸ばして吸収する。
+            // 有機的な紙のテクスチャではこの範囲の伸びは視認不能（実測のあふれは4〜8%）で、
+            // 別素材の短冊を継ぎ足すと素材下辺の透過（紐の垂れ・破れで約2割）との間に隙間が生まれ
+            // 「浮いた帯」に見える（オーナー実機QA）。12%超の稀なケースは呼応/おまけの畳み側が受ける
+            sp.height = Math.min(cardH, naturalH * 1.18)
+            card.addChild(sp)
+          } else {
+            // 素材のない生成紙（フォールバック）だけ、角丸紙面を描く（正典§3.4で使用可とされる唯一の例外）
+            const bg = new Graphics()
+            const radius = Math.min(8, naturalH * 0.04)
+            bg.roundRect(0, 0, cardW, cardH, radius).fill({ color: UI.paper, alpha: 0.98 }).stroke({ width: 1, color: UI.ink, alpha: 0.25 })
+            card.addChild(bg)
+          }
+          card.addChild(built.layer)
+          cardContainers.push(card)
+
+          // 選択マーク（採録候補の朱印）・「推」印は本文安全域を消費させず、紙の右マージン（zoneX1の外）へ置く。
+          // マージンが足りない紙型（instrument等）では出さない＝「置けない場合は非表示」（正典§2「推印」）
           const marks = new Container()
           const clip = new Graphics()
           clip.roundRect(fs(0.014), -fs(0.012), fs(0.024), fs(0.05), fs(0.006)).fill(UI.brass).stroke({ width: 1, color: 0x6b4f22 })
           marks.addChild(clip)
-          const stampR = Math.min(cardH * 0.16, fs(0.06))
-          const stamp = new Container()
-          stamp.position.set(Math.min(cardW - stampR - fs(0.03), zoneX1 - stampR), cardH / 2)
-          stamp.rotation = 0.14
-          const stampRing = new Graphics()
-          stampRing.circle(0, 0, stampR).stroke({ width: 2, color: UI.cinnabar, alpha: 0.85 })
-          stamp.addChild(stampRing)
-          const stampT = new Text({ text: '採録候補', style: { fill: UI.cinnabar, fontSize: stampR * 0.42, fontFamily: FONT, fontWeight: 'bold' } })
-          stampT.anchor.set(0.5)
-          const stampFitW = stampR * 1.6
-          if (stampT.width > stampFitW) stampT.scale.set(stampFitW / stampT.width)
-          stamp.addChild(stampT)
-          marks.addChild(stamp)
+          const stampMarginW = cardW - zoneX1
+          const selR = Math.min(naturalH * 0.16, fs(0.06))
+          const pushR = Math.max(9, fs(0.024))
+          const canStamp = stampMarginW >= Math.max(selR, pushR) * 2 + 10
+          if (canStamp) {
+            const stampCx = zoneX1 + stampMarginW / 2
+            const stamp = new Container()
+            stamp.position.set(stampCx, zoneY0 + selR * 2 + 8)
+            stamp.rotation = 0.14
+            const stampRing = new Graphics()
+            stampRing.circle(0, 0, selR).stroke({ width: 2, color: UI.cinnabar, alpha: 0.85 })
+            stamp.addChild(stampRing)
+            const stampT = new Text({ text: '採録候補', style: { fill: UI.cinnabar, fontSize: selR * 0.42, fontFamily: FONT, fontWeight: 'bold' } })
+            stampT.anchor.set(0.5)
+            const stampFitW = selR * 1.6
+            if (stampT.width > stampFitW) stampT.scale.set(stampFitW / stampT.width)
+            stamp.addChild(stampT)
+            marks.addChild(stamp)
+          }
           marks.visible = false
           card.addChild(marks)
           cardGlows.push(marks)
 
-          // 「推」印（採るときだけ・呼応最多の1枚だけ）：黄色タグではなく右上の小さな押印に変更（P1-4）
-          if (mode === 'take' && i === recommendedIndex) {
-            const pushR = Math.max(9, fs(0.024))
+          // 「推」印（採るときだけ・呼応最多の1枚だけ）。y0は本文安全域のzoneY0ではなくTICKET_MARK_Y0を使う
+          // （紙型によっては本文安全域より紙自体の上端が低い位置からしか始まらず、zoneY0だと印の上側が紙の外へはみ出す）
+          if (canStamp && mode === 'take' && i === recommendedIndex) {
+            const markY0 = naturalH * (TICKET_MARK_Y0[ticketKey] ?? zone.y0)
             const push = new Container()
-            // 紙の実際の縁（安全域）の内側に収める。旧: 幾何形状の角基準で紙のちぎれ端からはみ出していた（P1-4修正）
-            push.position.set(zoneX1 - pushR, zoneY0 + pushR)
+            push.position.set(zoneX1 + stampMarginW / 2, markY0 + pushR)
             push.rotation = -0.1
             const pushG = new Graphics()
             pushG.circle(0, 0, pushR).stroke({ width: 1.5, color: UI.brass, alpha: 0.85 })
@@ -3662,100 +3891,59 @@ async function boot() {
             card.addChild(push)
           }
 
-          // ① 左に固有アイコン36〜40px、右に系統名（小）＋強化名（大）
-          const headerTop = zoneY0
-          const textX = zoneX0 + cardIconSize + Math.max(12, fs(0.018)) // タイトルはアイコン右端+12px以上（P1-4）
-          const catT = new Text({
-            text: view.category,
-            style: { fill: 0x8a6a3f, fontSize: fs(0.024), fontFamily: FONT, fontWeight: 'bold' },
-          })
-          catT.position.set(textX, headerTop)
-          card.addChild(catT)
-          const nameT = new Text({
-            text: view.name,
-            style: {
-              fill: UI.paperInk,
-              fontSize: fs(0.038), // 2026-08-15 オーナー「文字が枠に対して小さい」→ 見出しを一段大きく
+          // 最終防衛：カード自身の矩形でマスクし、計算のズレが残っても紙の外へは絶対に出さない（正典§2）
+          const clipMask = new Graphics().rect(0, 0, cardW, cardH).fill(0xffffff)
+          card.addChild(clipMask)
+          card.mask = clipMask
 
-              fontFamily: FONT,
-              fontWeight: 'bold',
-              wordWrap: true,
-              wordWrapWidth: zoneX1 - textX,
-              breakWords: true,
-            },
-          })
-          nameT.position.set(textX, headerTop + catT.height + fs(0.002))
-          card.addChild(nameT)
-          let headerBlockH = catT.height + fs(0.002) + nameT.height
-          // 合成の元2つ／深化まえの効果（PHASE2 §2.8）。見出しの直下に淡く1行だけ添える
-          if (view.note) {
-            const noteT = new Text({
-              text: view.note,
-              style: { fill: 0x8a6a3f, fontSize: fs(0.024), fontFamily: FONT, wordWrap: true, wordWrapWidth: zoneX1 - textX, breakWords: true },
-            })
-            noteT.position.set(textX, headerTop + headerBlockH + fs(0.004))
-            card.addChild(noteT)
-            headerBlockH += fs(0.004) + noteT.height
-          }
-          const icon = makeUniqueUpgradeIcon(view.iconId, cardIconSize)
-          icon.position.set(zoneX0 + cardIconSize / 2, headerTop + cardIconSize / 2)
-          card.addChild(icon)
-
-          // ② 起きること（三段の第二段。PHASE2 §3：「条件／効果」のラベル列＝開発データの露出をやめ、
-          // descをカード幅いっぱいの1段落で流す）。用語には点線下線＋「?」でリンクを張る（[C]用語リンクの実装方針）。
-          // カード全体タップは選択トグルのみなので、用語タップは layoutRichText 側の stopPropagation で確実に分離する
-          const cardUsedTerms = new Set<string>()
-          const bodyTop = headerTop + Math.max(cardIconSize, headerBlockH) + cardH * 0.04
-          const bodyWrapW = Math.max(20, zoneX1 - zoneX0)
-          let rowY =
-            layoutRichText(card, cardMeasurer, tokenizeRich(view.desc, cardUsedTerms), zoneX0, bodyTop, bodyWrapW, bodyFont, UI.paperInk, 0x7a5a1e, openGlossaryTerm) +
-            cardH * 0.025
-
-          // ③ バッジ（あれば）：採るときは呼応する所持知見のアイコン併記のみ（文章は作らない。オーナー指示）。
-          // 合成・深化は枠がどう動くかをここに出す
-          if (view.connectedIds && view.connectedIds.length) {
-            rowY = drawConnectedIcons(card, zoneX0, rowY, view.connectedIds, connIconSize) + cardH * 0.02
-          }
-          if (view.chip) {
-            rowY = drawConnectionChip(card, zoneX0, rowY, zoneX1 - zoneX0, view.chip, Math.max(10, fs(0.022))) + cardH * 0.02
-          }
-
-          // ④ 採録時のおまけ（starterDescありのみ。三段の第三段）：本文より一段小さく・淡い帯・小さな贈り物アイコンで従属的に表示
-          if (view.bonus) {
-            const bandH = cardH * 0.16
-            // 下端固定だと呼応バッジと重なることがあるため、本文の積み上げ位置(rowY)より必ず下へ置く（安全域の下端まで）
-            const bandY = Math.max(zoneY1 - bandH, rowY + cardH * 0.01)
-            const bandX = zoneX0
-            const bandW = zoneX1 - zoneX0
-            const band = new Graphics()
-            band.roundRect(bandX, bandY, bandW, bandH, bandH * 0.28).fill({ color: 0xf4ecd8, alpha: 0.55 })
-            card.addChild(band)
-            const giftSize = bandH * 0.5
-            const giftCx = bandX + bandH * 0.55
-            const giftCy = bandY + bandH / 2
-            const gift = new Graphics()
-            gift.roundRect(giftCx - giftSize / 2, giftCy - giftSize * 0.32, giftSize, giftSize * 0.64, giftSize * 0.08).fill(UI.brass)
-            gift.rect(giftCx - giftSize * 0.09, giftCy - giftSize * 0.32, giftSize * 0.18, giftSize * 0.64).fill(0x8a5a2a)
-            gift.rect(giftCx - giftSize / 2, giftCy - giftSize * 0.08, giftSize, giftSize * 0.16).fill(0x8a5a2a)
-            card.addChild(gift)
-            const bonusText = view.bonus.replace(/^おまけ[:：]\s*/, '')
-            const bonusFont = Math.max(fs(0.019), bandH * 0.34)
-            const bonusT = new Text({
-              text: `採録時のおまけ　${bonusText}`,
-              style: { fill: 0x6b5238, fontSize: bonusFont, fontFamily: FONT, wordWrap: true, wordWrapWidth: bandW - giftSize * 1.9, breakWords: true },
-            })
-            bonusT.anchor.set(0, 0.5)
-            bonusT.position.set(giftCx + giftSize * 0.85, giftCy)
-            card.addChild(bonusT)
-          }
-
+          card.pivot.set(cardW / 2, cardH / 2) // 選択時の拡大が中心基準になるようpivotを中央に置く
+          card.position.set(cardX0 + cardW / 2, stackY + cardH / 2)
+          cardBaseY.push(card.position.y)
           card.eventMode = 'static'
           card.cursor = 'pointer'
           card.hitArea = { contains: (x: number, y: number) => x >= 0 && x <= cardW && y >= 0 && y <= cardH }
           card.on('pointertap', () => selectCard(i))
           cardHost.addChild(card)
+          stackY += cardH + cardGap
         })
         cardMeasurer.destroy()
+
+        // 3枚（cardGap込み）の合計高が候補領域を超えたら、cardHostをマスク＋ドラッグで縦スクロール化する（P0-7）
+        const totalH = cardContainers.length ? stackY - cardGap : 0
+        const regionH = cardsRegionBottom - cardsRegionTop
+        cardHost.position.set(0, cardsRegionTop)
+        if (totalH > regionH) {
+          cardMask.clear().rect(0, cardsRegionTop, vw, regionH).fill(0xffffff)
+          cardHost.mask = cardMask
+          const minY = cardsRegionTop - (totalH - regionH)
+          const maxY = cardsRegionTop
+          let dragStartY: number | null = null
+          let dragStartHostY = 0
+          cardHost.eventMode = 'static'
+          cardHost.hitArea = {
+            contains: (lx: number, ly: number) => {
+              const screenY = cardHost.position.y + ly
+              return lx >= 0 && lx <= vw && screenY >= cardsRegionTop && screenY <= cardsRegionBottom
+            },
+          }
+          cardHost.on('pointerdown', (e) => {
+            dragStartY = e.global.y
+            dragStartHostY = cardHost.position.y
+          })
+          cardHost.on('pointermove', (e) => {
+            if (dragStartY === null) return
+            const dy = e.global.y - dragStartY
+            cardHost.position.y = Math.max(minY, Math.min(maxY, dragStartHostY + dy))
+          })
+          const endCardDrag = () => {
+            dragStartY = null
+          }
+          cardHost.on('pointerup', endCardDrag)
+          cardHost.on('pointerupoutside', endCardDrag)
+        } else {
+          cardHost.mask = null
+          cardHost.eventMode = 'passive'
+        }
       }
 
       // ---- 行為タブ（3つ以上あるときだけ）：カードの中身を丸ごと差し替える ----
