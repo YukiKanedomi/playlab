@@ -516,7 +516,7 @@ function drawConnectionChip(host: Container, x: number, y: number, maxW: number,
  * 戻り値はブロック下端のy（後続要素の積み上げ用）。measurerは幅の下見専用（新規Textを都度作らない）
  */
 function drawConnectedIcons(host: Container, measurer: Text, x: number, y: number, ids: string[], iconSize: number, maxW: number): number {
-  const rowH = Math.max(20, iconSize + 4)
+  const rowH = Math.max(17, iconSize + 3) // スクロール廃止（オーナー指摘）のため20→17へ詰めた
   const labelFont = Math.max(11, iconSize * 0.72)
   const gap = iconSize * 0.22
   measurer.style.fontSize = labelFont
@@ -564,7 +564,7 @@ function drawConnectedIcons(host: Container, measurer: Text, x: number, y: numbe
  * 戻り値はブロック下端のy
  */
 function drawBonusBand(host: Container, measurer: Text, x: number, y: number, w: number, bonus: string, fontSize: number): number {
-  const bandH = Math.max(28, fontSize * 1.8)
+  const bandH = Math.max(24, fontSize * 1.6) // スクロール廃止（オーナー指摘）のため28/1.8→24/1.6へ詰めた
   const band = new Graphics()
   band.roundRect(x, y, w, bandH, bandH * 0.28).fill({ color: 0xf4ecd8, alpha: 0.88 })
   host.addChild(band)
@@ -1610,27 +1610,46 @@ async function boot() {
       panel.addChild(lift)
       rowLifts.push(lift)
 
-      // 左に緑青の「祝」印、右に朱の「呪」印。同じ大きさのコード描画（P2-1：文字色だけの区別をやめる）
+      // 左に緑青の「祝」印、右に朱の「呪」印。同じ大きさ（P2-1：文字色だけの区別をやめる）。
+      // 生成素材（seal_shuku/seal_ju）を焼き込み円の中心へ。無ければ従来のコード描画へフォールバック
       // 印の座標は素材の焼き込み円の実測中心（sealCenterYFrac等）を使う。lift はrowTop(i)へ位置しているので、
       // ここではその分を差し引いたローカルyへ変換する
       const boonX = px0 + S * sealXFracBoon
       const curseX = px0 + S * sealXFracCurse
       const sealY = py0 + S * sealCenterYFrac[i] - rowTop(i)
-      const boonSeal = new Graphics()
-      boonSeal.circle(boonX, sealY, sealR).fill({ color: UI.verdigris, alpha: 0.92 }).stroke({ width: 2, color: 0xcfe0d6, alpha: 0.5 })
-      lift.addChild(boonSeal)
-      const boonSealT = new Text({ text: '祝', style: { fill: 0xeaf3ee, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
-      boonSealT.anchor.set(0.5)
-      boonSealT.position.set(boonX, sealY)
-      lift.addChild(boonSealT)
+      const shukuSealTex = spriteTexture('seal_shuku')
+      if (shukuSealTex) {
+        const sp = new Sprite(shukuSealTex)
+        sp.anchor.set(0.5)
+        sp.position.set(boonX, sealY)
+        sp.scale.set((sealR * 2.1) / Math.max(shukuSealTex.width, shukuSealTex.height))
+        lift.addChild(sp)
+      } else {
+        const boonSeal = new Graphics()
+        boonSeal.circle(boonX, sealY, sealR).fill({ color: UI.verdigris, alpha: 0.92 }).stroke({ width: 2, color: 0xcfe0d6, alpha: 0.5 })
+        lift.addChild(boonSeal)
+        const boonSealT = new Text({ text: '祝', style: { fill: 0xeaf3ee, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+        boonSealT.anchor.set(0.5)
+        boonSealT.position.set(boonX, sealY)
+        lift.addChild(boonSealT)
+      }
 
-      const curseSeal = new Graphics()
-      curseSeal.circle(curseX, sealY, sealR).fill({ color: UI.cinnabar, alpha: 0.92 }).stroke({ width: 2, color: 0xe6c9c2, alpha: 0.5 })
-      lift.addChild(curseSeal)
-      const curseSealT = new Text({ text: '呪', style: { fill: 0xf5e6e0, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
-      curseSealT.anchor.set(0.5)
-      curseSealT.position.set(curseX, sealY)
-      lift.addChild(curseSealT)
+      const juSealTex = spriteTexture('seal_ju')
+      if (juSealTex) {
+        const sp = new Sprite(juSealTex)
+        sp.anchor.set(0.5)
+        sp.position.set(curseX, sealY)
+        sp.scale.set((sealR * 2.1) / Math.max(juSealTex.width, juSealTex.height))
+        lift.addChild(sp)
+      } else {
+        const curseSeal = new Graphics()
+        curseSeal.circle(curseX, sealY, sealR).fill({ color: UI.cinnabar, alpha: 0.92 }).stroke({ width: 2, color: 0xe6c9c2, alpha: 0.5 })
+        lift.addChild(curseSeal)
+        const curseSealT = new Text({ text: '呪', style: { fill: 0xf5e6e0, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+        curseSealT.anchor.set(0.5)
+        curseSealT.position.set(curseX, sealY)
+        lift.addChild(curseSealT)
+      }
 
       // 本文は左揃え（§3.6）。利点と代償は同サイズ・同重量を維持する（色を分けて意味の差を作らない）
       const nameT = new Text({ text: b.name, style: { fill: UI.ink, fontSize: Math.max(15, fs(0.03)), fontFamily: FONT, fontWeight: 'bold' } })
@@ -1921,30 +1940,24 @@ async function boot() {
       const sheetX = (vw - sheetW) / 2
       // 目標票の紙質統一（正典§4.4 P3-1繰り上げ）：角丸4〜6px・背景UI.paper・線はink25%のみ（常時の真鍮外枠は削除）
       const sheetCorner = Math.min(6, Math.max(4, goalBarH * 0.12))
-      const sheet = new Graphics()
-      sheet.roundRect(0, 0, sheetW, goalBarH, sheetCorner).fill({ color: UI.paper, alpha: 0.95 }).stroke({ width: 1, color: UI.ink, alpha: 0.25 })
-      if (n > 1) {
-        // 二つ並ぶときだけ、紙の折り目にあたる区切りを入れる。実線ではなく折り目風の破線で（P1-4）
-        for (let i = 1; i < n; i++) {
-          const dx = i * entryW
-          const dashLen = goalBarH * 0.1
-          const gapLen = goalBarH * 0.07
-          let y = goalBarH * 0.18
-          const yEnd = goalBarH * 0.82
-          let pen = true
-          while (y < yEnd) {
-            const yNext = Math.min(yEnd, y + (pen ? dashLen : gapLen))
-            if (pen) sheet.moveTo(dx, y).lineTo(dx, yNext)
-            y = yNext
-            pen = !pen
-          }
-        }
-        sheet.stroke({ width: 1, color: UI.paperInk, alpha: 0.3 })
-      }
-      sheet.position.set(sheetX, goalBarY)
-      ui.addChild(sheet)
+      // 生成素材goal_plate（1280x320=4:1固定）。歪ませないため紙は1課目ぶん(entryW)ごとに独立して敷く
+      // （旧：sheetW全体を1枚のGraphicsで縦横別倍率に伸縮しており歪みの原因だった）。
+      // 4:1は幅基準で決まる高さがgoalBarHと一致しないため、goalBarHの中心に縦合わせする
+      const plateTex = spriteTexture('goal_plate')
+      const plateH = plateTex ? entryW * (plateTex.height / plateTex.width) : goalBarH
       board.goals.forEach((g, i) => {
         const root = new Container()
+        if (plateTex) {
+          const sp = new Sprite(plateTex)
+          sp.width = entryW
+          sp.height = plateH
+          sp.position.set(0, (goalBarH - plateH) / 2)
+          root.addChild(sp)
+        } else {
+          const bg = new Graphics()
+          bg.roundRect(0, 0, entryW, goalBarH, sheetCorner).fill({ color: UI.paper, alpha: 0.95 }).stroke({ width: 1, color: UI.ink, alpha: 0.25 })
+          root.addChild(bg)
+        }
         const icon = makeGoalIcon(g, goalBarH * 0.7)
         icon.position.set(goalBarH * 0.56, goalBarH / 2)
         root.addChild(icon)
@@ -1975,13 +1988,22 @@ async function boot() {
         if (label.width > labelMaxW) label.scale.set(labelMaxW / label.width)
         root.addChild(label)
         // 完了印：数字を0にせず朱の採録印へ変える（[F]§2／P1-4：金→朱に統一）。押印は300msだけ跳ねる
+        // 生成素材seal_saiを使う。無ければ従来のコード描画スタンプへフォールバック
         const sealR = goalBarH * 0.3
         const seal = new Container()
-        const sealG = new Graphics()
-        sealG.circle(0, 0, sealR).fill({ color: 0xf4ecd8, alpha: 0.9 }).stroke({ width: Math.max(1.5, sealR * 0.14), color: UI.cinnabar, alpha: 0.9 })
-        const sealT = new Text({ text: '採', style: { fill: UI.cinnabar, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
-        sealT.anchor.set(0.5)
-        seal.addChild(sealG, sealT)
+        const saiSealTex = spriteTexture('seal_sai')
+        if (saiSealTex) {
+          const sp = new Sprite(saiSealTex)
+          sp.anchor.set(0.5)
+          sp.scale.set((sealR * 2.1) / Math.max(saiSealTex.width, saiSealTex.height))
+          seal.addChild(sp)
+        } else {
+          const sealG = new Graphics()
+          sealG.circle(0, 0, sealR).fill({ color: 0xf4ecd8, alpha: 0.9 }).stroke({ width: Math.max(1.5, sealR * 0.14), color: UI.cinnabar, alpha: 0.9 })
+          const sealT = new Text({ text: '採', style: { fill: UI.cinnabar, fontSize: sealR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+          sealT.anchor.set(0.5)
+          seal.addChild(sealG, sealT)
+        }
         seal.position.set(numRight - sealR, goalBarH / 2)
         seal.rotation = -0.12 // 手で押した傾き
         seal.visible = false
@@ -2418,13 +2440,24 @@ async function boot() {
     const iconR = Math.min(vw * 0.055, iconSpacing * 0.4)
     const iconAreaCenterX = vw * 0.04 + iconAreaW / 2
     // P2-3（§2.6/§4.3）：所持知見アイコン＋採録帖ボタンを薄い革帯のドックでまとめる（単独浮遊の解消）
-    const dockBand = new Graphics()
+    // 生成素材dock_band（革・1536x256=6:1固定）。歪ませないよう幅基準でアスペクト固定fit（過度に伸ばさない）。
+    // 無ければ従来のコード描画（丸角の帯）へフォールバック
+    const dockBand = new Container()
     const dockBandH = Math.max(iconR * 2.2, fs(0.095))
     const dockBandW = vw * 0.92
-    dockBand
-      .roundRect(-dockBandW / 2, -dockBandH / 2, dockBandW, dockBandH, dockBandH * 0.22)
-      .fill({ color: UI.leather, alpha: 0.5 })
-      .stroke({ width: 1.5, color: UI.brass, alpha: 0.32 })
+    const dockBandTex = spriteTexture('dock_band')
+    if (dockBandTex) {
+      const sp = new Sprite(dockBandTex)
+      sp.anchor.set(0.5)
+      sp.scale.set(dockBandW / dockBandTex.width)
+      dockBand.addChild(sp)
+    } else {
+      const g = new Graphics()
+      g.roundRect(-dockBandW / 2, -dockBandH / 2, dockBandW, dockBandH, dockBandH * 0.22)
+        .fill({ color: UI.leather, alpha: 0.5 })
+        .stroke({ width: 1.5, color: UI.brass, alpha: 0.32 })
+      dockBand.addChild(g)
+    }
     dockBand.position.set(vw / 2, 0) // boosterBar自体はx=0なので、ここで画面中央へ明示的に置く
     boosterBar.addChild(dockBand) // 最背面：アイコン列・野帳ボタンより先に足す
     // 強化説明・特殊駒・敵・用語は共通「野帳シート」に統合済み（showFieldNote。旧ここにあった個別ポップアップ実装は撤去）
@@ -3128,19 +3161,27 @@ async function boot() {
       // 1) 左上：小さな「踏破記録」／2) 中央：大きな「深度N」（即時表示。②の登場と同時に読める）
       mk('踏破記録', Math.max(11, slipH * 0.1), padX, slipH * 0.17, 0, 0, slipW * 0.4, 0x6b5238)
       mk(`深度${floor}`, Math.min(30, Math.max(24, slipH * 0.24)), slipW / 2, slipH * 0.4, 0.5, 0.5, slipW * 0.46)
-      // 3) 右：朱の「踏破」印（コード描画のスタンプ。素材右側に浮き出た円のガイドへ重ねる）
+      // 3) 右：朱の「踏破」印（生成素材の押印。素材右側に浮き出た円のガイドへ重ねる。無ければコード描画へフォールバック）
       const stampR = slipH * 0.18
       const stamp = new Container()
       stamp.position.set(slipW * 0.855, slipH * 0.46)
       stamp.rotation = -0.12
-      const stampG = new Graphics()
-      stampG.circle(0, 0, stampR).stroke({ width: 2, color: UI.cinnabar, alpha: 0.85 })
-      stamp.addChild(stampG)
-      const stampT = new Text({ text: '踏破', style: { fill: UI.cinnabar, fontSize: stampR * 0.85, fontFamily: FONT, fontWeight: 'bold' } })
-      stampT.anchor.set(0.5)
-      const stampFitW = stampR * 1.5
-      if (stampT.width > stampFitW) stampT.scale.set(stampFitW / stampT.width)
-      stamp.addChild(stampT)
+      const tohaSealTex = spriteTexture('seal_toha')
+      if (tohaSealTex) {
+        const sp = new Sprite(tohaSealTex)
+        sp.anchor.set(0.5)
+        sp.scale.set((stampR * 2.1) / Math.max(tohaSealTex.width, tohaSealTex.height))
+        stamp.addChild(sp)
+      } else {
+        const stampG = new Graphics()
+        stampG.circle(0, 0, stampR).stroke({ width: 2, color: UI.cinnabar, alpha: 0.85 })
+        stamp.addChild(stampG)
+        const stampT = new Text({ text: '踏破', style: { fill: UI.cinnabar, fontSize: stampR * 0.85, fontFamily: FONT, fontWeight: 'bold' } })
+        stampT.anchor.set(0.5)
+        const stampFitW = stampR * 1.5
+        if (stampT.width > stampFitW) stampT.scale.set(stampFitW / stampT.width)
+        stamp.addChild(stampT)
+      }
       stamp.scale.set(0.6)
       stamp.alpha = 0
       band.addChild(stamp)
@@ -3433,10 +3474,11 @@ async function boot() {
       panel.addChild(dimG)
       playRoot.addChild(panel)
 
-      // ---- 0〜9%：タイトル＋野帳ボタン ----
-      const titleY = vh * 0.045
+      // ---- 0〜6%：タイトル＋野帳ボタン（オーナー指摘：3枚スクロール退避はUX誤り→タイトル/ストリップ帯を圧縮し
+      //     カード領域を画面高の約70%まで確保する。以前の0〜9%から詰めた） ----
+      const titleY = vh * 0.028
       const noteBtnW = Math.min(vw * 0.22, fs(0.24))
-      const noteBtnH = Math.max(40, fs(0.075)) // §3.5：小ボタンの最小ヒット領域44×44pxへ近づける（0〜9%帯の高さ内で収まる範囲）
+      const noteBtnH = Math.max(36, fs(0.072)) // スクロール廃止のため44px目安から詰めた（副次ボタンのため許容）
       // タイトルと採録帖ボタンが衝突しないよう、最大幅を明示して縮める（P1-4コード変更欄）
       const titleMaxW = vw - padX * 2 - noteBtnW - fs(0.03)
       const title = new Text({
@@ -3466,9 +3508,9 @@ async function boot() {
       draftNoteBtn.on('pointertap', () => showFieldNote(buildSpecialPieceEntry()))
       panel.addChild(draftNoteBtn)
 
-      // ---- 9〜20%：所持強化ストリップ（[D]：40pxアイコン横スクロール、左に所持N、右に一覧、系統内訳） ----
-      const stripRowY = vh * 0.135
-      const stripIconSize = Math.max(30, Math.min(40, fs(0.1)))
+      // ---- 6〜13%：所持強化ストリップ（[D]：40pxアイコン横スクロール、左に所持N、右に一覧、系統内訳） ----
+      const stripRowY = vh * 0.09
+      const stripIconSize = Math.max(26, Math.min(34, fs(0.085)))
       // 枠制限の一時停止中（run.ts）は分母を出さない（「3/Infinity」を出さない）。有限に戻したら分母表示も戻す
       const ownedLabel = new Text({ text: Number.isFinite(run.slots) ? `手持ち ${owned.length}/${run.slots}` : `手持ち ${owned.length}`, style: { fill: 0xcbb98a, fontSize: fs(0.028), fontFamily: FONT, fontWeight: 'bold' } })
       ownedLabel.anchor.set(0, 0.5)
@@ -3573,26 +3615,32 @@ async function boot() {
         panel.addChild(bd)
       }
 
-      // ---- 候補カード3枚（codex_draft_fixspec.md §2）----
+      // ---- 86.5〜98%：接続要約＋確定ボタン（選択状態に応じてrenderBottomで描き直す）----
+      // カード領域の逆算に使うため先に確定する（以前の82〜96%から詰めた）
+      const bottomTop = vh * 0.93
+      const bottomH = vh * 0.068
+
+      // ---- 候補カード3枚（オーナー指摘：選択肢の比較UIでスクロールはUX誤り→スクロール廃止）----
       // 行為が2つ以上あるときだけ、カードの上に細い行為タブを1本足して、そのぶんカードを詰める
       const hasTabs = modes.length > 1
-      const tabsY = vh * 0.207
-      const tabH = vh * 0.048
-      const cardsRegionTop = hasTabs ? vh * 0.245 : vh * 0.2
-      const cardGap = hasTabs ? vh * 0.032 : vh * 0.04
-      // 正典§2：cardW = min(viewportW-32, 400)。紙は縦横別倍率で伸縮させず、常に2:1固定で描く（暫定実装5）
-      const cardW = Math.min(vw - 32, 400)
-      const naturalH = cardW / 2
-      const minCardH = Math.max(176, naturalH)
-      const cardIconSize = Math.max(30, Math.min(40, fs(0.1)))
-      const connIconSize = Math.max(16, Math.min(20, fs(0.045)))
+      const tabsY = vh * 0.146
+      const tabH = vh * 0.03
+      const cardsRegionTop = hasTabs ? vh * 0.164 : vh * 0.13
+      const cardGap = Math.max(5, vh * 0.009)
+      // cardHをバンド高から逆算する（2:1固定は維持）。3枚+ギャップ2つがちょうど候補領域に収まる高さと、
+      // 横幅上限（vw*0.86）の2:1相当の、小さいほうを採る。個々のカードは内容が多ければ従来どおり伸びられる
+      // （下のrenderCards内 Math.max(minCardH, ...)）。スクロール機構自体は最終安全弁として残す
+      const bandH = bottomTop - cardsRegionTop
+      const cardH0 = Math.min((vw * 0.86) / 2, (bandH - cardGap * 2) / 3)
+      const cardW = cardH0 * 2
+      const naturalH = cardH0
+      const minCardH = naturalH
+      const cardIconSize = Math.max(24, Math.min(32, fs(0.078)))
+      const connIconSize = Math.max(14, Math.min(17, fs(0.038)))
       // 2026-08-15 オーナー「文字が枠に対して小さい」→ 本文を一段大きく（0.0265→0.031）。
       // P1-4：13px相当を下限にする（§3.6本文規則）。余白側で吸収し、文字を13px未満へ縮めない
       const bodyFont = Math.max(13, fs(0.031))
 
-      // ---- 82〜96%：接続要約＋確定ボタン（選択状態に応じてrenderBottomで描き直す） ----
-      const bottomTop = vh * 0.82
-      const bottomH = vh * 0.14
       const bottomContainer = new Container()
       bottomContainer.position.set(0, bottomTop)
       panel.addChild(bottomContainer)
@@ -3601,6 +3649,9 @@ async function boot() {
       let cardContainers: Container[] = []
       let cardGlows: Container[] = [] // 選択マーク（真鍮クリップ＋「採録候補」朱印）の束。名は旧glowを踏襲
       let cardBaseY: number[] = [] // 選択時に-4pxする基準Y（P1-4：紙が上へ持ち上がる）
+      let scrollActive = false // QA検証用（オーナー指摘：スクロールは最終安全弁のみ・6ビューポートで発動しないことが合格条件）
+      let lastTotalH = 0
+      let lastRegionH = 0
 
       const goNextFloor = () => {
         const next = floor + 1
@@ -3663,13 +3714,25 @@ async function boot() {
         }
 
         const btn = new Container()
-        const btnBg = new Graphics()
         if (enabled) {
+          const btnBg = new Graphics()
           btnBg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill(UI.wood).stroke({ width: 2.5, color: UI.brass })
+          btn.addChild(btnBg)
         } else {
-          btnBg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill({ color: 0x33291c, alpha: 0.75 }).stroke({ width: 2, color: 0x6b5f45 })
+          // 無効状態は独自の線+塗り描画ではなく、共通の button_primary_disabled 素材へ統一
+          const disabledTex = spriteTexture('button_primary_disabled')
+          if (disabledTex) {
+            const sp = new Sprite(disabledTex)
+            sp.anchor.set(0.5)
+            sp.width = btnW
+            sp.height = btnH
+            btn.addChild(sp)
+          } else {
+            const btnBg = new Graphics()
+            btnBg.roundRect(-btnW / 2, -btnH / 2, btnW, btnH, btnH * 0.3).fill({ color: 0x33291c, alpha: 0.75 }).stroke({ width: 2, color: 0x6b5f45 })
+            btn.addChild(btnBg)
+          }
         }
-        btn.addChild(btnBg)
         // 無効時ラベルは「カードを選んで比較」ではなく「知見を選ぶ」とし、補助情報へ降格（P1-4コード変更欄）
         const btnLabel = new Text({
           text: enabled ? CONFIRM_LABEL[mode] : '知見を選ぶ',
@@ -3715,8 +3778,8 @@ async function boot() {
       // 積み上げの間隔（正典§2「折返し・行数・カード高の決定順」4：標準8px→最小4pxの2段階だけ試す）
       const HEADER_GAP_STD = 8
       const HEADER_GAP_MIN = 4
-      const FLOW_GAP = 6 // 本文→呼応→おまけ帯の固定間隔（正典§2「呼応行・おまけ帯」の積み上げ図どおり）
-      const BOTTOM_PAD = 8
+      const FLOW_GAP = 4 // 本文→呼応→おまけ帯の固定間隔（正典§2「呼応行・おまけ帯」の積み上げ図どおり。スクロール廃止のため6→4）
+      const BOTTOM_PAD = 4
 
       /** 見出し（最大2行）→本文（最大4行）→呼応/チップ→おまけ帯 の順に安全域内へ積み上げる。戻り値＝内容レイヤーと下端y */
       const buildCardContent = (view: DraftCardView, measurer: Text, zoneX0: number, zoneX1: number, zoneY0: number, headerGap: number): { layer: Container; bottomY: number } => {
@@ -3753,7 +3816,7 @@ async function boot() {
         // カード全体タップは選択トグルのみなので、用語タップは layoutRichText 側の stopPropagation で確実に分離する
         const bodyTop = zoneY0 + Math.max(cardIconSize, headerBlockH) + headerGap
         const bodyWrapW = Math.max(20, zoneX1 - zoneX0)
-        const lineH = bodyFont * 1.56
+        const lineH = bodyFont * 1.36 // スクロール廃止（オーナー指摘）のため1.56→1.36へ詰めた（本文13px下限は維持）
         measurer.style.fontWeight = 'normal' // wrapLines(見出し)がboldへ変えているので、本文測定前に戻す
         const usedTerms = new Set<string>()
         const trial = new Container()
@@ -3861,14 +3924,22 @@ async function boot() {
             const stamp = new Container()
             stamp.position.set(stampCx, zoneY0 + selR * 2 + 8)
             stamp.rotation = 0.14
-            const stampRing = new Graphics()
-            stampRing.circle(0, 0, selR).stroke({ width: 2, color: UI.cinnabar, alpha: 0.85 })
-            stamp.addChild(stampRing)
-            const stampT = new Text({ text: '採録候補', style: { fill: UI.cinnabar, fontSize: selR * 0.42, fontFamily: FONT, fontWeight: 'bold' } })
-            stampT.anchor.set(0.5)
-            const stampFitW = selR * 1.6
-            if (stampT.width > stampFitW) stampT.scale.set(stampFitW / stampT.width)
-            stamp.addChild(stampT)
+            const sairokuSealTex = spriteTexture('seal_sairoku')
+            if (sairokuSealTex) {
+              const sp = new Sprite(sairokuSealTex)
+              sp.anchor.set(0.5)
+              sp.scale.set((selR * 2.1) / Math.max(sairokuSealTex.width, sairokuSealTex.height))
+              stamp.addChild(sp)
+            } else {
+              const stampRing = new Graphics()
+              stampRing.circle(0, 0, selR).stroke({ width: 2, color: UI.cinnabar, alpha: 0.85 })
+              stamp.addChild(stampRing)
+              const stampT = new Text({ text: '採録候補', style: { fill: UI.cinnabar, fontSize: selR * 0.42, fontFamily: FONT, fontWeight: 'bold' } })
+              stampT.anchor.set(0.5)
+              const stampFitW = selR * 1.6
+              if (stampT.width > stampFitW) stampT.scale.set(stampFitW / stampT.width)
+              stamp.addChild(stampT)
+            }
             marks.addChild(stamp)
           }
           marks.visible = false
@@ -3882,12 +3953,20 @@ async function boot() {
             const push = new Container()
             push.position.set(zoneX1 + stampMarginW / 2, markY0 + pushR)
             push.rotation = -0.1
-            const pushG = new Graphics()
-            pushG.circle(0, 0, pushR).stroke({ width: 1.5, color: UI.brass, alpha: 0.85 })
-            push.addChild(pushG)
-            const pushT = new Text({ text: '推', style: { fill: UI.brass, fontSize: pushR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
-            pushT.anchor.set(0.5)
-            push.addChild(pushT)
+            const suiSealTex = spriteTexture('seal_sui')
+            if (suiSealTex) {
+              const sp = new Sprite(suiSealTex)
+              sp.anchor.set(0.5)
+              sp.scale.set((pushR * 2.1) / Math.max(suiSealTex.width, suiSealTex.height))
+              push.addChild(sp)
+            } else {
+              const pushG = new Graphics()
+              pushG.circle(0, 0, pushR).stroke({ width: 1.5, color: UI.brass, alpha: 0.85 })
+              push.addChild(pushG)
+              const pushT = new Text({ text: '推', style: { fill: UI.brass, fontSize: pushR * 1.05, fontFamily: FONT, fontWeight: 'bold' } })
+              pushT.anchor.set(0.5)
+              push.addChild(pushT)
+            }
             card.addChild(push)
           }
 
@@ -3908,11 +3987,16 @@ async function boot() {
         })
         cardMeasurer.destroy()
 
-        // 3枚（cardGap込み）の合計高が候補領域を超えたら、cardHostをマスク＋ドラッグで縦スクロール化する（P0-7）
+        // 3枚（cardGap込み）の合計高が候補領域を超えたら、cardHostをマスク＋ドラッグで縦スクロール化する（最終安全弁。
+        // 通常はcardH0がバンド高から逆算済みのため発動しない想定＝発動したらDEBUG_PLACEで知らせる）
         const totalH = cardContainers.length ? stackY - cardGap : 0
         const regionH = cardsRegionBottom - cardsRegionTop
         cardHost.position.set(0, cardsRegionTop)
-        if (totalH > regionH) {
+        scrollActive = totalH > regionH
+        lastTotalH = totalH
+        lastRegionH = regionH
+        if (scrollActive) {
+          if (DEBUG_PLACE) console.warn(`[yacho draft] スクロール安全弁が発動: totalH=${Math.round(totalH)} regionH=${Math.round(regionH)} mode=${mode}`)
           cardMask.clear().rect(0, cardsRegionTop, vw, regionH).fill(0xffffff)
           cardHost.mask = cardMask
           const minY = cardsRegionTop - (totalH - regionH)
@@ -3990,6 +4074,17 @@ async function boot() {
       renderTabs()
       renderCards()
       renderBottom() // 初期状態＝未選択（[D]：未選択時はボタンが「カードを選んで比較」のまま無効化）
+      // QA検証用フック（挙動には無関係）：3枚スクロール廃止の合否（totalH<=regionHか）を外部から読み、
+      // pickFirstでスクリーンショット無しに次floorへ進められるようにする
+      ;(window as unknown as Record<string, unknown>).__yachoDraftQA = {
+        scrollActive: () => scrollActive,
+        cardCount: () => cardContainers.length,
+        sizes: () => ({ totalH: Math.round(lastTotalH), regionH: Math.round(lastRegionH), floor, hasTabs, mode }),
+        pickFirst: () => {
+          selectCard(0)
+          confirmPick(0)
+        },
+      }
     }
 
     // ---------- 結果シーン（層10クリア or run-over。ROGUE.md §7/§8） ----------

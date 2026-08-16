@@ -59,6 +59,15 @@ const SPRITE_URLS: Record<string, URL> = {
   button_primary_disabled: new URL('../../assets/ui/button_primary_disabled.png', import.meta.url),
   blessing_folio: new URL('../../assets/ui/blessing_folio.png', import.meta.url),
   result_report_v6: new URL('../../assets/ui/result_report_v6.png', import.meta.url),
+  // 印章6種（コード描画の朱/緑青印を置き換え。1920x320のseal_sheet.pngから列ギャップで6クラスタに切り出し済み）
+  seal_toha: new URL('../../assets/ui/seal_toha.png', import.meta.url),
+  seal_sai: new URL('../../assets/ui/seal_sai.png', import.meta.url),
+  seal_sui: new URL('../../assets/ui/seal_sui.png', import.meta.url),
+  seal_sairoku: new URL('../../assets/ui/seal_sairoku.png', import.meta.url),
+  seal_shuku: new URL('../../assets/ui/seal_shuku.png', import.meta.url),
+  seal_ju: new URL('../../assets/ui/seal_ju.png', import.meta.url),
+  goal_plate: new URL('../../assets/ui/goal_plate.png', import.meta.url), // 目標票（古紙・1280x320=4:1）
+  dock_band: new URL('../../assets/ui/dock_band.png', import.meta.url), // ビルドドック帯（革・1536x256=6:1）
   // UI部材（ui_kit3切り出し。ラベルは焼き込み）
   ui_ribbon: new URL('../../assets/ui/ribbon.png', import.meta.url),
   ui_medal: new URL('../../assets/ui/booster_socket.png', import.meta.url),
