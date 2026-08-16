@@ -1,0 +1,55 @@
+IMPORTANT — YOU ARE A RELAY. When you call the image generation tool, pass the prompt text below VERBATIM. Do not summarise, do not paraphrase, do not shorten, do not write any prompt of your own. Generate THREE images, one at a time, each 1024x1024, and save them into the current directory as ./token_idle.png, ./token_dig.png and ./token_hurt.png.
+
+REFERENCE IMAGE: First open and study ./burrower_sketch_a.png. It is a naturalist's sketch page showing ONE creature species, plus margin studies of its forelimb, a scale bar, a gloved finger and a lump of ore for scale. For each of the three images, EDIT the existing image: keep the EXACT same creature design — the same anatomy, proportions, plating, markings, whiskers, vent pores and colour scheme as the main full-body figure in that sketch — and render it as a single game token. Render ONLY ONE creature, whole body, and nothing else: no margin studies, no paper page background, no scale bar, no finger, no ore, no annotations, no handwriting, no lettering of any kind.
+
+SHARED TOKEN SPECIFICATION (applies identically to all three images):
+A single small creature token for a mobile puzzle board, to be read instantly at the size of one board cell. The creature is a flattened salamander-like animal, wedge-shaped and pressed flat from back to belly, hardest at the head and softer toward the tail, with a short triangular shovel-shaped tail. Its forelimbs alone are enormous crustacean-style digging shovels, wider than the body, their rims chalky and their tips worn and chipped; the hind limbs are reduced and short — front and rear limbs are shaped completely differently. It has no eyes: a thin translucent membrane is stretched where the sockets would be, with a vestigial dark eyespot faintly showing through. Two stiff sensory whiskers project forward from the sides of the mouth. Vent pores run from the crown down the back — four pairs on the left and three on the right, counted differently on each side while the outer silhouette stays bilaterally symmetric. Three textures coexist on the one body: dry chalky calcareous armour with scratch marks, chips and healed old scars over the head and forelimbs; a wet mucous membrane holding a thin film of water over the rear body; and a single row of very short cilia along the seam between them. It carries no clothing, no tools, no harness and no man-made object of any kind. The animal emits no light of its own.
+Viewpoint: seen from the front and slightly from above, the whole body fitting compactly inside the square frame. The creature fills about eighty to eighty-five percent of the canvas, with clear empty margin on all four sides; no part of the body is cropped by the edge of the frame.
+Colour: a desaturated rock-dust body from #9A8E7C to #7C7264 at about 19 percent saturation, shadows pushed to blue-green #4A5A55, highlights in aged-paper cream #E3D6B8 rather than white and covering under a tenth of the surface, a single oxidised rust accent #A8613C around the vent rims covering under three percent of the surface.
+Silhouette must stay legible when reduced to a fifth of its size: a compact low mass with the two huge shovel forelimbs clearly breaking the contour.
+
+Transparent watercolour washes over a fine ink line, on cold-press paper.
+The brightest passages are bare unpainted paper — warm cream, not white —
+and highlights stay between 15 and 22 percent saturation. Saturation peaks
+in the midtones around 28 to 36 percent and falls away toward the light.
+The darkest passage keeps 20 to 35 percent saturation and never drops below
+luminance 22: there is no black and no neutral grey anywhere.
+Shadows leave the hue of the light. Lit surfaces sit in warm ochre around
+hue 35 to 45 degrees, and shadow falls to a single destination chosen for
+the setting: olive around hue 65 to 85 for vegetation, blue-green around
+hue 150 to 170 for wet stone and oxidised metal, slate blue around hue 210
+to 230 for cold interiors.
+The contour is a fine, slightly wobbly warm charcoal line near #2F2922 at
+about 27 percent saturation — a near-neutral warm grey, not a saturated
+brown. It swells on the underside and at overlaps and thins away to nothing
+along the top-lit edge, and pigment pools in a hairline just inside it, no
+wider than the contour itself, so the edge reads darker than the body.
+Every form carries two kinds of edge at once: a hard dry edge where a wash
+stops abruptly against the ink line, and one or two soft wet-in-wet blooms
+inside the form.
+The tooth of the cold-press paper and the granulation of the pigment stay
+visible across every flat area, interface panels included; no surface is
+perfectly smooth.
+Where no wash is laid, darkening is done by drawn line: fine parallel
+hatching and stipple in recesses and under overhangs.
+
+Avoid: airbrushed continuous gradients and smooth digital shading; a
+uniform drop-shadow effect; a continuous bevel-and-specular metal render;
+additive gaussian bloom or a glow halo around light sources; blur, fog or
+depth-of-field used to push things back; pure black #000000 and pure white
+#FFFFFF; saturated highlights above 50 percent saturation; a saturated
+brown contour; uniform-width outline strokes; rounded-rectangle cards with
+even padding and an even gold hairline; dotted underlines; perfectly
+mirrored ornament and evenly spaced rivets; a flawless untouched surface;
+rainbow or violet gradients; lens flare, rim light and dramatic backlight;
+emoji; any lettering, numerals, logos or name plates.
+
+Output for every image: fully transparent background, PNG with alpha, all four corners transparent. Square, 1024x1024. No baked drop shadow beneath the creature — it is composited over a board tile in the engine. No text, no numerals, no HP bar, no gauge, no frame or border of any kind.
+
+IMAGE 1 — save as ./token_idle.png — RESTING POSE: the creature crouches low with its shovel forelimbs planted flat on the ground and both whiskers touching the floor in front of it, calm and settled, the rear body relaxed and compact.
+
+IMAGE 2 — save as ./token_dig.png — DIGGING POSE: the creature drives its shovel forelimbs down into the ground mid-strike, head lowered, loose grit and pale rock dust thrown up around the forelimbs in a small fan; the flying dust stays close to the body and inside the canvas margin.
+
+IMAGE 3 — save as ./token_hurt.png — FLINCH POSE: the creature recoils and hunches, head turned to one side, body compressed and drawn in, one whisker bent and drooping, a small puff of pale powder scattering sideways off its back.
+
+Minor stylistic imperfection is acceptable; do not spend extra turns correcting small typography issues.
