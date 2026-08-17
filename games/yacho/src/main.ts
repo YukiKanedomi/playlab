@@ -4531,6 +4531,20 @@ async function boot() {
           refreshFloorHud()
         }
       },
+      // QA専用（?debug時のみ有効。DEBUG_PLACEと同じゲート）：深層でしか出ない原生種を直接出現させ、生成アートの実プレイ確認をしやすくする
+      debugSpawnEnemy: (kind: EnemyKind) => {
+        if (!DEBUG_PLACE || inputLocked) return
+        const cells: XY[] = kind === 'maw' ? [{ x: 3, y: H - 1 }, { x: 4, y: H - 1 }] : [{ x: 4, y: 4 }]
+        for (const p of cells) {
+          const c = board.at(p.x, p.y)
+          if (c) {
+            c.piece = null
+            c.block = null
+          }
+        }
+        board.spawnEnemy(kind, cells)
+        view.renderStable()
+      },
       hapticsLog, // 振動は動画に写らないのでQAはこれを読む
       showMap,
     }

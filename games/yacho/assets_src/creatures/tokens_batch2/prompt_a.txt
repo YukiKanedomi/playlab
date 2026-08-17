@@ -1,0 +1,54 @@
+IMPORTANT — YOU ARE A RELAY. When you call the image generation tool, pass the prompt text below VERBATIM. Do not summarise, do not paraphrase, do not shorten, do not write any prompt of your own. Generate THREE images, one at a time, each 1024x1024, and save them into the current directory as ./token_rockshell.png, ./token_sporeling.png and ./token_breathstealer.png. Each image shows a DIFFERENT creature species described in its own section.
+
+SHARED TOKEN SPECIFICATION (applies identically to all three images):
+A single small creature token for a mobile puzzle board, to be read instantly at the size of one board cell. Render ONLY ONE creature, whole body, and nothing else: no paper page background, no margin studies, no scale bar, no annotations, no handwriting, no lettering of any kind. It carries no clothing, no tools, no harness and no man-made object of any kind.
+Viewpoint: seen from the front and slightly from above, the whole body fitting compactly inside the square frame. The creature fills about eighty to eighty-five percent of the canvas, with clear empty margin on all four sides; no part of the body is cropped by the edge of the frame.
+Silhouette must stay legible when reduced to a fifth of its size.
+
+Transparent watercolour washes over a fine ink line, on cold-press paper.
+The brightest passages are bare unpainted paper — warm cream, not white —
+and highlights stay between 15 and 22 percent saturation. Saturation peaks
+in the midtones around 28 to 36 percent and falls away toward the light.
+The darkest passage keeps 20 to 35 percent saturation and never drops below
+luminance 22: there is no black and no neutral grey anywhere.
+Shadows leave the hue of the light. Lit surfaces sit in warm ochre around
+hue 35 to 45 degrees, and shadow falls to a single destination chosen for
+the setting: olive around hue 65 to 85 for vegetation, blue-green around
+hue 150 to 170 for wet stone and oxidised metal, slate blue around hue 210
+to 230 for cold interiors.
+The contour is a fine, slightly wobbly warm charcoal line near #2F2922 at
+about 27 percent saturation — a near-neutral warm grey, not a saturated
+brown. It swells on the underside and at overlaps and thins away to nothing
+along the top-lit edge, and pigment pools in a hairline just inside it, no
+wider than the contour itself, so the edge reads darker than the body.
+Every form carries two kinds of edge at once: a hard dry edge where a wash
+stops abruptly against the ink line, and one or two soft wet-in-wet blooms
+inside the form.
+The tooth of the cold-press paper and the granulation of the pigment stay
+visible across every flat area; no surface is perfectly smooth.
+Where no wash is laid, darkening is done by drawn line: fine parallel
+hatching and stipple in recesses and under overhangs.
+
+Avoid: airbrushed continuous gradients and smooth digital shading; a
+uniform drop-shadow effect; a continuous bevel-and-specular metal render;
+additive gaussian bloom or a glow halo around light sources; blur, fog or
+depth-of-field used to push things back; pure black #000000 and pure white
+#FFFFFF; saturated highlights above 50 percent saturation; a saturated
+brown contour; uniform-width outline strokes; rounded-rectangle cards with
+even padding and an even gold hairline; dotted underlines; perfectly
+mirrored ornament and evenly spaced rivets; a flawless untouched surface;
+rainbow or violet gradients; lens flare, rim light and dramatic backlight;
+emoji; any lettering, numerals, logos or name plates.
+
+Output for every image: fully transparent background, PNG with alpha, all four corners transparent. Square, 1024x1024. No baked drop shadow beneath the creature — it is composited over a board tile in the engine. No text, no numerals, no HP bar, no gauge, no frame or border of any kind.
+
+IMAGE 1 — save as ./token_rockshell.png — ARMOUR-GRAFTING TORTOISE-ANALOG:
+A squat, low, dome-backed cave animal the shape of a river stone, its body plan taken from a tortoise crossed with a chiton. Exactly one organ system is grafted from another kingdom: its dorsal plates are true mineral — angular, faceted crystalline slabs of dull grey-blue stone grown in overlapping courses, chipped at the corners, with fresh smaller crystal buds sprouting at the rim. The soft parts beneath are a wet grey-ochre mantle that laps out under the stone plates all round. Short blunt legs are tucked under, barely visible. It has no true eyes: one thin translucent membrane window sits at the front of the shell, with a faint warm amber eyespot showing through from beneath. Three textures coexist on the one body: dry faceted mineral armour with chips and healed cracks; the wet mucous mantle beneath; and one row of very short cilia along the seam between them. The crystal plates are counted differently on each side — five courses on the left, four on the right — while the outer silhouette stays bilaterally symmetric. Colour: desaturated rock-dust grey-ochre body, plates pushed toward desaturated blue-green stone, shadows to blue-green, highlights in aged-paper cream, a single oxidised rust accent around the membrane window covering under three percent of the surface. The animal emits no light of its own. Pose: settled flat on the ground like a stone that has always been there, mantle spread.
+
+IMAGE 2 — save as ./token_sporeling.png — MARKING GRUB WITH A COILED PROBOSCIS:
+A plump, soft-bodied grub the shape of a swollen teardrop lying on its belly, its body plan taken from a beetle larva. Exactly one organ system is grafted from another group: a butterfly-style proboscis — a long thin feeding tube — coiled in a tight flat spiral at the front of the head, chalky at its base, its last few centimetres soft and swollen. The head end wears a small dry chalky cap plate with chips and one healed scar; the rest of the body is a wet translucent membrane through which faint dark ovals of swallowed matter show; one row of very short cilia runs along the seam between cap and body. It has no true eyes: a thin translucent membrane is stretched where the eyes would be, with a vestigial dusky violet eyespot faintly showing through on one side only. Segment folds are counted differently on each side — six on the left, five on the right — while the outer silhouette stays bilaterally symmetric. Colour: desaturated grey-green body under 25 percent saturation, shadows pushed to olive, highlights in aged-paper cream, a single dusky violet accent at the eyespot and proboscis tip covering under three percent of the surface. The animal emits no light of its own. Pose: at rest but alert, the coiled proboscis lifted very slightly off the ground as if choosing where to reach.
+
+IMAGE 3 — save as ./token_breathstealer.png — LAMP-DRINKING FUNNEL LEECH:
+A hunched, bottom-heavy cave animal the shape of a leather waterskin, its body plan taken from a leech crossed with a deep-sea anglerfish body — but it carries no lure and emits no light of its own. Exactly one organ system is grafted from another group: its mouth is a wide upward-tilted funnel ringed with soft radial baleen combs, like the gill rakers of a whale, for straining glowing lamp-fluid out of the air; the funnel rim is a dry chalky ring, worn and chipped. The belly is a translucent membrane sac, and a faint pale blue-green tint of stolen lamp-fluid pools low inside it, its brightest core left as bare paper — the tint sits inside the sac, never as a halo outside the body. The back and shoulders are dry chalky plate with scratch marks and one healed scar; one row of very short cilia runs along the seam between plate and sac. It has no true eyes: a thin translucent membrane above the funnel carries one narrow warm eyespot showing faintly through. The baleen combs are counted differently on each side — seven on the left, six on the right — while the outer silhouette stays bilaterally symmetric. Colour: desaturated dusky red-brown body around 25 percent saturation, shadows pushed to blue-green, highlights in aged-paper cream, a single deeper oxidised cinnabar accent around the funnel rim covering under five percent of the surface. Pose: squatting low, funnel tipped toward the viewer's upper left as if leaning toward a distant lamp.
+
+Minor stylistic imperfection is acceptable; do not spend extra turns correcting small typography issues.

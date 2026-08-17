@@ -240,6 +240,7 @@ export class BoardView {
   private bossId: number | null = null
   private enemyMeta = new Map<number, { kind: EnemyKind; maxHp: number }>() // 撃破後も参照できるよう種別/最大HPを保持
   private enemyCellsCache = new Map<number, XY[]>() // 直近の敵セル座標（enemy-damage等、座標を持たないイベント用）
+  private burrowerSpriteG = new Map<number, Sprite>() // enemyId -> 裂坑掘りの本体スプライト（被弾時に一瞬 e_burrower_hurt へ差し替える）
 
   // ---- 可視化第一波：敵インテント・爆発鉱石の常時発光の帳簿 ----
   private intentG = new Map<number, Container>() // enemyId -> インテントバッジ（uiFxLayer・セル内右上）
@@ -465,6 +466,7 @@ export class BoardView {
     this.bossId = null
     this.enemyMeta.clear()
     this.enemyCellsCache.clear()
+    this.burrowerSpriteG.clear() // 参照先はblockGループで既に破棄済み
     for (const g of this.volatileG.values()) if (!g.destroyed) g.destroy()
     this.volatileG.clear()
     if (this.chainCounterG && !this.chainCounterG.destroyed) this.chainCounterG.destroy()
@@ -681,7 +683,8 @@ export class BoardView {
     const wrap = new Container()
     wrap.position.set(x * S, y * S)
     if (enemy.kind === 'rockshell') {
-      const tex = spriteTexture('kokeishi')
+      // 岩殻獣：生成アセット優先（結晶甲羅の亀）。無ければ旧kokeishi流用＋コード目玉へフォールバック
+      const tex = spriteTexture('e_rockshell')
       if (tex) {
         const sp = new Sprite(tex)
         sp.anchor.set(0.5)
@@ -689,15 +692,25 @@ export class BoardView {
         sp.position.set(S / 2, S / 2)
         wrap.addChild(sp)
       } else {
-        const g = new Graphics()
-        g.roundRect(3, 3, S - 6, S - 6, 8).fill(PAL.stoneDark).stroke({ width: 2.5, color: 0x4d5147 })
-        wrap.addChild(g)
+        const fallbackTex = spriteTexture('kokeishi')
+        if (fallbackTex) {
+          const sp = new Sprite(fallbackTex)
+          sp.anchor.set(0.5)
+          sp.scale.set((S - 4) / Math.max(fallbackTex.width, fallbackTex.height))
+          sp.position.set(S / 2, S / 2)
+          wrap.addChild(sp)
+        } else {
+          const g = new Graphics()
+          g.roundRect(3, 3, S - 6, S - 6, 8).fill(PAL.stoneDark).stroke({ width: 2.5, color: 0x4d5147 })
+          wrap.addChild(g)
+        }
+        const eye = new Graphics()
+        this.drawEye(eye, S / 2, S * 0.44, S * 0.15, 0xf0c060) // 一つ目・琥珀
+        wrap.addChild(eye)
       }
-      const eye = new Graphics()
-      this.drawEye(eye, S / 2, S * 0.44, S * 0.15, 0xf0c060) // 一つ目・琥珀
-      wrap.addChild(eye)
     } else if (enemy.kind === 'sporeling') {
-      const tex = spriteTexture('subi')
+      // 喰み蟲：生成アセット優先（渦巻き口吻の幼虫）。無ければ旧subi流用＋コード目玉へフォールバック
+      const tex = spriteTexture('e_sporeling')
       if (tex) {
         const sp = new Sprite(tex)
         sp.anchor.set(0.5)
@@ -705,13 +718,22 @@ export class BoardView {
         sp.position.set(S / 2, S / 2)
         wrap.addChild(sp)
       } else {
-        const g = new Graphics()
-        g.circle(S / 2, S / 2, S * 0.4).fill(0x54636f).stroke({ width: 2.5, color: 0x39434c })
-        wrap.addChild(g)
+        const fallbackTex = spriteTexture('subi')
+        if (fallbackTex) {
+          const sp = new Sprite(fallbackTex)
+          sp.anchor.set(0.5)
+          sp.scale.set((S - 4) / Math.max(fallbackTex.width, fallbackTex.height))
+          sp.position.set(S / 2, S / 2)
+          wrap.addChild(sp)
+        } else {
+          const g = new Graphics()
+          g.circle(S / 2, S / 2, S * 0.4).fill(0x54636f).stroke({ width: 2.5, color: 0x39434c })
+          wrap.addChild(g)
+        }
+        const eye = new Graphics()
+        this.drawEye(eye, S / 2, S * 0.42, S * 0.14, 0xc9a0e8) // 一つ目・菫
+        wrap.addChild(eye)
       }
-      const eye = new Graphics()
-      this.drawEye(eye, S / 2, S * 0.42, S * 0.14, 0xc9a0e8) // 一つ目・菫
-      wrap.addChild(eye)
     } else if (enemy.kind === 'swarm') {
       // 小型胞子虫（ROGUE2.md 第3波）。定期行動を持たない＝怒る局面が無いので通常顔で固定する
       const tex = spriteTexture('e_swarm')
@@ -727,56 +749,115 @@ export class BoardView {
         wrap.addChild(g)
       }
     } else if (enemy.kind === 'burrower') {
-      // 裂坑掘り：暗い穴（同心円）＋二つ目
-      const g = new Graphics()
-      g.circle(S / 2, S / 2, S * 0.42).fill({ color: 0x0b0d10, alpha: 0.92 })
-      g.circle(S / 2, S / 2, S * 0.29).fill({ color: 0x1c2128, alpha: 0.92 })
-      g.circle(S / 2, S / 2, S * 0.15).fill({ color: 0x2c333b, alpha: 0.85 })
-      wrap.addChild(g)
-      const eyes = new Graphics()
-      this.drawEye(eyes, S / 2 - S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
-      this.drawEye(eyes, S / 2 + S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
-      wrap.addChild(eyes)
+      // 裂坑掘り：生成アセット優先（3態：平常/崩落予告中/被弾。被弾はenemyDamageFxが一時差し替え）
+      const bkey = enemy.telegraph ? 'e_burrower_dig' : 'e_burrower_idle'
+      const tex = spriteTexture(bkey)
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 4) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+        this.burrowerSpriteG.set(enemy.id, sp)
+      } else {
+        // 暗い穴（同心円）＋二つ目（フォールバック）
+        const g = new Graphics()
+        g.circle(S / 2, S / 2, S * 0.42).fill({ color: 0x0b0d10, alpha: 0.92 })
+        g.circle(S / 2, S / 2, S * 0.29).fill({ color: 0x1c2128, alpha: 0.92 })
+        g.circle(S / 2, S / 2, S * 0.15).fill({ color: 0x2c333b, alpha: 0.85 })
+        wrap.addChild(g)
+        const eyes = new Graphics()
+        this.drawEye(eyes, S / 2 - S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
+        this.drawEye(eyes, S / 2 + S * 0.14, S * 0.44, S * 0.09, 0xdff0ff)
+        wrap.addChild(eyes)
+      }
     } else if (enemy.kind === 'breathstealer') {
-      // 息喰み：吸い込む口＝三重の同心リング（危険色）＋細い一つ目。唯一「酸素を奪う」敵として色相を分ける
-      const g = new Graphics()
-      g.circle(S / 2, S / 2, S * 0.42).fill({ color: 0x2a1216, alpha: 0.95 })
-      g.circle(S / 2, S / 2, S * 0.3).stroke({ width: S * 0.05, color: 0xe0503a, alpha: 0.9 })
-      g.circle(S / 2, S / 2, S * 0.16).fill({ color: 0x120a0c, alpha: 0.95 })
-      wrap.addChild(g)
-      const eye = new Graphics()
-      this.drawEye(eye, S / 2, S * 0.34, S * 0.1, 0xffd6b0)
-      wrap.addChild(eye)
+      // 息喰み：生成アセット優先（漏斗口のヒル。腹に青い袋）。無ければ三重の同心リング＋細い一つ目へフォールバック
+      const tex = spriteTexture('e_breathstealer')
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 4) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.circle(S / 2, S / 2, S * 0.42).fill({ color: 0x2a1216, alpha: 0.95 })
+        g.circle(S / 2, S / 2, S * 0.3).stroke({ width: S * 0.05, color: 0xe0503a, alpha: 0.9 })
+        g.circle(S / 2, S / 2, S * 0.16).fill({ color: 0x120a0c, alpha: 0.95 })
+        wrap.addChild(g)
+        const eye = new Graphics()
+        this.drawEye(eye, S / 2, S * 0.34, S * 0.1, 0xffd6b0)
+        wrap.addChild(eye)
+      }
     } else if (enemy.kind === 'binder') {
-      // 綴じ蟲：列を綴じる＝縦の綴じ糸。専用アートが来るまでのコード描画（PHASE2.md §5 の納品単位は未達）
-      const g = new Graphics()
-      g.roundRect(S * 0.18, 3, S * 0.64, S - 6, S * 0.16).fill({ color: 0x1d2a2e, alpha: 0.95 }).stroke({ width: 2.5, color: 0x6d8f96 })
-      for (const ty of [0.3, 0.5, 0.7]) g.moveTo(S * 0.24, S * ty).lineTo(S * 0.76, S * ty).stroke({ width: 2, color: 0x9ec8cf, alpha: 0.75 })
-      wrap.addChild(g)
-      const eye = new Graphics()
-      this.drawEye(eye, S / 2, S * 0.24, S * 0.1, 0xa8e6ef)
-      wrap.addChild(eye)
+      // 綴じ蟲：生成アセット優先（糸巻き腹の機織り虫）。無ければ縦の綴じ糸のコード描画へフォールバック
+      const tex = spriteTexture('e_binder')
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 4) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.roundRect(S * 0.18, 3, S * 0.64, S - 6, S * 0.16).fill({ color: 0x1d2a2e, alpha: 0.95 }).stroke({ width: 2.5, color: 0x6d8f96 })
+        for (const ty of [0.3, 0.5, 0.7]) g.moveTo(S * 0.24, S * ty).lineTo(S * 0.76, S * ty).stroke({ width: 2, color: 0x9ec8cf, alpha: 0.75 })
+        wrap.addChild(g)
+        const eye = new Graphics()
+        this.drawEye(eye, S / 2, S * 0.24, S * 0.1, 0xa8e6ef)
+        wrap.addChild(eye)
+      }
     } else if (enemy.kind === 'bellfoot') {
-      // 鐘脚：釣鐘の胴＋残り殻の枚数だけ外側にリングを重ねる（殻が張り直されると輪が増える）
-      const g = new Graphics()
-      g.moveTo(S * 0.5, S * 0.16)
-        .lineTo(S * 0.82, S * 0.74)
-        .lineTo(S * 0.18, S * 0.74)
-        .closePath()
-        .fill({ color: 0x3a2f1c, alpha: 0.95 })
-        .stroke({ width: 2.5, color: 0xb99a52 })
+      // 鐘脚：生成アセット優先（釣鐘殻の巻貝）。殻リング（enemy.shell枚数）はゲーム情報なので常にコード描画で重ねる
+      const tex = spriteTexture('e_bellfoot')
+      if (tex) {
+        const sp = new Sprite(tex)
+        sp.anchor.set(0.5)
+        sp.scale.set((S - 4) / Math.max(tex.width, tex.height))
+        sp.position.set(S / 2, S / 2)
+        wrap.addChild(sp)
+      } else {
+        const g = new Graphics()
+        g.moveTo(S * 0.5, S * 0.16)
+          .lineTo(S * 0.82, S * 0.74)
+          .lineTo(S * 0.18, S * 0.74)
+          .closePath()
+          .fill({ color: 0x3a2f1c, alpha: 0.95 })
+          .stroke({ width: 2.5, color: 0xb99a52 })
+        wrap.addChild(g)
+        const eye = new Graphics()
+        this.drawEye(eye, S / 2, S * 0.56, S * 0.1, 0xffe6a8)
+        wrap.addChild(eye)
+      }
+      const shellG = new Graphics()
       for (let i = 0; i < enemy.shell; i++)
-        g.circle(S / 2, S * 0.52, S * (0.34 + i * 0.06)).stroke({ width: 2, color: 0xe0c070, alpha: 0.7 - i * 0.2 })
-      wrap.addChild(g)
-      const eye = new Graphics()
-      this.drawEye(eye, S / 2, S * 0.56, S * 0.1, 0xffe6a8)
-      wrap.addChild(eye)
+        shellG.circle(S / 2, S * 0.52, S * (0.34 + i * 0.06)).stroke({ width: 2, color: 0xe0c070, alpha: 0.7 - i * 0.2 })
+      wrap.addChild(shellG)
     } else if (enemy.kind === 'maw') {
-      // 奈落の喉：生きものというより地形。牙の並ぶ暗い裂け目
-      const g = new Graphics()
-      g.roundRect(1, S * 0.18, S - 2, S * 0.72, S * 0.1).fill({ color: 0x08090c, alpha: 0.96 }).stroke({ width: 2.5, color: 0x5a4a6b })
-      for (const tx of [0.2, 0.45, 0.7]) g.moveTo(S * tx, S * 0.24).lineTo(S * (tx + 0.12), S * 0.46).lineTo(S * (tx + 0.24), S * 0.24).fill(0xcfc2dd)
-      wrap.addChild(g)
+      // 奈落の喉：生成アセット優先（横長の牙帯。先頭セルの wrap にだけ、身体全セルの幅にアスペクトフィットさせて描く）
+      const bandTex = spriteTexture('e_maw_band')
+      if (bandTex) {
+        const isLead = enemy.cells[0]?.x === x && enemy.cells[0]?.y === y
+        if (isLead) {
+          const xs = enemy.cells.map((c) => c.x)
+          const x0c = Math.min(...xs)
+          const x1c = Math.max(...xs)
+          const boundW = (x1c - x0c + 1) * S
+          const sp = new Sprite(bandTex)
+          sp.anchor.set(0.5)
+          sp.scale.set(boundW / bandTex.width)
+          sp.position.set((x0c - x) * S + boundW / 2, S / 2)
+          wrap.addChild(sp)
+        }
+        // 先頭以外のセルは絵なし＝下の共通コードが付けるタップ用ヒット領域だけ残る
+      } else {
+        // 生きものというより地形。牙の並ぶ暗い裂け目（フォールバック。セルごとに描く）
+        const g = new Graphics()
+        g.roundRect(1, S * 0.18, S - 2, S * 0.72, S * 0.1).fill({ color: 0x08090c, alpha: 0.96 }).stroke({ width: 2.5, color: 0x5a4a6b })
+        for (const tx of [0.2, 0.45, 0.7]) g.moveTo(S * tx, S * 0.24).lineTo(S * (tx + 0.12), S * 0.46).lineTo(S * (tx + 0.24), S * 0.24).fill(0xcfc2dd)
+        wrap.addChild(g)
+      }
     }
     // HP1の小型胞子虫はバーが常に満タンで意味を成さないため出さない（画面のノイズを減らす）。
     // 複数セルの身体（奈落の喉）は先頭セルにだけ出す＝reconcile が更新するのも先頭セルのバーだけ
@@ -1100,9 +1181,46 @@ export class BoardView {
       this.shakeContainer(container, t, 3)
       this.hitFlash(container, t)
     }
+    if (meta.kind === 'burrower') this.burrowerHurtFlashFx(id, t)
     const cx = Math.round(cells.reduce((a, p) => a + p.x, 0) / cells.length)
     const cy = Math.round(cells.reduce((a, p) => a + p.y, 0) / cells.length)
     this.damageNumberFx({ x: cx, y: cy }, amount, t)
+  }
+
+  /** 裂坑掘り：被弾の一瞬だけ e_burrower_hurt へ差し替えて戻す（約400ms）。
+   *  再構築（テレグラフ切替等）で古いスプライトが破棄されていたら何もしない。 */
+  private burrowerHurtFlashFx(id: number, t: number) {
+    const hurtTex = spriteTexture('e_burrower_hurt')
+    if (!hurtTex) return
+    const sp = this.burrowerSpriteG.get(id)
+    if (!sp || sp.destroyed) return
+    delay(t, () => {
+      if (sp.destroyed || this.burrowerSpriteG.get(id) !== sp) return
+      sp.texture = hurtTex
+      delay(400, () => {
+        if (sp.destroyed || this.burrowerSpriteG.get(id) !== sp) return
+        const enemy = this.board.enemies.find((e) => e.id === id)
+        const restoreKey = enemy?.telegraph ? 'e_burrower_dig' : 'e_burrower_idle'
+        sp.texture = spriteTexture(restoreKey) ?? hurtTex
+      }, 'fx')
+    }, 'fx')
+  }
+
+  /** 裂坑掘り本体の絵柄をテレグラフ状態（平常⇄崩落予告）に同期させる。
+   *  fissure-telegraph/fissure-averted は予告枠(makeFissureFrame)しか扱わないため、
+   *  本体側は destroy+makeBlock で作り直して現在の enemy.telegraph を拾い直す（過剰な状態機械にしない）。
+   *  綴じ蟲・奈落の喉も同じイベントを使うが、burrower以外は何もしない。 */
+  private rebuildBurrowerBody(id: number) {
+    if (this.enemyMeta.get(id)?.kind !== 'burrower') return
+    const cell = this.enemyCellsCache.get(id)?.[0]
+    if (!cell) return
+    const k = this.key(cell.x, cell.y)
+    const bg = this.blockG.get(k)
+    if (bg) {
+      this.blockG.delete(k)
+      if (!bg.destroyed) bg.destroy()
+    }
+    this.makeBlock(cell.x, cell.y)
   }
 
   /**
@@ -1185,6 +1303,7 @@ export class BoardView {
     }
     this.enemyMeta.delete(id)
     this.enemyCellsCache.delete(id)
+    this.burrowerSpriteG.delete(id)
   }
 
   /** swarmドミノの火花。1体目6・2〜4体目8・5体以上12＋金の紙片を混ぜる（codex_consult [D]-4） */
@@ -2645,6 +2764,7 @@ export class BoardView {
         case 'fissure-telegraph': {
           this.flashIntentBadge(e.id, ctx.t)
           this.makeFissureFrame(e.id, e.cells, ctx.t)
+          this.rebuildBurrowerBody(e.id) // 裂坑掘りなら本体を掘削中の絵へ差し替え
           if (ctx.disruptLabelCount < 2) {
             ctx.disruptLabelCount++
             this.floatLabelFx(e.cells[0], '崩落の予兆', 0xcbb28a, ctx.t + 160)
@@ -2654,6 +2774,7 @@ export class BoardView {
         }
         case 'fissure-averted': {
           this.clearFissureFrame(e.id)
+          this.rebuildBurrowerBody(e.id) // 裂坑掘りなら本体を平常の絵へ戻す
           break
         }
         case 'oxygen-drained': {

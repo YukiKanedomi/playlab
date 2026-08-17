@@ -1,0 +1,53 @@
+IMPORTANT — YOU ARE A RELAY. When you call the image generation tool, pass the prompt text below VERBATIM. Do not summarise, do not paraphrase, do not shorten, do not write any prompt of your own. Generate THREE images, one at a time: the first two 1024x1024, the third 1536x512 landscape, and save them into the current directory as ./token_binder.png, ./token_bellfoot.png and ./band_maw.png. Each image shows a DIFFERENT creature described in its own section.
+
+SHARED SPECIFICATION (applies identically to all three images):
+Game art for a mobile puzzle board, to be read instantly at small size. Render ONLY the creature described, and nothing else: no paper page background, no margin studies, no scale bar, no annotations, no handwriting, no lettering of any kind. It carries no clothing, no tools, no harness and no man-made object of any kind.
+Silhouette must stay legible when reduced to a fifth of its size.
+
+Transparent watercolour washes over a fine ink line, on cold-press paper.
+The brightest passages are bare unpainted paper — warm cream, not white —
+and highlights stay between 15 and 22 percent saturation. Saturation peaks
+in the midtones around 28 to 36 percent and falls away toward the light.
+The darkest passage keeps 20 to 35 percent saturation and never drops below
+luminance 22: there is no black and no neutral grey anywhere.
+Shadows leave the hue of the light. Lit surfaces sit in warm ochre around
+hue 35 to 45 degrees, and shadow falls to a single destination chosen for
+the setting: olive around hue 65 to 85 for vegetation, blue-green around
+hue 150 to 170 for wet stone and oxidised metal, slate blue around hue 210
+to 230 for cold interiors.
+The contour is a fine, slightly wobbly warm charcoal line near #2F2922 at
+about 27 percent saturation — a near-neutral warm grey, not a saturated
+brown. It swells on the underside and at overlaps and thins away to nothing
+along the top-lit edge, and pigment pools in a hairline just inside it, no
+wider than the contour itself, so the edge reads darker than the body.
+Every form carries two kinds of edge at once: a hard dry edge where a wash
+stops abruptly against the ink line, and one or two soft wet-in-wet blooms
+inside the form.
+The tooth of the cold-press paper and the granulation of the pigment stay
+visible across every flat area; no surface is perfectly smooth.
+Where no wash is laid, darkening is done by drawn line: fine parallel
+hatching and stipple in recesses and under overhangs.
+
+Avoid: airbrushed continuous gradients and smooth digital shading; a
+uniform drop-shadow effect; a continuous bevel-and-specular metal render;
+additive gaussian bloom or a glow halo around light sources; blur, fog or
+depth-of-field used to push things back; pure black #000000 and pure white
+#FFFFFF; saturated highlights above 50 percent saturation; a saturated
+brown contour; uniform-width outline strokes; rounded-rectangle cards with
+even padding and an even gold hairline; dotted underlines; perfectly
+mirrored ornament and evenly spaced rivets; a flawless untouched surface;
+rainbow or violet gradients; lens flare, rim light and dramatic backlight;
+emoji; any lettering, numerals, logos or name plates.
+
+Output for every image: fully transparent background, PNG with alpha, all four corners transparent. No baked drop shadow — it is composited over a board tile in the engine. No text, no numerals, no HP bar, no gauge, no frame or border of any kind.
+
+IMAGE 1 — save as ./token_binder.png — 1024x1024, COLUMN-STITCHING WEAVER INSECT:
+A single small creature token: the creature fills about eighty to eighty-five percent of the canvas, whole body, seen from the front and slightly from above, clear empty margin on all four sides, no part cropped by the frame. An elongated upright insect the build of a mantis crossed with a caddisfly larva, standing tall on four thin bracing legs splayed like tent guys. Exactly one organ system is grafted from another group: its two forelimbs are spider-style spinneret combs — flattened paddles fringed with silk-guiding teeth — held crossed in front of the chest, and its own pale silk is wound around its abdomen in neat horizontal hoops like thread on a spool, the loose end trailing to the ground. The head and thorax wear dry chalky plate with chips and one healed scar; the abdomen beneath the silk hoops is a wet translucent membrane; one row of very short cilia runs along the seam between plate and membrane. It has no true eyes: a thin translucent band is stretched across the face, with two vestigial dusky eyespots showing faintly through, set at different heights. The silk hoops are counted differently on each side — five visible on the left, four on the right — while the outer silhouette stays bilaterally symmetric. Colour: desaturated grey-green chitin under 25 percent saturation, shadows pushed to blue-green, highlights in aged-paper cream, silk in unpainted warm cream, a single oxidised verdigris accent on the spinneret paddles covering under four percent of the surface. The animal emits no light of its own. Pose: upright and still, forelimb paddles crossed, exactly as a bookbinder pauses with thread drawn taut.
+
+IMAGE 2 — save as ./token_bellfoot.png — 1024x1024, BELL-SHELLED GASTROPOD:
+A single small creature token: the creature fills about eighty to eighty-five percent of the canvas, whole body, seen from the front and slightly from above, clear empty margin on all four sides, no part cropped by the frame. A heavy gastropod whose shell is a broad calcareous bell — the flared, down-turned cup of a campanula flower rendered in dry chalky shell, its rim scalloped and chipped, fine concentric growth rings circling the dome, one old healed crack running down a flank. The shell is grown, not made: no clapper, no rope, no metal. Beneath the rim, the animal's single muscular foot spreads onto the ground in a wet ochre skirt, and two short blunt sensory horns with soft swollen tips reach out from under the front rim. Exactly one organ system is grafted from another group: inside the shell mouth, faintly visible in the shadow under the rim, hangs a row of barnacle-style feathery legs it uses to re-plaster its shell from within. It has no true eyes: each horn tip carries a thin translucent membrane with a faint warm eyespot beneath. Three textures coexist: dry chalky bell shell; wet mucous foot; one row of very short cilia along the seam where flesh meets shell. The growth rings are counted differently on each side — six on the left flank, five on the right — while the outer silhouette stays bilaterally symmetric. Colour: desaturated bone-and-ochre shell around 22 percent saturation, shadows pushed to blue-green, highlights in aged-paper cream, a single oxidised rust accent along the healed crack covering under three percent of the surface. The animal emits no light of its own. Pose: planted, bell tilted one or two degrees off vertical, foot gripping the ground.
+
+IMAGE 3 — save as ./band_maw.png — 1536x512 landscape, THE THROAT OF THE ABYSS (LIVING FISSURE):
+Not a walking animal but a living stretch of cave floor: a long horizontal fissure — the lip of an enormous buried throat — running the full width of the canvas, edge to edge left and right, with transparent background above and below the fissure's outer lips. The two lips are living rock: dry chalky stone plates fused with wet muscle beneath, the stone cracked where the flesh flexes. From both lips grow inward-curving pale keratin teeth like stalactites and stalagmites that almost interlock, worn, chipped, no two alike, counted differently on the upper and lower rows — nine above, seven below — while the overall band reads as one continuous mouth. Between the teeth the throat falls away into deep slate-blue shadow rendered as layered watercolour washes and fine hatching, never pure black, never a glow. A thin translucent membrane is stretched deep in the gap, sagging like a curtain, with faint dark shapes of swallowed rubble showing through. One row of very short cilia runs along the inner edge of each lip. Three textures coexist: dry cracked stone plate on the outer lips; wet muscle and membrane within; cilia along the seam. Colour: desaturated rock ochre lips around 20 percent saturation, teeth in unpainted warm cream, depths pushed to slate blue around hue 210 to 230, a single oxidised rust accent seeping from one crack on the left lip covering under three percent of the surface. It emits no light of its own. The band should read at a glance as: the floor itself has teeth.
+
+Minor stylistic imperfection is acceptable; do not spend extra turns correcting small typography issues.

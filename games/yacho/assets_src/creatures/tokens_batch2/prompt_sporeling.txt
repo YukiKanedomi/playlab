@@ -1,0 +1,39 @@
+IMPORTANT — YOU ARE A RELAY. When you call the image generation tool, pass the prompt text below VERBATIM. Do not summarise, do not paraphrase, do not shorten, do not write any prompt of your own. Generate ONE image, 1024x1024, and save it as ./token_sporeling.png.
+
+A single small creature token for a mobile puzzle board, to be read instantly at the size of one board cell. Render ONLY ONE creature, whole body, and nothing else: no paper page background, no margin studies, no scale bar, no annotations, no handwriting, no lettering of any kind. It carries no clothing, no tools, no harness and no man-made object of any kind. It is NOT a tortoise, NOT armoured, and has NO stone or crystal anywhere on its body.
+The creature: a plump, soft-bodied grub the shape of a swollen teardrop lying on its belly, its body plan taken from a beetle larva. Exactly one organ system is grafted from another group: a butterfly-style proboscis — a long thin feeding tube — coiled in a tight flat spiral at the front of the head, chalky at its base, its last few centimetres soft and swollen. The head end wears a small dry chalky cap plate with chips and one healed scar; the rest of the body is a wet translucent membrane through which faint dark ovals of swallowed matter show; one row of very short cilia runs along the seam between cap and body. It has no true eyes: a thin translucent membrane is stretched where the eyes would be, with a vestigial dusky violet eyespot faintly showing through on one side only. Segment folds are counted differently on each side — six on the left, five on the right — while the outer silhouette stays bilaterally symmetric.
+Colour: desaturated grey-green body under 25 percent saturation, shadows pushed to olive, highlights in aged-paper cream, a single dusky violet accent at the eyespot and proboscis tip covering under three percent of the surface. The animal emits no light of its own.
+Pose: at rest but alert, the coiled proboscis lifted very slightly off the ground as if choosing where to reach.
+Viewpoint: seen from the front and slightly from above, the whole body fitting compactly inside the square frame. The creature fills about eighty to eighty-five percent of the canvas, with clear empty margin on all four sides; no part of the body is cropped by the edge of the frame. Silhouette must stay legible when reduced to a fifth of its size.
+
+Transparent watercolour washes over a fine ink line, on cold-press paper.
+The brightest passages are bare unpainted paper — warm cream, not white —
+and highlights stay between 15 and 22 percent saturation. Saturation peaks
+in the midtones around 28 to 36 percent and falls away toward the light.
+The darkest passage keeps 20 to 35 percent saturation and never drops below
+luminance 22: there is no black and no neutral grey anywhere.
+Shadows leave the hue of the light. Lit surfaces sit in warm ochre around
+hue 35 to 45 degrees, and shadow falls to olive around hue 65 to 85.
+The contour is a fine, slightly wobbly warm charcoal line near #2F2922 at
+about 27 percent saturation — a near-neutral warm grey, not a saturated
+brown. It swells on the underside and at overlaps and thins away to nothing
+along the top-lit edge, and pigment pools in a hairline just inside it, no
+wider than the contour itself, so the edge reads darker than the body.
+Every form carries two kinds of edge at once: a hard dry edge where a wash
+stops abruptly against the ink line, and one or two soft wet-in-wet blooms
+inside the form. The tooth of the cold-press paper and the granulation of
+the pigment stay visible across every flat area; no surface is perfectly
+smooth. Where no wash is laid, darkening is done by drawn line: fine
+parallel hatching and stipple in recesses and under overhangs.
+
+Avoid: airbrushed continuous gradients and smooth digital shading; a
+uniform drop-shadow effect; additive gaussian bloom or a glow halo; blur or
+depth-of-field; pure black #000000 and pure white #FFFFFF; saturated
+highlights above 50 percent saturation; a saturated brown contour;
+uniform-width outline strokes; lens flare, rim light and dramatic
+backlight; emoji; any lettering, numerals, logos or name plates; stone
+plates, crystals, shells or armour of any kind.
+
+Output: fully transparent background, PNG with alpha, all four corners transparent. Square, 1024x1024. No baked drop shadow beneath the creature. No text, no numerals, no HP bar, no gauge, no frame or border of any kind.
+
+Minor stylistic imperfection is acceptable; do not spend extra turns correcting small typography issues.

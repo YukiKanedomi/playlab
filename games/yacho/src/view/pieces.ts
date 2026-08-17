@@ -28,6 +28,16 @@ const SPRITE_URLS: Record<string, URL> = {
   e_swarm_angry: new URL('../../assets/sprites3/e_swarm_angry.png', import.meta.url),
   e_swarm_dead: new URL('../../assets/sprites3/e_swarm_dead.png', import.meta.url),
   e_swarm_spore: new URL('../../assets/sprites3/e_swarm_spore.png', import.meta.url),
+  // 原生種トークン（水彩・生成アセット。tokens_batch2/burrower_tokens から長辺320pxへ縮小）
+  e_rockshell: new URL('../../assets/creatures/e_rockshell.png', import.meta.url), // 岩殻獣
+  e_sporeling: new URL('../../assets/creatures/e_sporeling.png', import.meta.url), // 喰み蟲
+  e_breathstealer: new URL('../../assets/creatures/e_breathstealer.png', import.meta.url), // 灯喰み
+  e_binder: new URL('../../assets/creatures/e_binder.png', import.meta.url), // 綴じ蟲
+  e_bellfoot: new URL('../../assets/creatures/e_bellfoot.png', import.meta.url), // 鐘脚
+  e_burrower_idle: new URL('../../assets/creatures/e_burrower_idle.png', import.meta.url), // 裂坑掘り・平常
+  e_burrower_dig: new URL('../../assets/creatures/e_burrower_dig.png', import.meta.url), // 裂坑掘り・崩落予告中
+  e_burrower_hurt: new URL('../../assets/creatures/e_burrower_hurt.png', import.meta.url), // 裂坑掘り・被弾一瞬
+  e_maw_band: new URL('../../assets/creatures/e_maw_band.png', import.meta.url), // 奈落の喉（横長の牙帯。幅1024へ縮小）
   ground_thick: new URL('../../assets/sprites3/ground_thick.png', import.meta.url),
   ground_thin: new URL('../../assets/sprites3/ground_thin.png', import.meta.url),
   moss_icon: new URL('../../assets/sprites3/moss_icon.png', import.meta.url),
